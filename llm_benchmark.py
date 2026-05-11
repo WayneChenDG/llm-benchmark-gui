@@ -716,6 +716,9 @@ class LLMBenchmarkApp:
                                        bg=C_STYLE["bg_card"],
                                        fg=C_STYLE["text_secondary"])
         self._action_status.pack(anchor="w", pady=(C_STYLE["pad_sm"], 0))
+        self.save_report_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(card_c.content, text="保存测试报告 (.txt)",
+                        variable=self.save_report_var).pack(anchor="w")
         self.progress = ttk.Progressbar(card_c.content, mode="determinate")
         self.progress.pack(fill=tk.X, pady=(C_STYLE["pad_sm"], 0))
         tip = tk.Label(col, text="提示：先用并发数=1 测基线延迟，再逐步提高并发数测试吞吐上限。",
@@ -1246,16 +1249,18 @@ class LLMBenchmarkApp:
             self._report_card.content.grid()
             self._report_card.title_lbl.config(text="▼ 详细报告")
             self._report_collapsed = False
-        try:
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            report_path = f"llm_benchmark_report_{ts}.txt"
-            with open(report_path, "w", encoding="utf-8") as f:
-                f.write(report)
-            if DEBUG_MODE:
-                logging.info("report saved to %s", report_path)
-        except Exception as e:
-            if DEBUG_MODE:
-                logging.warning("failed to save report: %s", e)
+        # save report to file if enabled
+        if self.save_report_var.get():
+            try:
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                report_path = f"llm_benchmark_report_{ts}.txt"
+                with open(report_path, "w", encoding="utf-8") as f:
+                    f.write(report)
+                if DEBUG_MODE:
+                    logging.info("report saved to %s", report_path)
+            except Exception as e:
+                if DEBUG_MODE:
+                    logging.warning("failed to save report: %s", e)
         self._draw_histogram(summary)
         self._refresh_history()
     def _diagnose(self, summary: dict) -> list[str]:
