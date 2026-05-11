@@ -1,0 +1,19 @@
+# Database
+*.db
+
+# Logs
+*.log
+
+# Reports
+llm_benchmark_report_*.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
