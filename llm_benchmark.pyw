@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """Windows double-click launcher for LLM Benchmark (no console window).
 On Windows, .pyw files run with pythonw.exe — no terminal popup."""
+import os
+import sys
+
+# Ensure the script directory is on the path and set as working directory
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+os.chdir(_SCRIPT_DIR)
+sys.path.insert(0, _SCRIPT_DIR)
+
+CRASH_LOG = os.path.join(_SCRIPT_DIR, "llm_benchmark_crash.log")
+
 try:
     import llm_benchmark
     llm_benchmark.main()
@@ -18,5 +28,5 @@ except Exception as e:
         root.destroy()
     except Exception:
         pass
-    with open("llm_benchmark_crash.log", "w", encoding="utf-8") as f:
+    with open(CRASH_LOG, "w", encoding="utf-8") as f:
         f.write(detail)
