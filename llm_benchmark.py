@@ -1781,6 +1781,18 @@ class LLMBenchmarkApp:
 # ============================================================
 # Entry point
 # ============================================================
+def _show_crash(title: str, msg: str):
+    """Last-resort error display — tries GUI, falls back to log file."""
+    try:
+        import tkinter.messagebox as mb
+        root = tk.Tk()
+        root.withdraw()
+        mb.showerror(title, msg)
+        root.destroy()
+    except Exception:
+        with open("llm_benchmark_crash.log", "w", encoding="utf-8") as f:
+            f.write(f"{title}\n{msg}\n")
+
 def main():
     global DEBUG_MODE
     if "-debug" in sys.argv:
@@ -1790,5 +1802,17 @@ def main():
     root = tk.Tk()
     LLMBenchmarkApp(root)
     root.mainloop()
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:
+        import traceback
+        detail = traceback.format_exc()
+        _show_crash("LLM Benchmark 启动失败",
+                    f"程序启动时发生错误:\n\n{type(e).__name__}: {e}\n\n"
+                    f"详细信息已写入 llm_benchmark_crash.log")
+        with open("llm_benchmark_crash.log", "w", encoding="utf-8") as f:
+            f.write(detail)
