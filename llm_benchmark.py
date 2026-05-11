@@ -692,7 +692,7 @@ class LLMBenchmarkApp:
         self.concurrency_var = tk.StringVar(value=list(CONCURRENCY_PRESETS.keys())[2])
         cb = ttk.Combobox(param_grid, textvariable=self.concurrency_var,
                           values=list(CONCURRENCY_PRESETS.keys()),
-                          width=33, state="readonly")
+                          width=47, state="readonly")
         cb.grid(row=1, column=3, sticky="ew", padx=(0, 0), pady=(C_STYLE["gap_sm"], 0))
         param_grid.columnconfigure(1, weight=1)
         param_grid.columnconfigure(3, weight=1)
@@ -710,7 +710,7 @@ class LLMBenchmarkApp:
             padx=(0, C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0))
         self.save_report_var = tk.StringVar(value="否")
         ttk.Combobox(param_grid, textvariable=self.save_report_var,
-                     values=["否", "是"], width=33, state="readonly").grid(
+                     values=["否", "是"], width=47, state="readonly").grid(
             row=2, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
         # auto-save toggle
         tk.Label(param_grid, text="自动保存配置", font=C_STYLE["font_body"],
@@ -720,7 +720,7 @@ class LLMBenchmarkApp:
             pady=(C_STYLE["gap_sm"], 0))
         self.auto_save_var = tk.StringVar(value="否")
         ttk.Combobox(param_grid, textvariable=self.auto_save_var,
-                     values=["否", "是"], width=33, state="readonly").grid(
+                     values=["否", "是"], width=47, state="readonly").grid(
             row=2, column=3, sticky="w", pady=(C_STYLE["gap_sm"], 0))
         # wire auto-save traces on all config vars
         for v in (self.url_var, self.key_var, self.model_var,
