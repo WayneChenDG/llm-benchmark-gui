@@ -12,12 +12,14 @@ import threading
 import time
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from configparser import ConfigParser
 from datetime import datetime
 from tkinter import messagebox, ttk
 from typing import Optional
 from urllib import request, error
 from urllib.parse import urlparse, urlunparse
 DB_PATH = "llm_benchmark_history.db"
+INI_PATH = "llm_benchmark.ini"
 LOG_PATH = "llm_benchmark.log"
 DEBUG_MODE = False
 def setup_logging():
@@ -521,6 +523,7 @@ class LLMBenchmarkApp:
         self._build_header()
         self._build_body()
         self._build_statusbar()
+        self._load_config()
     # ---------- style ----------
     def _setup_styles(self):
         st = ttk.Style()
@@ -701,6 +704,9 @@ class LLMBenchmarkApp:
                                     style="Primary.TButton",
                                     command=self._start_benchmark)
         self.start_btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(btn_row, text="保存配置", style="Secondary.TButton",
+                   command=self._save_config).pack(side=tk.LEFT, fill=tk.X,
+                   expand=True, padx=(C_STYLE["pad_sm"], 0))
         ttk.Button(btn_row, text="重置配置", style="Secondary.TButton",
                    command=self._reset_config).pack(side=tk.LEFT, fill=tk.X,
                    expand=True, padx=(C_STYLE["pad_sm"], 0))
@@ -850,12 +856,67 @@ class LLMBenchmarkApp:
         self.temp_var.set(0.7)
         self.total_var.set(20)
         self.concurrency_var.set(list(CONCURRENCY_PRESETS.keys())[2])
+        self._load_config()  # overlay INI values if available
+        self._action_status.config(text="已重置 — 请配置参数后开始测试")
+    def _load_config(self):
+        """Load defaults from INI file. Silently skip if file missing or malformed."""
+        cfg = ConfigParser()
+        try:
+            cfg.read(INI_PATH, encoding="utf-8")
+        except Exception:
+            return
+        if not cfg.sections():
+            return
+        if cfg.has_section("api"):
+            self.url_var.set(cfg.get("api", "url",
+                             fallback=self.url_var.get()))
+            self.key_var.set(cfg.get("api", "key",
+                             fallback=self.key_var.get()))
+            self.model_var.set(cfg.get("api", "model",
+                               fallback=self.model_var.get()))
+        if cfg.has_section("prompt"):
+            self.system_var.set(cfg.get("prompt", "system",
+                                fallback=self.system_var.get()))
+            self.prompt_var.set(cfg.get("prompt", "user",
+                                fallback=self.prompt_var.get()))
+        if cfg.has_section("test"):
+            self.max_tokens_var.set(cfg.getint("test", "max_tokens",
+                                    fallback=self.max_tokens_var.get()))
+            self.temp_var.set(cfg.getfloat("test", "temperature",
+                              fallback=self.temp_var.get()))
+            self.total_var.set(cfg.getint("test", "total_requests",
+                               fallback=self.total_var.get()))
+            concurrency_label = cfg.get("test", "concurrency",
+                                        fallback=self.concurrency_var.get())
+            if concurrency_label in CONCURRENCY_PRESETS:
+                self.concurrency_var.set(concurrency_label)
+        # sync Text widgets
         for label, t in getattr(self, '_text_widgets', {}).items():
             if "系统" in label:
                 t.delete("1.0", tk.END); t.insert("1.0", self.system_var.get())
             elif "用户" in label:
                 t.delete("1.0", tk.END); t.insert("1.0", self.prompt_var.get())
-        self._action_status.config(text="已重置 — 请配置参数后开始测试")
+    def _save_config(self):
+        """Write current settings to INI file."""
+        cfg = ConfigParser()
+        cfg["api"] = {
+            "url": self.url_var.get(),
+            "key": self.key_var.get(),
+            "model": self.model_var.get(),
+        }
+        cfg["prompt"] = {
+            "system": self.system_var.get(),
+            "user": self.prompt_var.get(),
+        }
+        cfg["test"] = {
+            "max_tokens": str(self.max_tokens_var.get()),
+            "temperature": str(self.temp_var.get()),
+            "total_requests": str(self.total_var.get()),
+            "concurrency": self.concurrency_var.get(),
+        }
+        with open(INI_PATH, "w", encoding="utf-8") as f:
+            cfg.write(f)
+        self._action_status.config(text="配置已保存到 llm_benchmark.ini")
     def _build_statusbar(self):
         sb = tk.Frame(self.root, bg=C_STYLE["bg_header"], height=32)
         sb.pack(fill=tk.X, side=tk.BOTTOM)
