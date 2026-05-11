@@ -572,6 +572,13 @@ class LLMBenchmarkApp:
         st.map("App.Treeview",
                background=[("selected", C_STYLE["accent"])],
                foreground=[("selected", "white")])
+        # vibrant progress bar
+        st.configure("Accent.Horizontal.TProgressbar",
+                     troughcolor=C_STYLE["border_light"],
+                     background=C_STYLE["accent"],
+                     bordercolor=C_STYLE["border"],
+                     lightcolor=C_STYLE["accent"],
+                     darkcolor=C_STYLE["accent_hover"])
     def _build_header(self):
         h = tk.Frame(self.root, bg=C_STYLE["bg_header"], height=56,
                      highlightbackground=C_STYLE["border"],
@@ -748,7 +755,8 @@ class LLMBenchmarkApp:
                                        bg=C_STYLE["bg_card"],
                                        fg=C_STYLE["text_secondary"])
         self._action_status.pack(anchor="w", pady=(C_STYLE["pad_sm"], 0))
-        self.progress = ttk.Progressbar(card_c.content, mode="determinate")
+        self.progress = ttk.Progressbar(card_c.content, mode="determinate",
+                                        style="Accent.Horizontal.TProgressbar")
         self.progress.pack(fill=tk.X, pady=(C_STYLE["pad_sm"], 0))
     def _build_results_tab(self):
         bf = self.bench_frame
