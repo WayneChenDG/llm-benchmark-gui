@@ -696,6 +696,15 @@ class LLMBenchmarkApp:
         cb.grid(row=1, column=3, sticky="ew", padx=(0, 0), pady=(C_STYLE["gap_sm"], 0))
         param_grid.columnconfigure(1, weight=1)
         param_grid.columnconfigure(3, weight=1)
+        # save report toggle
+        tk.Label(param_grid, text="保存测试报告", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
+            row=2, column=0, sticky="w",
+            padx=(0, C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0))
+        self.save_report_var = tk.StringVar(value="否")
+        ttk.Combobox(param_grid, textvariable=self.save_report_var,
+                     values=["否", "是"], width=4, state="readonly").grid(
+            row=2, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
         card_c = SectionCard(col, "操作")
         card_c.pack(fill=tk.X)
         btn_row = tk.Frame(card_c.content, bg=C_STYLE["bg_card"])
@@ -716,9 +725,6 @@ class LLMBenchmarkApp:
                                        bg=C_STYLE["bg_card"],
                                        fg=C_STYLE["text_secondary"])
         self._action_status.pack(anchor="w", pady=(C_STYLE["pad_sm"], 0))
-        self.save_report_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(card_c.content, text="保存测试报告 (.txt)",
-                        variable=self.save_report_var).pack(anchor="w")
         self.progress = ttk.Progressbar(card_c.content, mode="determinate")
         self.progress.pack(fill=tk.X, pady=(C_STYLE["pad_sm"], 0))
         tip = tk.Label(col, text="提示：先用并发数=1 测基线延迟，再逐步提高并发数测试吞吐上限。",
@@ -893,6 +899,8 @@ class LLMBenchmarkApp:
                                         fallback=self.concurrency_var.get())
             if concurrency_label in CONCURRENCY_PRESETS:
                 self.concurrency_var.set(concurrency_label)
+            self.save_report_var.set(cfg.get("test", "save_report",
+                                     fallback=self.save_report_var.get()))
         # sync Text widgets
         for label, t in getattr(self, '_text_widgets', {}).items():
             if "系统" in label:
@@ -916,6 +924,7 @@ class LLMBenchmarkApp:
             "temperature": str(self.temp_var.get()),
             "total_requests": str(self.total_var.get()),
             "concurrency": self.concurrency_var.get(),
+            "save_report": self.save_report_var.get(),
         }
         with open(INI_PATH, "w", encoding="utf-8") as f:
             cfg.write(f)
@@ -1250,7 +1259,7 @@ class LLMBenchmarkApp:
             self._report_card.title_lbl.config(text="▼ 详细报告")
             self._report_collapsed = False
         # save report to file if enabled
-        if self.save_report_var.get():
+        if self.save_report_var.get() == "是":
             try:
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                 report_path = f"llm_benchmark_report_{ts}.txt"
