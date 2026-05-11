@@ -696,6 +696,13 @@ class LLMBenchmarkApp:
         cb.grid(row=1, column=3, sticky="ew", padx=(0, 0), pady=(C_STYLE["gap_sm"], 0))
         param_grid.columnconfigure(1, weight=1)
         param_grid.columnconfigure(3, weight=1)
+        # enforce: total >= concurrency
+        def _sync_total_to_concurrency(*args):
+            label = self.concurrency_var.get()
+            conc = CONCURRENCY_PRESETS.get(label, 8)
+            if self.total_var.get() < conc:
+                self.total_var.set(conc)
+        self.concurrency_var.trace_add("write", _sync_total_to_concurrency)
         # save report toggle
         tk.Label(param_grid, text="保存测试报告", font=C_STYLE["font_body"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
