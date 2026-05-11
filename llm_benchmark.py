@@ -507,7 +507,7 @@ class LLMBenchmarkApp:
         self.root = root
         self.root.title("LLM 并发性能测试工具")
         sh = self.root.winfo_screenheight()
-        self.root.geometry(f"1100x{sh - 48}")  # fill height, minus taskbar
+        self.root.geometry(f"1100x{sh - 78}")  # fill height, minus taskbar
         self.root.minsize(1024, 680)
         self.root.configure(bg=C_STYLE["bg_main"])
         self._benchmark_running = False
