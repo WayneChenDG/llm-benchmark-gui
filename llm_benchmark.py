@@ -39,48 +39,104 @@ CONCURRENCY_PRESETS = {
     "32  (压力 — 企业级 Key)": 32,
     "64  (极限 — 需确认服务端 QPS 上限)": 64,
 }
+# ---------- 字体自动检测 ----------
+def _detect_font_family() -> str:
+    """Detect the best available font for CJK + Latin rendering.
+    Returns a font family name that exists on the current system."""
+    # Try to query font families via tkinter if available
+    try:
+        import tkinter.font as tkfont
+        root = __import__('tkinter').Tk()
+        root.withdraw()
+        fonts = set(tkfont.families())
+        root.destroy()
+    except Exception:
+        fonts = set()
+    # Priority: fonts that render both CJK and Latin well
+    candidates = [
+        "Noto Sans CJK SC",       # Linux — best CJK+Latin rendering
+        "Microsoft YaHei UI",     # Windows 10/11 — native CJK
+        "Microsoft YaHei",        # Windows 7/8
+        "PingFang SC",            # macOS
+        "Droid Sans Fallback",    # Linux fallback
+        "DejaVu Sans",            # generic fallback
+    ]
+    for c in candidates:
+        if c in fonts:
+            return c
+    # If no tkinter, check via fc-list
+    try:
+        import subprocess
+        out = subprocess.check_output(["fc-list", ":lang=zh", "family"], text=True)
+        for c in candidates:
+            if c in out:
+                return c
+    except Exception:
+        pass
+    return "sans-serif"  # ultimate fallback
+
+FONT_FAMILY = _detect_font_family()
+
 # ---------- UI 样式常量 ----------
+# Design: Modern SaaS dashboard — warm gray bg, white cards, left-accent metrics,
+#         Stripe purple accent, Datadog/Linear-inspired clean hierarchy.
 C_STYLE = {
-    # ── Stripe-inspired clean light theme ──
-    "bg_main": "#F3F3F3",
-    "bg_card": "#FFFFFF",
-    "bg_header": "#FFFFFF",
+    # ── surfaces ──
+    "bg_main": "#F5F6FA",        # warm dashboard background
+    "bg_card": "#FFFFFF",        # elevated cards
+    "bg_header": "#FFFFFF",      # top bar
     "bg_input": "#FFFFFF",
-    "bg_hover": "#F0F2F8",
-    "text_primary": "#061B31",
-    "text_secondary": "#64748D",
-    "text_muted": "#94A3B8",
-    "border": "#E5EDF5",
+    "bg_hover": "#EEF0F6",
+    "bg_stripe": "#F8F7FF",      # subtle purple-tinted surface
+    # ── text ──
+    "text_primary": "#1E293B",   # slate-800 — sharp but not black
+    "text_secondary": "#64748B", # slate-500 — body / labels
+    "text_muted": "#94A3B8",     # slate-400 — hints
+    "text_inverse": "#FFFFFF",
+    # ── borders ──
+    "border": "#E2E8F0",         # slate-200 — card edges
+    "border_light": "#F1F5F9",   # subtle separators
     "border_focus": "#533AFD",
+    # ── accent (Stripe purple) ──
     "accent": "#533AFD",
     "accent_hover": "#4434D4",
-    "success": "#15BE53",
+    "accent_light": "#F0EEFF",   # tinted bg for accent areas
+    "accent_soft": "#E8E4FF",    # slightly stronger tint
+    # ── semantic ──
+    "success": "#10B981",        # emerald green
     "success_bg": "#ECFDF5",
-    "warning": "#9B6829",
+    "success_text": "#065F46",
+    "warning": "#F59E0B",        # amber
     "warning_bg": "#FFFBEB",
-    "error": "#EA2261",
-    "error_bg": "#FFF1F2",
-    "info": "#2874AD",
-    "info_bg": "#F0F7FF",
-    # ── fonts: uniform hierarchy 10→12→14→16→20→24 ──
-    "font_title": ("Segoe UI", 20, "bold"),
-    "font_subtitle": ("Segoe UI", 12),
-    "font_section": ("Segoe UI", 14, "bold"),
-    "font_label": ("Segoe UI", 12),
-    "font_body": ("Segoe UI", 12),
-    "font_status": ("Segoe UI", 16, "bold"),
-    "font_metric": ("Segoe UI", 24, "bold"),
-    "font_small": ("Segoe UI", 10),
+    "warning_text": "#92400E",
+    "error": "#EF4444",          # red
+    "error_bg": "#FEF2F2",
+    "error_text": "#991B1B",
+    "info": "#3B82F6",           # blue
+    "info_bg": "#EFF6FF",
+    "info_text": "#1E40AF",
+    # ── fonts: 10→12→13→15→18→26 (Segoe UI, proportional scale) ──
+    "font_title": (FONT_FAMILY, 18, "bold"),
+    "font_subtitle": (FONT_FAMILY, 12),
+    "font_section": (FONT_FAMILY, 13, "bold"),
+    "font_label": (FONT_FAMILY, 12),
+    "font_body": (FONT_FAMILY, 12),
+    "font_status": (FONT_FAMILY, 15, "bold"),
+    "font_metric": (FONT_FAMILY, 26, "bold"),
+    "font_small": (FONT_FAMILY, 10),
+    "font_code": ("Consolas", 10),
     # ── spacing ──
-    "radius_card": 6,
-    "radius_btn": 4,
-    "radius_input": 4,
-    "pad_lg": 20,
-    "pad_md": 14,
+    "radius_card": 8,
+    "radius_btn": 6,
+    "radius_input": 6,
+    "pad_lg": 24,
+    "pad_md": 16,
     "pad_sm": 10,
     "gap_lg": 20,
     "gap_md": 14,
     "gap_sm": 10,
+    # ── accent bars ──
+    "bar_width": 4,              # left accent strip width
 }
 class SectionCard(tk.Frame):
     """卡片容器：白色背景 + 1px浅灰边框 + 标题分隔线 + 内边距"""
@@ -115,30 +171,48 @@ class SectionCard(tk.Frame):
         self.content.columnconfigure(0, weight=1)
         self.content.rowconfigure(0, weight=1)
 class MetricItem(tk.Frame):
-    """指标展示：小标签 + 大数值 + 浅灰底"""
-    def __init__(self, parent, label: str, value: str = "—", **kw):
-        super().__init__(parent, bg=C_STYLE["bg_main"],
+    """指标卡片：彩色左边条 + 大数值优先 + 小标签在下（Datadog风格）"""
+    COLORS = {
+        "ttft": C_STYLE["info"], "tps": C_STYLE["accent"],
+        "total_tokens": C_STYLE["warning"], "agg_tps": C_STYLE["success"],
+    }
+    def __init__(self, parent, label: str, value: str = "—", metric_key: str = "", **kw):
+        super().__init__(parent, bg=C_STYLE["bg_card"],
                          highlightbackground=C_STYLE["border"],
                          highlightthickness=1, bd=0, **kw)
         self._label = label
         self._value = value
+        self._key = metric_key
+        self._bar_color = self.COLORS.get(metric_key, C_STYLE["accent"])
         self._build()
     def _build(self):
-        inner = tk.Frame(self, bg=C_STYLE["bg_main"])
-        inner.pack(padx=C_STYLE["pad_md"], pady=C_STYLE["pad_sm"])
+        # left accent bar
+        bar = tk.Frame(self, bg=self._bar_color, width=C_STYLE["bar_width"])
+        bar.pack(side=tk.LEFT, fill=tk.Y)
+        bar.pack_propagate(False)
+        # content area
+        inner = tk.Frame(self, bg=C_STYLE["bg_card"])
+        inner.pack(side=tk.LEFT, fill=tk.BOTH, expand=True,
+                   padx=C_STYLE["pad_md"], pady=C_STYLE["pad_md"])
+        # large metric number — first, prominent
         self.val_lbl = tk.Label(inner, text=self._value,
                                 font=C_STYLE["font_metric"],
-                                bg=C_STYLE["bg_main"],
-                                fg=C_STYLE["text_primary"])
-        self.val_lbl.pack(anchor="w")
+                                bg=C_STYLE["bg_card"],
+                                fg=C_STYLE["text_primary"],
+                                anchor="w")
+        self.val_lbl.pack(fill=tk.X)
+        # small label — below
         tk.Label(inner, text=self._label, font=C_STYLE["font_small"],
-                 bg=C_STYLE["bg_main"],
-                 fg=C_STYLE["text_secondary"]).pack(anchor="w")
+                 bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["text_secondary"],
+                 anchor="w").pack(fill=tk.X)
     def set_value(self, value: str):
         self._value = value
         self.val_lbl.config(text=value)
 class StatusCard(tk.Frame):
-    """状态卡片：大号彩色圆点 + 标题 + 状态值 + 可见边框"""
+    """状态卡片：左侧彩色指示条 + 大号状态值 + 小标题（线性风格）"""
+    BAR_COLORS = {"idle": "#CBD5E1", "checking": C_STYLE["warning"],
+                  "pass": C_STYLE["success"], "fail": C_STYLE["error"]}
     def __init__(self, parent, title: str, **kw):
         super().__init__(parent, bg=C_STYLE["bg_card"],
                          highlightbackground=C_STYLE["border"],
@@ -146,28 +220,25 @@ class StatusCard(tk.Frame):
         self._title = title
         self._build()
     def _build(self):
+        # left status bar — colored by state
+        self._bar = tk.Frame(self, bg=self.BAR_COLORS["idle"], width=C_STYLE["bar_width"])
+        self._bar.pack(side=tk.LEFT, fill=tk.Y)
+        self._bar.pack_propagate(False)
+        # content
         inner = tk.Frame(self, bg=C_STYLE["bg_card"])
-        inner.pack(padx=C_STYLE["pad_md"], pady=C_STYLE["pad_md"], fill=tk.BOTH, expand=True)
-        self.canvas = tk.Canvas(inner, width=40, height=40, bg=C_STYLE["bg_card"],
-                                highlightthickness=0, bd=0)
-        self.canvas.pack(side=tk.LEFT, padx=(0, C_STYLE["pad_sm"]))
-        self._draw_dot("#CBD5E1")
-        right = tk.Frame(inner, bg=C_STYLE["bg_card"])
-        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.title_lbl = tk.Label(right, text=self._title, font=C_STYLE["font_small"],
-                                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_secondary"])
-        self.title_lbl.pack(anchor="w")
-        self.val_lbl = tk.Label(right, text="等待中",
+        inner.pack(side=tk.LEFT, fill=tk.BOTH, expand=True,
+                   padx=C_STYLE["pad_md"], pady=C_STYLE["pad_md"])
+        self.title_lbl = tk.Label(inner, text=self._title, font=C_STYLE["font_small"],
+                                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_secondary"],
+                                  anchor="w")
+        self.title_lbl.pack(fill=tk.X)
+        self.val_lbl = tk.Label(inner, text="等待中",
                                 font=C_STYLE["font_status"],
-                                bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"])
-        self.val_lbl.pack(anchor="w")
-    def _draw_dot(self, color: str):
-        self.canvas.delete("all")
-        self.canvas.create_oval(10, 10, 30, 30, fill=color, outline="", width=0)
+                                bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"],
+                                anchor="w")
+        self.val_lbl.pack(fill=tk.X)
     def set_state(self, state: str, detail: str = ""):
-        colors = {"idle": "#CBD5E1", "checking": C_STYLE["warning"],
-                  "pass": C_STYLE["success"], "fail": C_STYLE["error"]}
-        self._draw_dot(colors.get(state, "#9CA3AF"))
+        self._bar.configure(bg=self.BAR_COLORS.get(state, "#CBD5E1"))
         self.val_lbl.config(text=detail if detail else state)
 class NoticeBanner(tk.Frame):
     """诊断/提示横幅：浅色背景 + 左侧色条 + 1px边框"""
@@ -472,18 +543,18 @@ class LLMBenchmarkApp:
                      background=C_STYLE["bg_header"], foreground=C_STYLE["text_secondary"])
         st.configure("Primary.TButton", font=C_STYLE["font_label"],
                      background=C_STYLE["accent"], foreground="white",
-                     borderwidth=0, padding=(C_STYLE["pad_md"], C_STYLE["pad_sm"]))
+                     borderwidth=0, padding=(20, C_STYLE["pad_sm"]))
         st.map("Primary.TButton",
-               background=[("disabled", "#A5B4FC"), ("active", C_STYLE["accent_hover"])])
+               background=[("disabled", "#B8B0F9"), ("active", C_STYLE["accent_hover"])])
         st.configure("Secondary.TButton", font=C_STYLE["font_label"],
                      background=C_STYLE["bg_card"], foreground=C_STYLE["text_primary"],
-                     borderwidth=1, padding=(C_STYLE["pad_md"], C_STYLE["pad_sm"]))
+                     borderwidth=1, padding=(16, C_STYLE["pad_sm"]))
         st.map("Secondary.TButton",
-               background=[("disabled", "#F3F4F6")])
+               background=[("disabled", "#F1F5F9")])
         st.configure("App.TEntry", fieldbackground=C_STYLE["bg_input"],
-                     borderwidth=1, padding=8, font=C_STYLE["font_body"])
+                     borderwidth=1, padding=10, font=C_STYLE["font_body"])
         st.map("App.TEntry",
-               fieldbackground=[("disabled", "#F3F4F6"), ("focus", "#F5F3FF")])
+               fieldbackground=[("disabled", "#F1F5F9"), ("focus", C_STYLE["accent_light"])])
         st.configure("App.Treeview", rowheight=40, font=C_STYLE["font_body"],
                      background=C_STYLE["bg_card"], fieldbackground=C_STYLE["bg_card"],
                      foreground=C_STYLE["text_primary"])
@@ -494,25 +565,41 @@ class LLMBenchmarkApp:
                background=[("selected", C_STYLE["accent"])],
                foreground=[("selected", "white")])
     def _build_header(self):
-        h = tk.Frame(self.root, bg=C_STYLE["bg_header"], height=60,
+        h = tk.Frame(self.root, bg=C_STYLE["bg_header"], height=56,
                      highlightbackground=C_STYLE["border"],
                      highlightthickness=1, bd=0)
         h.pack(fill=tk.X, side=tk.TOP)
         h.pack_propagate(False)
         inner = tk.Frame(h, bg=C_STYLE["bg_header"])
-        inner.pack(fill=tk.BOTH, expand=True, padx=C_STYLE["pad_lg"], pady=C_STYLE["pad_sm"])
+        inner.pack(fill=tk.BOTH, expand=True,
+                   padx=C_STYLE["pad_lg"], pady=C_STYLE["pad_sm"])
         left = tk.Frame(inner, bg=C_STYLE["bg_header"])
         left.pack(side=tk.LEFT)
-        ttk.Label(left, text="LLM 并发性能测试工具", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(left, text="OpenAI 兼容接口压力与吞吐分析", style="Subtitle.TLabel").pack(anchor="w")
+        # icon + title in one line
+        title_row = tk.Frame(left, bg=C_STYLE["bg_header"])
+        title_row.pack(anchor="w")
+        icon_lbl = tk.Label(title_row, text="⚡", font=(FONT_FAMILY, 16),
+                            bg=C_STYLE["bg_header"], fg=C_STYLE["accent"])
+        icon_lbl.pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Label(title_row, text="LLM Benchmark", style="Title.TLabel").pack(side=tk.LEFT)
+        ttk.Label(left, text="OpenAI 兼容接口并发性能测试", style="Subtitle.TLabel").pack(anchor="w")
         right = tk.Frame(inner, bg=C_STYLE["bg_header"])
         right.pack(side=tk.RIGHT)
-        self._status_badge_lbl = tk.Label(right, text="●  空闲",
-                                         font=C_STYLE["font_body"],
-                                         bg=C_STYLE["bg_header"],
+        # status pill
+        pill = tk.Frame(right, bg=C_STYLE["bg_stripe"], highlightbackground=C_STYLE["border"],
+                        highlightthickness=1, bd=0)
+        pill.pack(side=tk.RIGHT, padx=(C_STYLE["pad_sm"], 0))
+        pill_inner = tk.Frame(pill, bg=C_STYLE["bg_stripe"])
+        pill_inner.pack(padx=C_STYLE["pad_sm"], pady=3)
+        self._status_dot = tk.Label(pill_inner, text=" ●", font=(FONT_FAMILY, 9),
+                                    bg=C_STYLE["bg_stripe"], fg=C_STYLE["text_muted"])
+        self._status_dot.pack(side=tk.LEFT)
+        self._status_badge_lbl = tk.Label(pill_inner, text="空闲",
+                                         font=C_STYLE["font_small"],
+                                         bg=C_STYLE["bg_stripe"],
                                          fg=C_STYLE["text_secondary"])
-        self._status_badge_lbl.pack(side=tk.RIGHT, padx=(C_STYLE["pad_sm"], 0))
-        self._status_badge_color = {"空闲": C_STYLE["text_secondary"],
+        self._status_badge_lbl.pack(side=tk.LEFT)
+        self._status_badge_color = {"空闲": C_STYLE["text_muted"],
                                     "测试中": C_STYLE["accent"],
                                     "已完成": C_STYLE["success"],
                                     "失败": C_STYLE["error"]}
@@ -653,10 +740,13 @@ class LLMBenchmarkApp:
             ("ttft", "平均 TTFT"), ("tps", "单请求 Token/s"),
             ("total_tokens", "总输出 Token 数"), ("agg_tps", "估算总吞吐"),
         ]):
-            mi = MetricItem(metric_grid, label)
-            mi.grid(row=0, column=i, sticky="w",
-                    padx=(0 if i == 0 else C_STYLE["pad_lg"], 0))
+            mi = MetricItem(metric_grid, label, metric_key=key)
+            mi.grid(row=0, column=i, sticky="nsew",
+                    padx=(0 if i == 0 else C_STYLE["gap_md"], 0))
             self.metrics[key] = mi
+        # make metric columns equal-width
+        for i in range(4):
+            metric_grid.columnconfigure(i, weight=1)
         self.notice_banner = NoticeBanner(bf, "info")
         self.notice_banner.grid(row=2, column=0, sticky="ew",
                                 pady=(0, C_STYLE["gap_lg"]))
@@ -673,7 +763,7 @@ class LLMBenchmarkApp:
         report_card.grid(row=4, column=0, sticky="nsew",
                          pady=(0, C_STYLE["gap_lg"]))
         report_card.columnconfigure(0, weight=1)
-        self.result_text = tk.Text(report_card.content, font=("Consolas", 10),
+        self.result_text = tk.Text(report_card.content, font=C_STYLE["font_code"],
                                    wrap=tk.WORD, bg=C_STYLE["bg_card"],
                                    fg=C_STYLE["text_primary"],
                                    relief=tk.FLAT, borderwidth=0,
@@ -712,15 +802,17 @@ class LLMBenchmarkApp:
         e = ttk.Entry(parent, textvariable=var, width=width)
         e.grid(row=row, column=1, sticky="ew", pady=(0, C_STYLE["gap_md"]))
         parent.columnconfigure(1, weight=1)
-    def _labeled_text(self, parent, label, var, row, height=3):
+    def _labeled_text(self, parent, label, var, row, height=2):
         ttk.Label(parent, text=label, style="Body.TLabel",
                   background=C_STYLE["bg_card"]).grid(
             row=row, column=0, sticky="nw",
             padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
         t = tk.Text(parent, height=height, font=C_STYLE["font_body"],
-                    bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"],
-                    relief=tk.SOLID, borderwidth=1,
-                    wrap=tk.WORD)
+                    bg=C_STYLE["bg_input"], fg=C_STYLE["text_primary"],
+                    highlightbackground=C_STYLE["border"],
+                    highlightthickness=1, relief=tk.FLAT, borderwidth=0,
+                    padx=8, pady=6, wrap=tk.WORD,
+                    insertbackground=C_STYLE["accent"])
         t.grid(row=row, column=1, sticky="ew", pady=(0, C_STYLE["gap_md"]))
         t.insert("1.0", var.get())
         t.bind("<FocusOut>", lambda e, v=var, w=t: v.set(w.get("1.0", "end-1c")))
@@ -741,7 +833,8 @@ class LLMBenchmarkApp:
                padx=(0, 0), pady=(C_STYLE["gap_sm"], 0))
     def _set_status_badge(self, status: str):
         color = self._status_badge_color.get(status, C_STYLE["text_secondary"])
-        self._status_badge_lbl.config(text=f"●  {status}", foreground=color)
+        self._status_dot.config(foreground=color)
+        self._status_badge_lbl.config(text=status, foreground=color)
     def _reset_config(self):
         self.url_var.set("http://192.168.1.12:8000/v1")
         self.key_var.set("change-me-before-production")
@@ -1100,77 +1193,22 @@ class LLMBenchmarkApp:
         r.append("=" * 60)
         return "\n".join(r)
     def _draw_histogram(self, summary: dict):
-        self.hist_canvas.delete("all")
+        """Draw histogram on the main benchmark canvas."""
         detail = summary.get("detail", [])
         if not detail:
+            self.hist_canvas.delete("all")
             self.hist_canvas.create_text(300, 100, text="暂无数据",
                                          font=C_STYLE["font_body"],
                                          fill=C_STYLE["text_secondary"])
             return
         latencies = [r["latency"] for r in detail if r["ok"]]
         if not latencies:
+            self.hist_canvas.delete("all")
             self.hist_canvas.create_text(300, 100, text="暂无成功请求",
                                          font=C_STYLE["font_body"],
                                          fill=C_STYLE["text_secondary"])
             return
-        self.hist_canvas.update_idletasks()
-        w = self.hist_canvas.winfo_width() or 580
-        h = self.hist_canvas.winfo_height() or 200
-        margin_l, margin_r, margin_t, margin_b = 55, 25, 30, 35
-        plot_w = w - margin_l - margin_r
-        plot_h = h - margin_t - margin_b
-        min_l, max_l = min(latencies), max(latencies)
-        if max_l == min_l:
-            max_l = min_l + 0.001
-        bin_count = min(25, max(6, len(latencies) // 2))
-        bin_w = (max_l - min_l) / bin_count
-        bins = [0] * bin_count
-        for lat in latencies:
-            idx = min(int((lat - min_l) / bin_w), bin_count - 1)
-            bins[idx] += 1
-        max_bin = max(bins) or 1
-        for i, count in enumerate(bins):
-            x0 = margin_l + i * plot_w / bin_count
-            x1 = margin_l + (i + 1) * plot_w / bin_count - 2
-            bar_h = count / max_bin * plot_h
-            y0 = margin_t + plot_h - bar_h
-            y1 = margin_t + plot_h
-            ratio = i / max(bin_count - 1, 1)
-            if ratio < 0.25:
-                r_, g_, b_ = 200, 195, 250
-            elif ratio < 0.5:
-                r_, g_, b_ = 155, 140, 245
-            elif ratio < 0.75:
-                r_, g_, b_ = 110, 90, 240
-            else:
-                r_, g_, b_ = 83, 58, 253
-            color = f"#{r_:02x}{g_:02x}{b_:02x}"
-            self.hist_canvas.create_rectangle(x0, y0, x1, y1, fill=color,
-                                              outline="", width=0)
-            if count > 0:
-                self.hist_canvas.create_text((x0 + x1) / 2, y0 - 10,
-                                             text=str(count),
-                                             font=C_STYLE["font_small"],
-                                             fill=C_STYLE["text_primary"])
-        self.hist_canvas.create_line(margin_l, margin_t + plot_h,
-                                     margin_l + plot_w, margin_t + plot_h,
-                                     fill=C_STYLE["border"], width=1)
-        self.hist_canvas.create_line(margin_l, margin_t, margin_l,
-                                     margin_t + plot_h,
-                                     fill=C_STYLE["border"], width=1)
-        for i in range(0, bin_count + 1, max(1, bin_count // 5)):
-            x = margin_l + i * plot_w / bin_count
-            val = min_l + i * bin_w
-            self.hist_canvas.create_text(x, margin_t + plot_h + 14,
-                                         text=f"{val:.2f}s",
-                                         font=C_STYLE["font_small"],
-                                         fill=C_STYLE["text_secondary"])
-        self.hist_canvas.create_text(w / 2, h - 8, text="延迟 (秒)",
-                                     font=C_STYLE["font_small"],
-                                     fill=C_STYLE["text_secondary"])
-        self.hist_canvas.create_text(14, h / 2, text="请求数", angle=90,
-                                     font=C_STYLE["font_small"],
-                                     fill=C_STYLE["text_secondary"])
+        self._draw_popup_histogram(self.hist_canvas, latencies)
     def _analyze_failures(self, fail_detail: list) -> tuple[str, str]:
         if not fail_detail:
             return "", ""
@@ -1249,16 +1287,27 @@ class LLMBenchmarkApp:
         hf = self.history_frame
         hf.configure(bg=C_STYLE["bg_main"])
         hf.grid_columnconfigure(0, weight=1)
-        hf.grid_rowconfigure(1, weight=1)
-        toolbar = tk.Frame(hf, bg=C_STYLE["bg_card"])
+        hf.grid_rowconfigure(0, weight=0)  # toolbar
+        hf.grid_rowconfigure(1, weight=1)  # table
+        # toolbar with subtle background
+        toolbar = tk.Frame(hf, bg=C_STYLE["bg_card"],
+                           highlightbackground=C_STYLE["border"],
+                           highlightthickness=1, bd=0)
         toolbar.grid(row=0, column=0, sticky="ew", pady=(0, C_STYLE["gap_lg"]))
         toolbar_inner = tk.Frame(toolbar, bg=C_STYLE["bg_card"])
         toolbar_inner.pack(fill=tk.X, padx=C_STYLE["pad_lg"], pady=C_STYLE["pad_sm"])
-        ttk.Button(toolbar_inner, text="刷新", style="Secondary.TButton",
+        ttk.Button(toolbar_inner, text="↻ 刷新", style="Secondary.TButton",
                    command=self._refresh_history).pack(side=tk.LEFT)
-        ttk.Button(toolbar_inner, text="清空记录", style="Secondary.TButton",
+        ttk.Button(toolbar_inner, text="✕ 清空记录", style="Secondary.TButton",
                    command=self._clear_history).pack(side=tk.LEFT, padx=C_STYLE["pad_sm"])
-        table_card = tk.Frame(hf, bg=C_STYLE["bg_card"])
+        lbl = tk.Label(toolbar_inner, text="双击行查看详情",
+                       font=C_STYLE["font_small"],
+                       bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"])
+        lbl.pack(side=tk.RIGHT)
+        # table card
+        table_card = tk.Frame(hf, bg=C_STYLE["bg_card"],
+                              highlightbackground=C_STYLE["border"],
+                              highlightthickness=1, bd=0)
         table_card.grid(row=1, column=0, sticky="nsew")
         table_card.grid_columnconfigure(0, weight=1)
         table_card.grid_rowconfigure(0, weight=1)
@@ -1305,39 +1354,188 @@ class LLMBenchmarkApp:
         conn.commit()
         conn.close()
         self._refresh_history()
+    def _draw_popup_histogram(self, canvas: tk.Canvas, latencies: list[float]):
+        """Draw a latency distribution histogram on the given canvas."""
+        canvas.delete("all")
+        if not latencies:
+            canvas.create_text(200, 80, text="暂无延迟数据",
+                               font=C_STYLE["font_body"],
+                               fill=C_STYLE["text_secondary"])
+            return
+        canvas.update_idletasks()
+        w = canvas.winfo_width() or 580
+        h = canvas.winfo_height() or 220
+        margin_l, margin_r, margin_t, margin_b = 55, 25, 20, 35
+        plot_w = w - margin_l - margin_r
+        plot_h = h - margin_t - margin_b
+        min_l, max_l = min(latencies), max(latencies)
+        if max_l == min_l:
+            max_l = min_l + 0.001
+        bin_count = min(25, max(6, len(latencies) // 2))
+        bin_w = (max_l - min_l) / bin_count
+        bins = [0] * bin_count
+        for lat in latencies:
+            idx = min(int((lat - min_l) / bin_w), bin_count - 1)
+            bins[idx] += 1
+        max_bin = max(bins) or 1
+        # draw bars
+        for i, count in enumerate(bins):
+            x0 = margin_l + i * plot_w / bin_count
+            x1 = margin_l + (i + 1) * plot_w / bin_count - 2
+            bar_h = count / max_bin * plot_h
+            y0 = margin_t + plot_h - bar_h
+            y1 = margin_t + plot_h
+            ratio = i / max(bin_count - 1, 1)
+            if ratio < 0.25:
+                r_, g_, b_ = 200, 195, 253
+            elif ratio < 0.5:
+                r_, g_, b_ = 160, 148, 252
+            elif ratio < 0.75:
+                r_, g_, b_ = 120, 100, 250
+            else:
+                r_, g_, b_ = 83, 58, 253
+            color = f"#{r_:02x}{g_:02x}{b_:02x}"
+            canvas.create_rectangle(x0, y0, x1, y1, fill=color,
+                                    outline="", width=0)
+            if count > 0:
+                canvas.create_text((x0 + x1) / 2, y0 - 10,
+                                   text=str(count),
+                                   font=C_STYLE["font_small"],
+                                   fill=C_STYLE["text_primary"])
+        # axes
+        canvas.create_line(margin_l, margin_t + plot_h,
+                           margin_l + plot_w, margin_t + plot_h,
+                           fill=C_STYLE["border"], width=1)
+        canvas.create_line(margin_l, margin_t, margin_l,
+                           margin_t + plot_h,
+                           fill=C_STYLE["border"], width=1)
+        # x-axis labels
+        for i in range(0, bin_count + 1, max(1, bin_count // 5)):
+            x = margin_l + i * plot_w / bin_count
+            val = min_l + i * bin_w
+            canvas.create_text(x, margin_t + plot_h + 14,
+                               text=f"{val:.2f}s",
+                               font=C_STYLE["font_small"],
+                               fill=C_STYLE["text_secondary"])
+        canvas.create_text(w / 2, h - 8, text="延迟 (秒)",
+                           font=C_STYLE["font_small"],
+                           fill=C_STYLE["text_secondary"])
+        canvas.create_text(14, h / 2, text="请求数", angle=90,
+                           font=C_STYLE["font_small"],
+                           fill=C_STYLE["text_secondary"])
+
     def _on_history_double_click(self, event):
         sel = self.hist_tree.selection()
         if not sel:
             return
         rid = self.hist_tree.item(sel[0], "values")[0]
         conn = sqlite3.connect(DB_PATH)
-        row = conn.execute("SELECT * FROM benchmarks WHERE id=?", (rid,)).fetchone()
+        row = conn.execute("SELECT * FROM benchmarks WHERE id=?",
+                           (rid,)).fetchone()
         conn.close()
         if not row:
             return
-        detail = json.loads(row[19]) if row[19] else []
+        detail = json.loads(row[21]) if row[21] else []
         latencies = [r["latency"] for r in detail if r["ok"]]
-        info = (
-            f"ID: {row[0]}\n时间: {row[1]}\n"
-            f"接口: {row[2]}\n模型: {row[3]}\n"
-            f"提示词: {row[4][:80]}...\n"
-            f"并发: {row[6]}  请求数: {row[7]}  成功: {row[8]}  失败: {row[9]}\n"
-            f"延迟 最小/平均/最大: {row[10]:.3f}s / {row[11]:.3f}s / {row[12]:.3f}s\n"
-            f"P50/P95/P99: {row[13]:.3f}s / {row[14]:.3f}s / {row[15]:.3f}s\n"
-            f"平均 TTFT: {row[16]:.3f}s  Token/s: {row[17]:.2f}  "
-            f"总Token: {row[18]}  总耗时: {row[19]:.1f}s\n"
-            f"\n各请求延迟:\n" + "\n".join(
-                f"  #{i+1}: {r['latency']:.3f}s {'✓' if r['ok'] else '✗ '+r.get('error','')}"
-                for i, r in enumerate(detail[:30])
-            )
-        )
+        fail_detail = [r for r in detail if not r["ok"]]
+
         top = tk.Toplevel(self.root)
-        top.title(f"测试详情 #{rid}")
-        top.geometry("700x500")
-        t = tk.Text(top, font=("Consolas", 10), wrap=tk.NONE)
-        t.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
-        t.insert("1.0", info)
-        t.config(state=tk.DISABLED)
+        top.title(f"测试详情  #{rid}")
+        top.geometry("800x620")
+        top.configure(bg=C_STYLE["bg_main"])
+        top.minsize(600, 450)
+        top.grid_columnconfigure(0, weight=1)
+        top.grid_rowconfigure(0, weight=0)  # summary card
+        top.grid_rowconfigure(1, weight=1)  # histogram
+        top.grid_rowconfigure(2, weight=0)  # close button
+
+        # ── summary card ──
+        card = tk.Frame(top, bg=C_STYLE["bg_card"],
+                        highlightbackground=C_STYLE["border"],
+                        highlightthickness=1, bd=0)
+        card.grid(row=0, column=0, sticky="ew",
+                  padx=C_STYLE["pad_lg"], pady=(C_STYLE["pad_lg"], C_STYLE["gap_md"]))
+        card_inner = tk.Frame(card, bg=C_STYLE["bg_card"])
+        card_inner.pack(fill=tk.X, padx=C_STYLE["pad_md"], pady=C_STYLE["pad_md"])
+        # row 1: model + concurrency + duration
+        r1 = tk.Frame(card_inner, bg=C_STYLE["bg_card"])
+        r1.pack(fill=tk.X)
+        tk.Label(r1, text=f"模型: {row[3]}", font=C_STYLE["font_section"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).pack(side=tk.LEFT)
+        tk.Label(r1, text=f"  并发: {row[7]}", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_secondary"]).pack(
+            side=tk.LEFT, padx=(C_STYLE["pad_md"], 0))
+        tk.Label(r1, text=f"请求: {row[8]}", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_secondary"]).pack(
+            side=tk.LEFT, padx=(C_STYLE["pad_md"], 0))
+        succ_color = C_STYLE["success"] if row[9] == row[8] else \
+                     C_STYLE["warning"] if row[9] > 0 else C_STYLE["error"]
+        tk.Label(r1, text=f"成功: {row[9]}", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=succ_color).pack(
+            side=tk.LEFT, padx=(C_STYLE["pad_md"], 0))
+        if row[10] > 0:
+            tk.Label(r1, text=f"失败: {row[10]}", font=C_STYLE["font_body"],
+                     bg=C_STYLE["bg_card"], fg=C_STYLE["error"]).pack(
+                side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
+        tk.Label(r1, text=f"耗时: {row[20]:.1f}s" if row[20] else "耗时: —",
+                 font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_secondary"]).pack(
+            side=tk.RIGHT)
+        # row 2: latency metrics
+        r2 = tk.Frame(card_inner, bg=C_STYLE["bg_card"])
+        r2.pack(fill=tk.X, pady=(C_STYLE["gap_sm"], 0))
+        metrics_text = (
+            f"最小: {row[11]:.3f}s" if row[11] else "最小: —"
+        ) + "    " + (
+            f"平均: {row[12]:.3f}s" if row[12] else "平均: —"
+        ) + "    " + (
+            f"最大: {row[13]:.3f}s" if row[13] else "最大: —"
+        )
+        tk.Label(r2, text=metrics_text, font=C_STYLE["font_small"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).pack(side=tk.LEFT)
+        pct_text = (
+            f"P50: {row[14]:.3f}s" if row[14] else "P50: —"
+        ) + "    " + (
+            f"P95: {row[15]:.3f}s" if row[15] else "P95: —"
+        ) + "    " + (
+            f"P99: {row[16]:.3f}s" if row[16] else "P99: —"
+        )
+        tk.Label(r2, text=pct_text, font=C_STYLE["font_small"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_secondary"]).pack(
+            side=tk.LEFT, padx=(C_STYLE["gap_lg"], 0))
+
+        # ── histogram ──
+        hist_frame = tk.Frame(top, bg=C_STYLE["bg_card"],
+                              highlightbackground=C_STYLE["border"],
+                              highlightthickness=1, bd=0)
+        hist_frame.grid(row=1, column=0, sticky="nsew",
+                        padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_md"]))
+        hist_frame.grid_columnconfigure(0, weight=1)
+        hist_frame.grid_rowconfigure(0, weight=1)
+        hist_inner = tk.Frame(hist_frame, bg=C_STYLE["bg_card"])
+        hist_inner.grid(row=0, column=0, sticky="nsew",
+                        padx=C_STYLE["pad_md"], pady=C_STYLE["pad_md"])
+        hist_inner.grid_columnconfigure(0, weight=1)
+        hist_inner.grid_rowconfigure(0, weight=1)
+
+        canvas = tk.Canvas(hist_inner, bg=C_STYLE["bg_card"],
+                           highlightthickness=0, bd=0)
+        canvas.grid(row=0, column=0, sticky="nsew")
+
+        # bind resize to redraw
+        def _redraw(event=None):
+            if latencies:
+                self._draw_popup_histogram(canvas, latencies)
+        canvas.bind("<Configure>", _redraw, add="+")
+        # initial draw after layout
+        top.after(100, _redraw)
+
+        # ── close button ──
+        btn_frame = tk.Frame(top, bg=C_STYLE["bg_main"])
+        btn_frame.grid(row=2, column=0, sticky="e",
+                       padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["pad_lg"]))
+        ttk.Button(btn_frame, text="关闭", style="Secondary.TButton",
+                   command=top.destroy).pack()
 # ============================================================
 # Entry point
 # ============================================================
