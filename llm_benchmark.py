@@ -710,7 +710,7 @@ class LLMBenchmarkApp:
             padx=(0, C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0))
         self.save_report_var = tk.StringVar(value="否")
         ttk.Combobox(param_grid, textvariable=self.save_report_var,
-                     values=["否", "是"], width=4, state="readonly").grid(
+                     values=["否", "是"], width=28, state="readonly").grid(
             row=2, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
         card_c = SectionCard(col, "操作")
         card_c.pack(fill=tk.X)
