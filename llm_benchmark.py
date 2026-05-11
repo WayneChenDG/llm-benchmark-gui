@@ -511,6 +511,7 @@ class LLMBenchmarkApp:
         w = int(sw * 1099 / 1920)
         h = int(sh * 1018 / 1080)
         self.root.geometry(f"{w}x{h}")
+        self.root.resizable(False, False)
         self.root.minsize(1024, 680)
         self.root.configure(bg=C_STYLE["bg_main"])
         self._benchmark_running = False
