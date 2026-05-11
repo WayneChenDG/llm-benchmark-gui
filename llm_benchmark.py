@@ -506,8 +506,11 @@ class LLMBenchmarkApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("LLM 并发性能测试工具")
+        sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        self.root.geometry(f"1100x{sh - 150}")  # screen height - 150
+        w = int(sw * 1099 / 1920)
+        h = int(sh * 1018 / 1080)
+        self.root.geometry(f"{w}x{h}")
         self.root.minsize(1024, 680)
         self.root.configure(bg=C_STYLE["bg_main"])
         self._benchmark_running = False
