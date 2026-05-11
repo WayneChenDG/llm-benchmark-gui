@@ -727,10 +727,6 @@ class LLMBenchmarkApp:
         self._action_status.pack(anchor="w", pady=(C_STYLE["pad_sm"], 0))
         self.progress = ttk.Progressbar(card_c.content, mode="determinate")
         self.progress.pack(fill=tk.X, pady=(C_STYLE["pad_sm"], 0))
-        tip = tk.Label(col, text="提示：先用并发数=1 测基线延迟，再逐步提高并发数测试吞吐上限。",
-                       font=C_STYLE["font_small"], bg=C_STYLE["bg_main"],
-                       fg=C_STYLE["text_muted"])
-        tip.pack(anchor="w", pady=(C_STYLE["pad_sm"], 0))
     def _build_results_tab(self):
         bf = self.bench_frame
         bf.grid_columnconfigure(0, weight=1)
