@@ -19,7 +19,7 @@ try:
     with open(main_script, encoding="utf-8") as f:
         code = compile(f.read(), main_script, "exec")
     # Inject __name__ so the if __name__ == "__main__" block runs
-    exec(code, {"__name__": "__main__"})
+    exec(code, {"__name__": "__main__", "__file__": main_script})
 except Exception as e:
     detail = traceback.format_exc()
     # Try GUI error dialog first
