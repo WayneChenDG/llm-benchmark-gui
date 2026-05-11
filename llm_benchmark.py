@@ -5,6 +5,7 @@
 """
 import json
 import logging
+import os
 import sqlite3
 import statistics
 import sys
@@ -18,9 +19,13 @@ from tkinter import messagebox, ttk
 from typing import Optional
 from urllib import request, error
 from urllib.parse import urlparse, urlunparse
-DB_PATH = "llm_benchmark_history.db"
-INI_PATH = "llm_benchmark.ini"
-LOG_PATH = "llm_benchmark.log"
+
+# Resolve paths relative to script location (fixes double-click on Windows)
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(_SCRIPT_DIR, "llm_benchmark_history.db")
+INI_PATH = os.path.join(_SCRIPT_DIR, "llm_benchmark.ini")
+LOG_PATH = os.path.join(_SCRIPT_DIR, "llm_benchmark.log")
+CRASH_LOG = os.path.join(_SCRIPT_DIR, "llm_benchmark_crash.log")
 DEBUG_MODE = False
 def setup_logging():
     logging.basicConfig(
@@ -1300,7 +1305,7 @@ class LLMBenchmarkApp:
         if self.save_report_var.get() == "是":
             try:
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                report_path = f"llm_benchmark_report_{ts}.txt"
+                report_path = os.path.join(_SCRIPT_DIR, f"llm_benchmark_report_{ts}.txt")
                 with open(report_path, "w", encoding="utf-8") as f:
                     f.write(report)
                 if DEBUG_MODE:
@@ -1790,7 +1795,7 @@ def _show_crash(title: str, msg: str):
         mb.showerror(title, msg)
         root.destroy()
     except Exception:
-        with open("llm_benchmark_crash.log", "w", encoding="utf-8") as f:
+        with open(CRASH_LOG, "w", encoding="utf-8") as f:
             f.write(f"{title}\n{msg}\n")
 
 def main():
@@ -1814,5 +1819,5 @@ if __name__ == "__main__":
         _show_crash("LLM Benchmark 启动失败",
                     f"程序启动时发生错误:\n\n{type(e).__name__}: {e}\n\n"
                     f"详细信息已写入 llm_benchmark_crash.log")
-        with open("llm_benchmark_crash.log", "w", encoding="utf-8") as f:
+        with open(CRASH_LOG, "w", encoding="utf-8") as f:
             f.write(detail)
