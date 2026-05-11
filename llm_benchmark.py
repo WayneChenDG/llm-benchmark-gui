@@ -937,6 +937,117 @@ class LLMBenchmarkApp:
     def _set_indicator(self, key: str, state: str, detail: str = ""):
         if key in self.indicators:
             self.indicators[key].set_state(state, detail)
+    # ---------- error popup ----------
+    def _show_error_popup(self, title: str, error_summary: str, advice: str):
+        """Show a styled error dialog with categorized advice."""
+        top = tk.Toplevel(self.root)
+        top.title(title)
+        top.configure(bg=C_STYLE["bg_main"])
+        top.resizable(False, False)
+        top.transient(self.root)
+        top.grab_set()
+        # header bar
+        hdr = tk.Frame(top, bg=C_STYLE["error"], height=4)
+        hdr.pack(fill=tk.X)
+        hdr.pack_propagate(False)
+        # body
+        body = tk.Frame(top, bg=C_STYLE["bg_card"])
+        body.pack(fill=tk.BOTH, expand=True, padx=C_STYLE["pad_lg"], pady=C_STYLE["pad_lg"])
+        # icon + title
+        title_row = tk.Frame(body, bg=C_STYLE["bg_card"])
+        title_row.pack(fill=tk.X, pady=(0, C_STYLE["gap_md"]))
+        tk.Label(title_row, text="⚠", font=(FONT_FAMILY, 24),
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["error"]).pack(side=tk.LEFT,
+                 padx=(0, C_STYLE["pad_sm"]))
+        tk.Label(title_row, text=title, font=C_STYLE["font_section"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).pack(
+            side=tk.LEFT)
+        # error summary
+        tk.Label(body, text=error_summary, font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"],
+                 wraplength=420, justify=tk.LEFT, anchor="w").pack(
+            fill=tk.X, pady=(0, C_STYLE["gap_md"]))
+        # advice section
+        if advice:
+            sep = tk.Frame(body, height=1, bg=C_STYLE["border"])
+            sep.pack(fill=tk.X, pady=(0, C_STYLE["gap_md"]))
+            tk.Label(body, text="排查建议", font=C_STYLE["font_small"],
+                     bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"],
+                     anchor="w").pack(fill=tk.X)
+            tk.Label(body, text=advice, font=C_STYLE["font_body"],
+                     bg=C_STYLE["bg_card"], fg=C_STYLE["text_secondary"],
+                     wraplength=420, justify=tk.LEFT, anchor="w").pack(
+                fill=tk.X, pady=(4, 0))
+        # buttons
+        btn_row = tk.Frame(body, bg=C_STYLE["bg_card"])
+        btn_row.pack(fill=tk.X, pady=(C_STYLE["gap_md"], 0))
+        ttk.Button(btn_row, text="在报告中查看详情", style="Secondary.TButton",
+                   command=lambda: [top.destroy(), self.nb.select(self.bench_frame)]).pack(
+            side=tk.LEFT)
+        ttk.Button(btn_row, text="关闭", style="Primary.TButton",
+                   command=top.destroy).pack(side=tk.RIGHT)
+        # size and center
+        top.update_idletasks()
+        w, h = 480, top.winfo_reqheight()
+        x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+        top.geometry(f"{w}x{h}+{x}+{y}")
+
+    @staticmethod
+    def _categorize_api_error(err_type: str, err_msg: str) -> tuple[str, str]:
+        """Return (error_summary, advice) for a given API error."""
+        combined = err_type + " " + err_msg
+        rules = [
+            (["网络连接失败", "Connection refused", "timed out",
+              "Name or service not known", "No route to host",
+              "Connection reset", "getaddrinfo"],
+             "目标主机通讯失败",
+             "无法连接到 API 服务器，请检查：\n"
+             "• API 地址是否正确（如 http://192.168.1.12:8000/v1）\n"
+             "• 目标主机是否在运行，端口是否开放\n"
+             "• 网络 / VPN / 防火墙是否阻止了连接\n"
+             "• 尝试在浏览器中访问该地址验证"),
+            (["401"],
+             "API 密钥认证失败",
+             "API Key 错误或已过期，请检查：\n"
+             "• Key 是否完整复制（无多余空格）\n"
+             "• Key 是否在 API 管理后台仍然有效\n"
+             "• 是否需要重新生成 Key"),
+            (["403"],
+             "接口权限不足",
+             "API Key 没有访问此模型的权限，请检查：\n"
+             "• 账户是否有该模型的访问配额\n"
+             "• Key 的权限范围是否包含此接口"),
+            (["404"],
+             "API 接口不存在",
+             "请求的接口路径或模型名称有误，请检查：\n"
+             "• URL 是否以 /v1/chat/completions 结尾\n"
+             "• 模型名称是否拼写正确（区分大小写）\n"
+             "• 该模型是否已在服务端部署"),
+            (["429"],
+             "请求被限流",
+             "请求频率超过 API 限额，请尝试：\n"
+             "• 降低并发数后重试\n"
+             "• 等待配额重置（通常 1 分钟后恢复）\n"
+             "• 联系服务提供方提升配额"),
+            (["500", "502", "503", "504"],
+             "服务器内部错误",
+             "API 服务端出现临时故障，请尝试：\n"
+             "• 等待几分钟后重试\n"
+             "• 如持续出现，联系服务提供方\n"
+             "• 查看服务端日志排查"),
+            (["响应格式错误", "JSONDecodeError", "Expecting value"],
+             "响应格式不兼容",
+             "API 返回的内容不符合 OpenAI 格式，请检查：\n"
+             "• 目标地址是否为 OpenAI 兼容接口\n"
+             "• 服务端是否返回了错误页面（如 HTML）\n"
+             "• 尝试用 curl 直接测试该接口"),
+        ]
+        for keywords, summary, advice in rules:
+            if any(k in combined for k in keywords):
+                return summary, advice
+        return ("未知错误",
+                f"错误详情: {err_msg[:200]}\n\n请检查 API 地址、Key 和模型名称后重试。")
     def _on_preflight_fail(self, step: str, payload):
         self._benchmark_running = False
         self.start_btn.config(state=tk.NORMAL, text="开始测试")
@@ -955,6 +1066,8 @@ class LLMBenchmarkApp:
                 "• 确认服务端是否在运行，端口是否开放\n"
                 "• 检查网络 / VPN / 代理是否正常\n"
                 "• 尝试在浏览器中访问该地址")
+            summary, advice = self._categorize_api_error("网络连接失败", str(payload))
+            self.root.after(50, lambda: self._show_error_popup("连通性检测失败", summary, advice))
         else:
             self._set_indicator("connectivity", "pass", "连接正常")
             self._set_indicator("smoke", "fail", "测试失败")
@@ -967,6 +1080,8 @@ class LLMBenchmarkApp:
             _, advice = self._analyze_failures([payload] if isinstance(payload, dict) else
                                                [{"error": str(payload), "error_type": ""}])
             self.result_text.insert(tk.END, advice + "\n\n请修正配置后重新测试。")
+            summary, popup_advice = self._categorize_api_error(err_type, err_msg)
+            self.root.after(50, lambda: self._show_error_popup("基线测试失败", summary, popup_advice))
         self.result_text.config(state=tk.DISABLED)
     def _start_benchmark(self):
         if self._benchmark_running:
@@ -1083,6 +1198,15 @@ class LLMBenchmarkApp:
             self._set_indicator("benchmark", "fail", "全部失败")
             self._set_status_badge("失败")
             self.status_label.config(text="测试完成（全部失败）")
+            # popup with categorized error for first failure
+            fail_detail = summary.get("fail_detail", [])
+            if fail_detail:
+                r = fail_detail[0]
+                err_type = r.get("error_type", "")
+                err_msg = r.get("error", "未知错误")
+                esum, eadv = self._categorize_api_error(err_type, err_msg)
+                self.root.after(100, lambda: self._show_error_popup(
+                    "压力测试全部失败", esum, eadv))
         self._set_indicator("duration", "idle", f"{summary['duration_sec']:.1f}s")
         self.metrics["ttft"].set_value(f"{summary['ttft_avg']:.3f}s")
         self.metrics["tps"].set_value(f"{summary['tokens_per_sec']:.2f}")
