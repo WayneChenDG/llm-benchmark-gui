@@ -712,6 +712,22 @@ class LLMBenchmarkApp:
         ttk.Combobox(param_grid, textvariable=self.save_report_var,
                      values=["否", "是"], width=28, state="readonly").grid(
             row=2, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
+        # auto-save toggle
+        tk.Label(param_grid, text="自动保存配置", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
+            row=2, column=2, sticky="w",
+            padx=(C_STYLE["gap_lg"], C_STYLE["pad_sm"]),
+            pady=(C_STYLE["gap_sm"], 0))
+        self.auto_save_var = tk.StringVar(value="否")
+        ttk.Combobox(param_grid, textvariable=self.auto_save_var,
+                     values=["否", "是"], width=28, state="readonly").grid(
+            row=2, column=3, sticky="w", pady=(C_STYLE["gap_sm"], 0))
+        # wire auto-save traces on all config vars
+        for v in (self.url_var, self.key_var, self.model_var,
+                  self.max_tokens_var, self.temp_var, self.total_var,
+                  self.concurrency_var, self.save_report_var,
+                  self.auto_save_var):
+            v.trace_add("write", lambda *a: self._auto_save_check())
         card_c = SectionCard(col, "操作")
         card_c.pack(fill=tk.X)
         btn_row = tk.Frame(card_c.content, bg=C_STYLE["bg_card"])
@@ -838,7 +854,7 @@ class LLMBenchmarkApp:
                     insertbackground=C_STYLE["accent"])
         t.grid(row=row, column=1, sticky="ew", pady=(0, C_STYLE["gap_md"]))
         t.insert("1.0", var.get())
-        t.bind("<FocusOut>", lambda e, v=var, w=t: v.set(w.get("1.0", "end-1c")))
+        t.bind("<FocusOut>", lambda e, v=var, w=t: [v.set(w.get("1.0", "end-1c")), self._auto_save_check()])
         parent.columnconfigure(1, weight=1)
         if not hasattr(self, '_text_widgets'):
             self._text_widgets = {}
@@ -904,13 +920,15 @@ class LLMBenchmarkApp:
                 self.concurrency_var.set(concurrency_label)
             self.save_report_var.set(cfg.get("test", "save_report",
                                      fallback=self.save_report_var.get()))
+            self.auto_save_var.set(cfg.get("test", "auto_save",
+                                   fallback=self.auto_save_var.get()))
         # sync Text widgets
         for label, t in getattr(self, '_text_widgets', {}).items():
             if "系统" in label:
                 t.delete("1.0", tk.END); t.insert("1.0", self.system_var.get())
             elif "用户" in label:
                 t.delete("1.0", tk.END); t.insert("1.0", self.prompt_var.get())
-    def _save_config(self):
+    def _save_config(self, silent: bool = False):
         """Write current settings to INI file."""
         cfg = ConfigParser()
         cfg["api"] = {
@@ -928,10 +946,19 @@ class LLMBenchmarkApp:
             "total_requests": str(self.total_var.get()),
             "concurrency": self.concurrency_var.get(),
             "save_report": self.save_report_var.get(),
+            "auto_save": self.auto_save_var.get(),
         }
         with open(INI_PATH, "w", encoding="utf-8") as f:
             cfg.write(f)
-        self._action_status.config(text="配置已保存到 llm_benchmark.ini")
+        if not silent:
+            self._action_status.config(text="配置已保存到 llm_benchmark.ini")
+    def _auto_save_check(self):
+        """Auto-save if enabled. Silently skip if disabled."""
+        if self.auto_save_var.get() == "是":
+            try:
+                self._save_config(silent=True)
+            except Exception:
+                pass  # never disrupt user for auto-save failures
     def _build_statusbar(self):
         sb = tk.Frame(self.root, bg=C_STYLE["bg_header"], height=32)
         sb.pack(fill=tk.X, side=tk.BOTTOM)
