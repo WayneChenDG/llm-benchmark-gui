@@ -1423,31 +1423,41 @@ class LLMBenchmarkApp:
             self.root.after(0, lambda: self._on_preflight_fail("connectivity", err))
             return
         self.root.after(0, lambda: self._set_indicator("connectivity", "pass", "连接正常"))
-        # ── Step 1.5: fetch model list and let user pick ──
+        # ── Step 1.5: fetch model list and let user pick if needed ──
         if DEBUG_MODE:
             logging.info("preflight: step 1.5 — fetch model list")
         self.root.after(0, lambda: self.status_label.config(
             text="正在获取模型列表...", fg=C_STYLE["accent"]))
         models, fetch_err = fetch_models(api_url, api_key)
         if models:
-            model_event = threading.Event()
-            model_result = [None]  # boxed
-            def _pick_model():
-                model_result[0] = self._show_model_picker(models, model)
-                model_event.set()
-            self.root.after(0, _pick_model)
-            self.root.after(0, lambda: self.status_label.config(
-                text="请在弹出的窗口中选择模型", fg=C_STYLE["accent"]))
-            model_event.wait()
-            if model_result[0] is not None:
-                model = model_result[0]
-                # Update the model field in GUI to reflect selection
-                self.root.after(0, lambda: self.model_var.set(model))
+            model_trimmed = model.strip()
+            if model_trimmed and model_trimmed in models:
+                # Model is valid — skip picker, use it directly
+                self.root.after(0, lambda: self.status_label.config(
+                    text="模型已验证，跳过选择...", fg=C_STYLE["success"]))
                 if DEBUG_MODE:
-                    logging.info("user selected model: %s", model)
+                    logging.info("model '%s' found in API list, skipping picker", model)
             else:
+                # Model is empty or not in list — show picker
                 if DEBUG_MODE:
-                    logging.info("user skipped model picker, using: %s", model)
+                    logging.info("model '%s' not in API list, showing picker", model)
+                model_event = threading.Event()
+                model_result = [None]
+                def _pick_model():
+                    model_result[0] = self._show_model_picker(models, model)
+                    model_event.set()
+                self.root.after(0, _pick_model)
+                self.root.after(0, lambda: self.status_label.config(
+                    text="请在弹出的窗口中选择模型", fg=C_STYLE["accent"]))
+                model_event.wait()
+                if model_result[0] is not None:
+                    model = model_result[0]
+                    self.root.after(0, lambda: self.model_var.set(model))
+                    if DEBUG_MODE:
+                        logging.info("user selected model: %s", model)
+                else:
+                    if DEBUG_MODE:
+                        logging.info("user skipped model picker, using: %s", model)
         elif fetch_err:
             if DEBUG_MODE:
                 logging.warning("model fetch failed, using manual entry: %s", fetch_err)
