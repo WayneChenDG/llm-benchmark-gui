@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=LLM Benchmark
+Name[zh_CN]=LLM 性能测试
+Comment=LLM Concurrent Performance Benchmark Tool
+Comment[zh_CN]=LLM 大模型并发性能基准测试工具
+Exec=python3 /opt/llm-benchmark/llm_benchmark.py
+Icon=/opt/llm-benchmark/llm_benchmark.svg
+Path=/opt/llm-benchmark
+Terminal=false
+Categories=Development;Utility;
+StartupNotify=true
