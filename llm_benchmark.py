@@ -707,7 +707,16 @@ class LLMBenchmarkApp:
         ttk.Checkbutton(kf, text="显示", variable=self.show_key,
                         command=self._toggle_key_visibility).pack(side=tk.LEFT, padx=4)
         self.model_var = tk.StringVar(value="qwen3.5-122b-a10b-fp8")
-        self._labeled_input(card_a.content, "模型名称", self.model_var, 2, width=40)
+        ttk.Label(card_a.content, text="模型名称（选填）", style="Body.TLabel",
+                  background=C_STYLE["bg_card"]).grid(
+            row=2, column=0, sticky="w",
+            padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
+        mf = tk.Frame(card_a.content, bg=C_STYLE["bg_card"])
+        mf.grid(row=2, column=1, sticky="ew", pady=(0, C_STYLE["gap_md"]))
+        mf.columnconfigure(0, weight=1)
+        ttk.Entry(mf, textvariable=self.model_var, width=36).grid(row=0, column=0, sticky="ew")
+        ttk.Button(mf, text="查询", command=self._on_query_models).grid(
+            row=0, column=1, padx=(C_STYLE["pad_sm"], 0))
         self.system_var = tk.StringVar(value="你是一个有帮助的助手。")
         self._labeled_text(card_a.content, "系统提示词", self.system_var, 3, height=2)
         self.prompt_var = tk.StringVar(value="请用300字左右介绍机器学习。")
@@ -1163,7 +1172,7 @@ class LLMBenchmarkApp:
         ph = self.root.winfo_height()
         px = self.root.winfo_rootx()
         py = self.root.winfo_rooty()
-        w, h = 460, 360
+        w, h = 480, 400
         x = px + (pw - w) // 2
         y = py + (ph - h) // 2
         dlg.geometry(f"{w}x{h}+{x}+{y}")
@@ -1209,8 +1218,11 @@ class LLMBenchmarkApp:
         # Buttons
         btnf = tk.Frame(dlg, bg=C_STYLE["bg_card"])
         btnf.pack(fill=tk.X, padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["pad_lg"]))
-        skip_btn = ttk.Button(btnf, text="跳过  (使用已填写的模型)", command=_skip)
-        skip_btn.pack(side=tk.LEFT)
+        skip_btn = ttk.Button(btnf, text="跳过", command=_skip)
+        skip_btn.pack(side=tk.LEFT, padx=(0, C_STYLE["pad_sm"]))
+        tk.Label(btnf, text="（将使用已填写的模型）",
+                 font=C_STYLE["font_small"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_secondary"]).pack(side=tk.LEFT)
         ttk.Button(btnf, text="确认选择", style="Primary.TButton", command=_ok).pack(side=tk.RIGHT)
 
         # Return key to confirm
@@ -1222,6 +1234,39 @@ class LLMBenchmarkApp:
         dlg.wait_window()
         picked.wait(timeout=120)
         return result[0]
+    def _on_query_models(self):
+        """Handle「查询」button click: fetch models from API and let user pick."""
+        api_url = self.url_var.get().strip()
+        if not api_url:
+            messagebox.showerror("错误", "请先填写 API 地址")
+            return
+        api_url = normalize_api_url(api_url)
+        api_key = self.key_var.get().strip()
+        self._action_status.config(text="正在获取模型列表...")
+        self.root.update_idletasks()
+        # Fetch models in a background thread to avoid freezing UI
+        result_box = []
+        def _fetch():
+            models, err = fetch_models(api_url, api_key)
+            result_box.append((models, err))
+            # Show picker on main thread
+            self.root.after(0, lambda: self._show_query_result(models, err))
+        threading.Thread(target=_fetch, daemon=True).start()
+    def _show_query_result(self, models: list[str], err: str):
+        if models:
+            picked = self._show_model_picker(models, self.model_var.get().strip())
+            if picked is not None:
+                self.model_var.set(picked)
+            self._action_status.config(text="就绪 — 请配置参数后开始测试")
+        else:
+            self._action_status.config(text="就绪 — 请配置参数后开始测试")
+            if err:
+                detail = err[:200] if len(err) > 200 else err
+            else:
+                detail = "API 未返回任何模型"
+            messagebox.showerror("获取模型失败",
+                f"无法获取模型列表。\n\n{detail}\n\n"
+                "请手动输入模型名称后重试。")
     def _on_preflight_fail(self, step: str, payload):
         self._benchmark_running = False
         self.start_btn.config(state=tk.NORMAL, text="开始测试")
