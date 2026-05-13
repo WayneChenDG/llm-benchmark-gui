@@ -440,6 +440,35 @@ def check_server_reachable(api_url: str, timeout: int = 5) -> tuple[bool, str]:
         if DEBUG_MODE:
             logging.warning("connectivity FAIL: %s", e)
         return False, str(e)
+def fetch_models(api_url: str, api_key: str, timeout: int = 10) -> tuple[list[str], str]:
+    """Fetch available model list from the API's /v1/models endpoint.
+    Returns (model_ids, error_msg). model_ids is empty on failure.
+    Strips /chat/completions from api_url to get the base URL."""
+    # Derive base URL by removing /chat/completions suffix
+    parsed = urlparse(api_url)
+    path = parsed.path
+    if path.endswith("/chat/completions"):
+        path = path[:-len("/chat/completions")]
+    models_url = urlunparse((parsed.scheme, parsed.netloc, path + "/models",
+                             parsed.params, parsed.query, parsed.fragment))
+    if DEBUG_MODE:
+        logging.debug("fetch models → %s", models_url)
+    try:
+        req = request.Request(models_url, method="GET")
+        req.add_header("Content-Type", "application/json")
+        if api_key:
+            req.add_header("Authorization", f"Bearer {api_key}")
+        resp = request.urlopen(req, timeout=timeout)
+        data = json.loads(resp.read())
+        models = [m.get("id", "") for m in data.get("data", [])]
+        models = [m for m in models if m]  # filter empty
+        if DEBUG_MODE:
+            logging.info("fetched %d models", len(models))
+        return models, ""
+    except Exception as e:
+        if DEBUG_MODE:
+            logging.warning("fetch models failed: %s", e)
+        return [], str(e)
 def run_benchmark(api_url: str, api_key: str, model: str, messages: list[dict],
                   max_tokens: int, temperature: float,
                   concurrency: int, num_requests: int,
@@ -1103,6 +1132,96 @@ class LLMBenchmarkApp:
                 return summary, advice
         return ("未知错误",
                 f"错误详情: {err_msg[:200]}\n\n请检查 API 地址、Key 和模型名称后重试。")
+    def _show_model_picker(self, models: list[str], current_model: str) -> str | None:
+        """Show a dialog to let user pick a model from the fetched list.
+        Returns the selected model ID, or None if user skips/cancels.
+        Blocks until user makes a choice (modal dialog on main thread)."""
+        result = [None]  # boxed for closure
+        picked = threading.Event()
+
+        def _ok():
+            sel = listbox.curselection()
+            if sel:
+                result[0] = models[sel[0]]
+            picked.set()
+            dlg.destroy()
+
+        def _skip():
+            result[0] = None
+            picked.set()
+            dlg.destroy()
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("选择模型")
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+        dlg.configure(bg=C_STYLE["bg_card"])
+        # Center on parent
+        dlg.update_idletasks()
+        pw = self.root.winfo_width()
+        ph = self.root.winfo_height()
+        px = self.root.winfo_rootx()
+        py = self.root.winfo_rooty()
+        w, h = 460, 360
+        x = px + (pw - w) // 2
+        y = py + (ph - h) // 2
+        dlg.geometry(f"{w}x{h}+{x}+{y}")
+
+        # Header
+        hdr = tk.Frame(dlg, bg=C_STYLE["bg_card"])
+        hdr.pack(fill=tk.X, padx=C_STYLE["pad_lg"], pady=(C_STYLE["pad_lg"], C_STYLE["pad_sm"]))
+        tk.Label(hdr, text="请选择要测试的模型",
+                 font=C_STYLE["font_section"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).pack(anchor="w")
+        tk.Label(hdr, text=f"API 返回了 {len(models)} 个可用模型",
+                 font=C_STYLE["font_small"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_secondary"]).pack(anchor="w", pady=(4, 0))
+
+        # Listbox with scrollbar
+        lf = tk.Frame(dlg, bg=C_STYLE["bg_card"])
+        lf.pack(fill=tk.BOTH, expand=True, padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["pad_sm"]))
+        sb = ttk.Scrollbar(lf, orient=tk.VERTICAL)
+        listbox = tk.Listbox(lf, font=C_STYLE["font_body"],
+                             bg=C_STYLE["bg_input"],
+                             fg=C_STYLE["text_primary"],
+                             selectbackground=C_STYLE["accent"],
+                             selectforeground=C_STYLE["text_inverse"],
+                             yscrollcommand=sb.set,
+                             borderwidth=1, relief="solid",
+                             highlightthickness=0)
+        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        sb.config(command=listbox.yview)
+        for m in models:
+            listbox.insert(tk.END, m)
+        # Pre-select current model if it exists in the list
+        try:
+            idx = models.index(current_model)
+            listbox.selection_set(idx)
+            listbox.activate(idx)
+            listbox.see(idx)
+        except ValueError:
+            pass
+        # Double-click to confirm
+        listbox.bind("<Double-Button-1>", lambda e: _ok())
+
+        # Buttons
+        btnf = tk.Frame(dlg, bg=C_STYLE["bg_card"])
+        btnf.pack(fill=tk.X, padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["pad_lg"]))
+        skip_btn = ttk.Button(btnf, text="跳过  (使用已填写的模型)", command=_skip)
+        skip_btn.pack(side=tk.LEFT)
+        ttk.Button(btnf, text="确认选择", style="Primary.TButton", command=_ok).pack(side=tk.RIGHT)
+
+        # Return key to confirm
+        dlg.bind("<Return>", lambda e: _ok())
+        dlg.bind("<Escape>", lambda e: _skip())
+        dlg.protocol("WM_DELETE_WINDOW", _skip)
+
+        # Wait for user choice
+        dlg.wait_window()
+        picked.wait(timeout=120)
+        return result[0]
     def _on_preflight_fail(self, step: str, payload):
         self._benchmark_running = False
         self.start_btn.config(state=tk.NORMAL, text="开始测试")
@@ -1202,6 +1321,35 @@ class LLMBenchmarkApp:
             self.root.after(0, lambda: self._on_preflight_fail("connectivity", err))
             return
         self.root.after(0, lambda: self._set_indicator("connectivity", "pass", "连接正常"))
+        # ── Step 1.5: fetch model list and let user pick ──
+        if DEBUG_MODE:
+            logging.info("preflight: step 1.5 — fetch model list")
+        self.root.after(0, lambda: self.status_label.config(
+            text="正在获取模型列表...", fg=C_STYLE["accent"]))
+        models, fetch_err = fetch_models(api_url, api_key)
+        if models:
+            model_event = threading.Event()
+            model_result = [None]  # boxed
+            def _pick_model():
+                model_result[0] = self._show_model_picker(models, model)
+                model_event.set()
+            self.root.after(0, _pick_model)
+            self.root.after(0, lambda: self.status_label.config(
+                text="请在弹出的窗口中选择模型", fg=C_STYLE["accent"]))
+            model_event.wait()
+            if model_result[0] is not None:
+                model = model_result[0]
+                # Update the model field in GUI to reflect selection
+                self.root.after(0, lambda: self.model_var.set(model))
+                if DEBUG_MODE:
+                    logging.info("user selected model: %s", model)
+            else:
+                if DEBUG_MODE:
+                    logging.info("user skipped model picker, using: %s", model)
+        elif fetch_err:
+            if DEBUG_MODE:
+                logging.warning("model fetch failed, using manual entry: %s", fetch_err)
+        # ── Step 2: smoke test ──
         if DEBUG_MODE:
             logging.info("preflight: step 2 — smoke test")
         self.root.after(0, lambda: self._set_indicator("smoke", "checking"))
