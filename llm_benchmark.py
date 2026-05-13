@@ -1260,13 +1260,70 @@ class LLMBenchmarkApp:
             self._action_status.config(text="就绪 — 请配置参数后开始测试")
         else:
             self._action_status.config(text="就绪 — 请配置参数后开始测试")
-            if err:
-                detail = err[:200] if len(err) > 200 else err
-            else:
-                detail = "API 未返回任何模型"
-            messagebox.showerror("获取模型失败",
-                f"无法获取模型列表。\n\n{detail}\n\n"
-                "请手动输入模型名称后重试。")
+            title, detail = self._categorize_query_error(err)
+            messagebox.showerror(title, detail)
+    def _categorize_query_error(self, err: str) -> tuple[str, str]:
+        """Categorize model fetch error into friendly title + detail message."""
+        err_lower = err.lower()
+        # Connection-level errors
+        if any(k in err_lower for k in ("connection refused", "no route to host",
+                                          "name or service not known", "getaddrinfo",
+                                          " network ", "unreachable", "econnrefused")):
+            return ("连接失败",
+                "无法连接到 API 服务器。\n\n"
+                "请检查：\n"
+                "• API 地址是否正确（如 http://192.168.1.12:8000/v1）\n"
+                "• 服务端是否在运行、端口是否开放\n"
+                "• 网络 / 防火墙是否正常")
+        # Timeout
+        if "time" in err_lower and "out" in err_lower:
+            return ("连接超时",
+                "连接 API 服务器超时。\n\n"
+                "请检查：\n"
+                "• 网络连接是否正常\n"
+                "• API 地址是否可达\n"
+                "• 稍后重试")
+        # HTTP errors
+        if "http error 401" in err_lower or "unauthorized" in err_lower:
+            return ("认证失败",
+                "API 密钥认证失败（401 未授权）。\n\n"
+                "请检查：\n"
+                "• API 密钥是否正确\n"
+                "• 密钥是否已过期或被禁用")
+        if "http error 403" in err_lower or "forbidden" in err_lower:
+            return ("权限不足",
+                "没有权限访问模型列表（403 禁止访问）。\n\n"
+                "请检查：\n"
+                "• API 密钥是否有该接口的访问权限\n"
+                "• 账户配额是否充足")
+        if "http error 404" in err_lower or "not found" in err_lower:
+            return ("接口不存在",
+                "API 接口不存在（404 未找到）。\n\n"
+                "请检查：\n"
+                "• API 地址路径是否正确\n"
+                "• 该服务是否支持 /v1/models 接口\n"
+                "• 尝试在浏览器中打开该地址")
+        if "http error 429" in err_lower:
+            return ("请求限流",
+                "请求频率超过限额（429 限流）。\n\n"
+                "请稍后重试，通常等待 1 分钟后恢复。")
+        if "http error 5" in err_lower or "server error" in err_lower or \
+           "internal server" in err_lower:
+            return ("服务器错误",
+                "API 服务端出现临时故障。\n\n"
+                "请稍后重试，如持续出现请联系服务提供方。")
+        # JSON / format errors
+        if any(k in err_lower for k in ("json", "expecting value", "decode")):
+            return ("响应格式异常",
+                "API 返回的内容不符合预期格式。\n\n"
+                "请确认该地址是否为 OpenAI 兼容接口。")
+        # Fallback — sanitize the raw error
+        safe_err = err[:200] if len(err) > 200 else err
+        if not safe_err:
+            safe_err = "API 未返回任何模型"
+        return ("获取模型失败",
+            f"无法获取模型列表。\n\n错误：{safe_err}\n\n"
+            "请手动输入模型名称后重试。")
     def _on_preflight_fail(self, step: str, payload):
         self._benchmark_running = False
         self.start_btn.config(state=tk.NORMAL, text="开始测试")
