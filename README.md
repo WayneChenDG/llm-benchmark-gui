@@ -48,6 +48,14 @@ python llm_benchmark.py -debug
 | 基准测试 | 实时显示进度、状态卡片、指标摘要、直方图、详细报告 |
 | 历史记录 | 浏览历次测试数据，双击行查看延时分布直方图 |
 
+**参数设置页面**：
+
+![参数设置](screenshots/param-settings.png)
+
+**基准测试页面**：
+
+![基准测试](screenshots/benchmark.png)
+
 ## 使用流程
 
 1. 在「参数设置」填写 API 地址和密钥
@@ -148,7 +156,10 @@ llm-benchmark/
 ├── llm_benchmark.desktop     # Ubuntu 桌面启动文件
 ├── llm_benchmark.svg         # 应用图标
 ├── llm_benchmark.ini         # 配置文件（自动生成）
-└── llm_benchmark_history.db  # 测试历史（自动生成）
+├── llm_benchmark_history.db  # 测试历史（自动生成）
+└── screenshots/              # 界面截图
+    ├── param-settings.png    # 参数设置页
+    └── benchmark.png         # 基准测试页
 ```
 
 ## 许可证
