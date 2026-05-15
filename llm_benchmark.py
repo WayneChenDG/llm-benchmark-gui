@@ -2,6 +2,11 @@
 """LLM 并发性能测试工具 — GUI 版
 纯标准库实现：tkinter + sqlite3 + urllib + threading，无需额外安装依赖。
 支持 OpenAI 兼容 API（通义千问 / DeepSeek / GLM / GPT 等）。
+
+Metrics aligned with:
+  • vLLM bench serve:  ttft, tpot, itl, e2el
+  • NVIDIA GenAI-Perf: output_token_throughput, request_throughput, ttft, itl
+  • NIM Benchmark:      output_token_throughput, request_throughput
 """
 import json
 import logging
@@ -38,14 +43,14 @@ def setup_logging():
     )
     logging.info("=== LLM Benchmark debug session started ===")
 # ---------- 并发建议 ----------
-CONCURRENCY_PRESETS = {
-    "1   (基线测试 — 测单次延迟)": 1,
-    "4   (轻度 — 适合个人开发者 API)": 4,
-    "8   (中度 — 推荐，接近大多数 API 限额)": 8,
-    "16  (重度 — 团队级 API Key)": 16,
-    "32  (压力 — 企业级 Key)": 32,
-    "64  (极限 — 需确认服务端 QPS 上限)": 64,
+# ---------- 并发建议 ----------
+BENCHMARK_PRESETS = {
+    "快速校准 — C1/N5":        {"concurrency": 1,  "total": 5,   "desc": "快速校准，验证连接与延迟基线"},
+    "标准基线 — C8/N80（默认）": {"concurrency": 8,  "total": 80,  "desc": "标准并发基线测试，默认推荐"},
+    "中高并发 — C16/N160":      {"concurrency": 16, "total": 160, "desc": "中高并发，验证服务端排队行为"},
+    "压力测试 — C32/N320":      {"concurrency": 32, "total": 320, "desc": "压力测试，接近服务端上限（需确认）"},
 }
+DEFAULT_PRESET_KEY = "标准基线 — C8/N80（默认）"
 # ---------- 字体自动检测 ----------
 def _detect_font_family() -> str:
     """Detect the best available font for CJK + Latin rendering.
@@ -182,6 +187,10 @@ class MetricItem(tk.Frame):
     COLORS = {
         "ttft": C_STYLE["info"], "tps": C_STYLE["accent"],
         "total_tokens": C_STYLE["warning"], "agg_tps": C_STYLE["success"],
+        "e2e_p95": C_STYLE["error"], "rps": C_STYLE["info"],
+        "system_output_tps": C_STYLE["success"], "output_tokens": C_STYLE["warning"],
+        "tpot": C_STYLE["accent"], "itl": C_STYLE["accent"],
+        "success_rate": C_STYLE["success"],
     }
     def __init__(self, parent, label: str, value: str = "—", metric_key: str = "", **kw):
         super().__init__(parent, bg=C_STYLE["bg_card"],
@@ -280,64 +289,193 @@ class NoticeBanner(tk.Frame):
         else:
             self.grid_remove()
 # ============================================================
-# Database
+# Database — JISUMAN LLM Benchmark Standard v1 schema
 # ============================================================
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
+def _create_latest_schema(conn):
+    """Create the latest benchmarks + benchmark_meta tables."""
+    conn.execute("""CREATE TABLE benchmarks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT NOT NULL,
+
+        api_url TEXT NOT NULL,
+        model TEXT NOT NULL,
+        prompt TEXT,
+        max_tokens INTEGER,
+        temperature REAL,
+        concurrency INTEGER NOT NULL,
+        total INTEGER NOT NULL,
+        stream_mode INTEGER NOT NULL,
+
+        metric_standard TEXT NOT NULL,
+        metric_references_json TEXT,
+        metric_warnings_json TEXT,
+
+        success INTEGER NOT NULL,
+        fail INTEGER NOT NULL,
+        success_rate REAL,
+
+        duration_sec REAL,
+        request_throughput_rps REAL,
+        request_throughput REAL,
+
+        total_input_tokens INTEGER,
+        total_output_tokens INTEGER,
+        total_tokens INTEGER,
+
+        system_output_tps REAL,
+        system_total_tps REAL,
+        output_token_throughput REAL,
+
+        e2e_latency_min REAL,
+        e2e_latency_avg REAL,
+        e2e_latency_max REAL,
+        e2e_latency_p50 REAL,
+        e2e_latency_p95 REAL,
+        e2e_latency_p99 REAL,
+
+        e2el_avg REAL,
+        e2el_p50 REAL,
+        e2el_p95 REAL,
+        e2el_p99 REAL,
+
+        ttft_avg REAL,
+        ttft_p50 REAL,
+        ttft_p95 REAL,
+        ttft_p99 REAL,
+
+        tpot_avg REAL,
+        tpot_p50 REAL,
+        tpot_p95 REAL,
+        tpot_p99 REAL,
+
+        itl_avg REAL,
+        itl_p50 REAL,
+        itl_p95 REAL,
+        itl_p99 REAL,
+
+        per_request_output_tps_avg REAL,
+        per_request_output_tps_p50 REAL,
+        per_request_output_tps_p95 REAL,
+
+        detail_json TEXT,
+        fail_detail_json TEXT,
+        summary_json TEXT
+    )""")
+    conn.execute("""CREATE TABLE benchmark_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    )""")
     conn.execute(
-        """CREATE TABLE IF NOT EXISTS benchmarks (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at  TEXT NOT NULL,
-            api_url     TEXT NOT NULL,
-            model       TEXT NOT NULL,
-            prompt      TEXT NOT NULL,
-            max_tokens  INTEGER,
-            temperature REAL,
-            concurrency INTEGER NOT NULL,
-            total       INTEGER NOT NULL,
-            success     INTEGER NOT NULL,
-            fail        INTEGER NOT NULL,
-            latency_min REAL,
-            latency_avg REAL,
-            latency_max REAL,
-            latency_p50 REAL,
-            latency_p95 REAL,
-            latency_p99 REAL,
-            ttft_avg    REAL,
-            tokens_per_sec REAL,
-            total_tokens   INTEGER,
-            duration_sec   REAL,
-            detail_json    TEXT
-        )"""
+        "INSERT OR REPLACE INTO benchmark_meta(key, value) VALUES ('schema_version', ?)",
+        (str(DB_SCHEMA_VERSION),),
     )
+    conn.execute(
+        "INSERT OR REPLACE INTO benchmark_meta(key, value) VALUES ('metric_standard', ?)",
+        ("JISUMAN LLM Benchmark Standard v1",),
+    )
+
+def init_db():
+    """Initialize or upgrade the database to the latest standard schema.
+
+    If the DB file exists but its schema_version != DB_SCHEMA_VERSION, the old
+    file is backed up to *.bak.YYYYmmdd_HHMMSS and a fresh schema is created.
+    """
+    import shutil
+
+    if not os.path.exists(DB_PATH):
+        conn = sqlite3.connect(DB_PATH)
+        _create_latest_schema(conn)
+        conn.commit()
+        conn.close()
+        return
+
+    # DB exists — check version
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        meta = dict(conn.execute("SELECT key, value FROM benchmark_meta").fetchall())
+        version = int(meta.get("schema_version", 0))
+        conn.close()
+        if version == DB_SCHEMA_VERSION:
+            return  # already latest
+    except Exception:
+        pass  # no meta table or unreadable — needs rebuild
+
+    # Backup old DB then rebuild
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = f"{DB_PATH}.bak.{ts}"
+    try:
+        shutil.copy2(DB_PATH, backup_path)
+        if DEBUG_MODE:
+            logging.info("DB backed up to %s", backup_path)
+    except Exception as e:
+        if DEBUG_MODE:
+            logging.warning("DB backup failed: %s", e)
+
+    os.remove(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    _create_latest_schema(conn)
     conn.commit()
     conn.close()
+
 def save_result(d: dict):
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         """INSERT INTO benchmarks
            (created_at, api_url, model, prompt, max_tokens, temperature,
-            concurrency, total, success, fail,
-            latency_min, latency_avg, latency_max, latency_p50, latency_p95, latency_p99,
-            ttft_avg, tokens_per_sec, total_tokens, duration_sec, detail_json)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            concurrency, total, stream_mode,
+            metric_standard, metric_references_json, metric_warnings_json,
+            success, fail, success_rate,
+            duration_sec, request_throughput_rps, request_throughput,
+            total_input_tokens, total_output_tokens, total_tokens,
+            system_output_tps, system_total_tps, output_token_throughput,
+            e2e_latency_min, e2e_latency_avg, e2e_latency_max,
+            e2e_latency_p50, e2e_latency_p95, e2e_latency_p99,
+            e2el_avg, e2el_p50, e2el_p95, e2el_p99,
+            ttft_avg, ttft_p50, ttft_p95, ttft_p99,
+            tpot_avg, tpot_p50, tpot_p95, tpot_p99,
+            itl_avg, itl_p50, itl_p95, itl_p99,
+            per_request_output_tps_avg, per_request_output_tps_p50, per_request_output_tps_p95,
+            detail_json, fail_detail_json, summary_json)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            d["api_url"], d["model"], d["prompt"], d["max_tokens"], d["temperature"],
-            d["concurrency"], d["total"], d["success"], d["fail"],
-            d.get("latency_min"), d.get("latency_avg"), d.get("latency_max"),
-            d.get("latency_p50"), d.get("latency_p95"), d.get("latency_p99"),
-            d.get("ttft_avg"), d.get("tokens_per_sec"), d.get("total_tokens"),
-            d.get("duration_sec"), json.dumps(d.get("detail", []), ensure_ascii=False),
+            d["api_url"], d["model"], d.get("prompt", ""), d["max_tokens"], d["temperature"],
+            d["concurrency"], d["total"], int(d.get("stream_mode", False)),
+            d.get("metric_standard", "JISUMAN LLM Benchmark Standard v1"),
+            json.dumps(d.get("metric_references", []), ensure_ascii=False),
+            json.dumps(d.get("metric_warnings", []), ensure_ascii=False),
+            d["success"], d["fail"], d.get("success_rate"),
+            d.get("duration_sec"), d.get("request_throughput_rps"), d.get("request_throughput"),
+            d.get("total_input_tokens"), d.get("total_output_tokens"), d.get("total_tokens"),
+            d.get("system_output_tps"), d.get("system_total_tps"), d.get("output_token_throughput"),
+            d.get("e2e_latency_min"), d.get("e2e_latency_avg"), d.get("e2e_latency_max"),
+            d.get("e2e_latency_p50"), d.get("e2e_latency_p95"), d.get("e2e_latency_p99"),
+            d.get("e2el_avg"), d.get("e2el_p50"), d.get("e2el_p95"), d.get("e2el_p99"),
+            d.get("ttft_avg"), d.get("ttft_p50"), d.get("ttft_p95"), d.get("ttft_p99"),
+            d.get("tpot_avg"), d.get("tpot_p50"), d.get("tpot_p95"), d.get("tpot_p99"),
+            d.get("itl_avg"), d.get("itl_p50"), d.get("itl_p95"), d.get("itl_p99"),
+            d.get("per_request_output_tps_avg"), d.get("per_request_output_tps_p50"), d.get("per_request_output_tps_p95"),
+            json.dumps(d.get("detail", []), ensure_ascii=False),
+            json.dumps(d.get("fail_detail", []), ensure_ascii=False),
+            json.dumps(d, ensure_ascii=False),  # full summary as JSON
         ),
     )
     conn.commit()
     conn.close()
+
 def load_history(limit=50):
     conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT id, created_at, model, concurrency, total, success, fail, "
-        "latency_avg, latency_p95, tokens_per_sec, duration_sec "
+        "SELECT id, created_at, model, concurrency, total, "
+        "success, fail, success_rate, "
+        "e2e_latency_avg, e2e_latency_p95, e2el_avg, e2el_p95, "
+        "ttft_avg, "
+        "system_output_tps, output_token_throughput, "
+        "request_throughput_rps, request_throughput, "
+        "total_output_tokens, total_tokens, "
+        "itl_avg, stream_mode, duration_sec, "
+        "metric_standard, metric_warnings_json "
         "FROM benchmarks ORDER BY id DESC LIMIT ?",
         (limit,),
     ).fetchall()
@@ -346,53 +484,425 @@ def load_history(limit=50):
 # ============================================================
 # API caller
 # ============================================================
+# ---------- utility: percentile & filter ----------
+def clean_numbers(values):
+    """Return a list with only non-None numeric values."""
+    return [v for v in values if isinstance(v, (int, float)) and v is not None]
+
+def percentile(data, p):
+    """Compute the p-th percentile (0-100) of a list of numbers.
+    Uses linear interpolation. Returns 0 for empty data."""
+    data = sorted(clean_numbers(data))
+    if not data:
+        return 0
+    k = (len(data) - 1) * p / 100
+    f = int(k)
+    c = min(f + 1, len(data) - 1)
+    return data[f] + (k - f) * (data[c] - data[f]) if c > f else data[f]
+
+# ============================================================
+# JISUMAN LLM Benchmark Standard v1 — metric definitions & aliases
+# ============================================================
+DB_SCHEMA_VERSION = 2
+
+STANDARD_METRIC_ALIASES = {
+    "ttft": "ttft",
+    "tpot": "tpot",
+    "itl": "itl_avg",
+    "e2el": "e2e_latency",
+    "output_token_throughput": "system_output_tps",
+    "request_throughput": "request_throughput_rps",
+}
+
+def get_metric_standard_definitions() -> dict:
+    """Return JISUMAN LLM Benchmark Standard v1 metric definitions.
+
+    The metric set aligns with common LLM serving benchmark terminology:
+    - vLLM bench serve: ttft, tpot, itl, e2el
+    - NVIDIA GenAI-Perf / NIM Benchmark style: output token throughput,
+      request throughput, time to first token, inter token latency
+    """
+    return {
+        "standard_name": "JISUMAN LLM Benchmark Standard v1",
+        "references": [
+            "vLLM bench serve: ttft / tpot / itl / e2el",
+            "NVIDIA GenAI-Perf / NIM-style metrics: output token throughput / request throughput / time to first token / inter token latency",
+        ],
+        "metrics": {
+            "ttft": {
+                "display_name": "TTFT",
+                "full_name": "Time To First Token",
+                "definition": "request_start 到首个非空输出 chunk/token 的时间",
+                "formula": "first_output_time - request_start",
+                "unit": "seconds",
+                "source": "streaming response timestamps",
+                "note": "当前工具无 tokenizer，按首个非空流式 chunk 估算 first token",
+            },
+            "e2el": {
+                "display_name": "E2E Latency",
+                "full_name": "End-to-End Latency",
+                "definition": "request_start 到完整响应结束的时间",
+                "formula": "response_end - request_start",
+                "unit": "seconds",
+                "source": "client-side timer",
+            },
+            "tpot": {
+                "display_name": "TPOT",
+                "full_name": "Time Per Output Token",
+                "definition": "首 token 之后每个输出 token 的平均耗时",
+                "formula": "(e2e_latency - ttft) / max(output_tokens - 1, 1)",
+                "unit": "seconds/token",
+                "source": "usage.completion_tokens + streaming timestamps",
+            },
+            "itl": {
+                "display_name": "ITL",
+                "full_name": "Inter Token Latency",
+                "definition": "相邻流式输出 chunk/token 的时间间隔",
+                "formula": "timestamp[i] - timestamp[i-1]",
+                "unit": "seconds",
+                "source": "streaming chunk timestamps",
+                "note": "当前工具无 tokenizer，ITL 为 chunk-level approximation，不得声称严格 token-level",
+            },
+            "system_output_tps": {
+                "display_name": "System Output TPS",
+                "full_name": "System Output Token Throughput",
+                "definition": "整轮 benchmark 的输出 token 吞吐",
+                "formula": "sum(completion_tokens) / benchmark_duration",
+                "unit": "tokens/s",
+                "source": "usage.completion_tokens",
+            },
+            "system_total_tps": {
+                "display_name": "System Total TPS",
+                "full_name": "System Total Token Throughput",
+                "definition": "整轮 benchmark 的输入+输出 token 总吞吐",
+                "formula": "sum(prompt_tokens + completion_tokens) / benchmark_duration",
+                "unit": "tokens/s",
+                "source": "usage.total_tokens or prompt_tokens + completion_tokens",
+            },
+            "request_throughput_rps": {
+                "display_name": "Request Throughput",
+                "full_name": "Requests Per Second",
+                "definition": "成功请求数除以整轮 benchmark 持续时间",
+                "formula": "successful_requests / benchmark_duration",
+                "unit": "req/s",
+                "source": "benchmark summary",
+            },
+            "per_request_output_tps": {
+                "display_name": "Per-request Output TPS",
+                "full_name": "Per-request Output Token Speed",
+                "definition": "单请求维度的输出速度",
+                "formula": "completion_tokens / e2e_latency",
+                "unit": "tokens/s",
+                "source": "per-request usage + e2e latency",
+                "note": "这是用户侧单请求体验速度，不等于系统总吞吐",
+            },
+        },
+    }
+
+def validate_metric_consistency(summary: dict) -> list[str]:
+    """Return warnings when benchmark metrics violate expected relationships.
+
+    Tolerance: relative 3%, absolute 0.05
+    """
+    warnings = []
+    eps_rel = 0.03
+    eps_abs = 0.05
+
+    def _close(a, b):
+        if a == 0 and b == 0:
+            return True
+        return abs(a - b) <= max(abs(a), abs(b)) * eps_rel + eps_abs
+
+    dur = max(summary.get("duration_sec", 0.001), 0.001)
+    ok_count = summary.get("success", 0)
+    out_tok = summary.get("total_output_tokens", 0)
+    in_tok = summary.get("total_input_tokens", 0)
+    tot_tok = summary.get("total_tokens", 0)
+
+    # 1-3: token sums consistency
+    if not _close(tot_tok, in_tok + out_tok):
+        warnings.append(f"total_tokens ({tot_tok}) != input ({in_tok}) + output ({out_tok})")
+
+    # 4-6: throughput consistency
+    if not _close(summary.get("system_output_tps", 0), out_tok / dur):
+        warnings.append("system_output_tps != total_output_tokens / duration_sec")
+    if not _close(summary.get("system_total_tps", 0), tot_tok / dur):
+        warnings.append("system_total_tps != total_tokens / duration_sec")
+    if not _close(summary.get("request_throughput_rps", 0), ok_count / dur):
+        warnings.append("request_throughput_rps != success / duration_sec")
+
+    # 7-8: standard aliases consistency
+    if not _close(summary.get("output_token_throughput", 0), summary.get("system_output_tps", 0)):
+        warnings.append("output_token_throughput != system_output_tps")
+    if not _close(summary.get("request_throughput", 0), summary.get("request_throughput_rps", 0)):
+        warnings.append("request_throughput != request_throughput_rps")
+
+    # 9: e2el alias consistency
+    for p in ["avg", "p50", "p95", "p99"]:
+        e2e_key = f"e2e_latency_{p}"
+        e2el_key = f"e2el_{p}"
+        if e2el_key in summary:
+            if not _close(summary.get(e2el_key, 0), summary.get(e2e_key, 0)):
+                warnings.append(f"{e2el_key} != {e2e_key}")
+
+    # 10: TTFT should not all equal E2E latency when streaming with success
+    if summary.get("stream_mode") and ok_count > 0:
+        ttft_vals_ok = [r.get("ttft") for r in summary.get("detail", []) if r.get("ok") and r.get("ttft") is not None]
+        e2e_vals_ok = [r.get("e2e_latency") for r in summary.get("detail", []) if r.get("ok")]
+        if ttft_vals_ok and e2e_vals_ok and len(ttft_vals_ok) == len(e2e_vals_ok):
+            all_equal = all(abs(t - e) < 0.001 for t, e in zip(ttft_vals_ok, e2e_vals_ok))
+            if all_equal:
+                warnings.append("流式模式下所有 TTFT ≈ E2E Latency — 疑似未正确采集 first token 时间")
+
+    # 11: non-streaming must not fake TTFT/TPOT/ITL
+    if not summary.get("stream_mode"):
+        if summary.get("ttft_avg", 0) > 0 and summary.get("ttft_avg") != 0:
+            warnings.append("非流式模式不应有非零 TTFT 值")
+
+    # 12: per_request_output_tps_avg is per-request, must not equal system throughput
+    #     Only warn when concurrency > 1 — at concurrency=1 they are expected to be close.
+    pr_tps = summary.get("per_request_output_tps_avg", 0)
+    sys_tps = summary.get("system_output_tps", 0)
+    concurrency = summary.get("concurrency", 1)
+    if concurrency > 1 and ok_count > 1 and pr_tps > 0 and sys_tps > 0:
+        if _close(pr_tps, sys_tps):
+            warnings.append(f"per_request_output_tps_avg ({pr_tps:.2f}) ≈ system_output_tps ({sys_tps:.2f}) — 单请求均速不应等于系统吞吐（除非并发=1）")
+
+    return warnings
+
+
 def call_llm(api_url: str, api_key: str, model: str, messages: list[dict],
-             max_tokens: int, temperature: float, timeout: int = 60) -> dict:
-    """Send one chat-completion request. Returns {ok, latency, ttft, tokens, ...}."""
-    body = json.dumps({
+             max_tokens: int, temperature: float, timeout: int = 120,
+             stream: bool = True) -> dict:
+    """Send one chat-completion request.
+
+    When stream=True: reads SSE chunks, records first-token time,
+    inter-chunk timestamps, and computes TTFT / TPOT / ITL accurately.
+
+    When stream=False: returns e2e_latency only; TTFT/TPOT/ITL are None.
+    The caller/UI MUST indicate that non-streaming cannot measure true TTFT.
+
+    Returns a dict with keys:
+      ok, e2e_latency, latency, ttft, tpot, itl_avg, itl_values,
+      prompt_tokens, completion_tokens, total_tokens,
+      per_request_output_tps_e2e, per_request_decode_tps,
+      finish_reason, stream, [error, error_type on failure]
+    """
+    body_dict = {
         "model": model,
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
-        "stream": False,
-    }).encode("utf-8")
+        "stream": stream,
+    }
+    if stream:
+        # Some OpenAI-compatible servers require stream_options to get usage
+        body_dict["stream_options"] = {"include_usage": True}
+
+    body = json.dumps(body_dict).encode("utf-8")
     req = request.Request(api_url, data=body, method="POST")
     req.add_header("Content-Type", "application/json")
     if api_key:
         req.add_header("Authorization", f"Bearer {api_key}")
+
     if DEBUG_MODE:
-        logging.debug("POST %s | model=%s max_tokens=%d temp=%.2f msg_len=%d",
-                       api_url, model, max_tokens, temperature, len(body))
-    t0 = time.perf_counter()
-    try:
-        resp = request.urlopen(req, timeout=timeout)
-        raw = resp.read()
-        latency = time.perf_counter() - t0
-        data = json.loads(raw)
-        choice = data.get("choices", [{}])[0]
-        usage = data.get("usage", {})
-        completion_tokens = usage.get("completion_tokens", 0)
-        prompt_tokens = usage.get("prompt_tokens", 0)
-        total_tokens = usage.get("total_tokens", 0)
-        finish = choice.get("finish_reason", "unknown")
-        ttft = latency  # non-streaming: TTFT ≈ total latency
-        tps = completion_tokens / latency if latency > 0 and completion_tokens > 0 else 0
-        if DEBUG_MODE:
-            logging.debug("OK latency=%.3fs tokens=%d finish=%s", latency, total_tokens, finish)
-        return {
+        logging.debug("POST %s | model=%s max_tokens=%d temp=%.2f stream=%s msg_len=%d",
+                       api_url, model, max_tokens, temperature, stream, len(body))
+
+    request_start = time.perf_counter()
+
+    # ── helper: build success result ──
+    def _success_result(e2e_latency, ttft, tpot, itl_avg, itl_values,
+                        prompt_tokens, completion_tokens, total_tokens,
+                        finish_reason, used_stream,
+                        debug_fields=None):
+        latency = e2e_latency
+        per_req_out_tps = completion_tokens / e2e_latency if e2e_latency > 0 and completion_tokens > 0 else 0.0
+        per_req_decode_tps = None
+        if ttft is not None and completion_tokens >= 2 and (e2e_latency - ttft) > 0:
+            per_req_decode_tps = (completion_tokens - 1) / (e2e_latency - ttft)
+        result = {
             "ok": True,
-            "latency": latency,
-            "ttft": ttft,
-            "completion_tokens": completion_tokens,
+            "e2e_latency": round(e2e_latency, 6),
+            "latency": round(latency, 6),
+            "ttft": round(ttft, 6) if ttft is not None else None,
+            "tpot": round(tpot, 6) if tpot is not None else None,
+            "itl_avg": round(itl_avg, 6) if itl_avg is not None else None,
+            "itl_values": [round(v, 6) for v in itl_values],
             "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
-            "finish_reason": finish,
-            "tokens_per_sec": tps,
+            "per_request_output_tps_e2e": round(per_req_out_tps, 2),
+            "per_request_decode_tps": round(per_req_decode_tps, 2) if per_req_decode_tps is not None else None,
+            "finish_reason": finish_reason,
+            "stream": used_stream,
         }
+        if debug_fields:
+            result.update(debug_fields)
+        return result
+
+    # ── helper: build failure result ──
+    def _fail_result(e2e_latency, err_msg, err_type, used_stream):
+        return {
+            "ok": False,
+            "e2e_latency": round(e2e_latency, 6),
+            "latency": round(e2e_latency, 6),
+            "ttft": None, "tpot": None, "itl_avg": None, "itl_values": [],
+            "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+            "per_request_output_tps_e2e": 0.0, "per_request_decode_tps": None,
+            "finish_reason": "",
+            "stream": used_stream,
+            "error": err_msg,
+            "error_type": err_type,
+        }
+
+    try:
+        if not stream:
+            # ── non-streaming path ──
+            resp = request.urlopen(req, timeout=timeout)
+            raw = resp.read()
+            e2e_latency = time.perf_counter() - request_start
+            data = json.loads(raw)
+            choice = data.get("choices", [{}])[0]
+            usage = data.get("usage", {})
+            prompt_tokens = usage.get("prompt_tokens", 0)
+            completion_tokens = usage.get("completion_tokens", 0)
+            total_tokens = usage.get("total_tokens", prompt_tokens + completion_tokens)
+            finish = choice.get("finish_reason", "unknown")
+            if DEBUG_MODE:
+                logging.debug("OK (non-stream) e2e=%.3fs tokens=%d finish=%s",
+                              e2e_latency, total_tokens, finish)
+            return _success_result(e2e_latency, None, None, None, [],
+                                   prompt_tokens, completion_tokens, total_tokens,
+                                   finish, False)
+
+        # ── streaming path ──
+        try:
+            resp = request.urlopen(req, timeout=timeout)
+        except error.HTTPError as e:
+            # Try fallback: remove stream_options and retry
+            if "stream_options" in body_dict:
+                if DEBUG_MODE:
+                    logging.debug("stream_options rejected (%s), retrying without", e)
+                body_dict.pop("stream_options", None)
+                body2 = json.dumps(body_dict).encode("utf-8")
+                req2 = request.Request(api_url, data=body2, method="POST")
+                req2.add_header("Content-Type", "application/json")
+                if api_key:
+                    req2.add_header("Authorization", f"Bearer {api_key}")
+                request_start = time.perf_counter()  # RESET timer after fallback
+                resp = request.urlopen(req2, timeout=timeout)
+            else:
+                raise
+
+        first_data_line_time = None
+        first_json_chunk_time = None
+        first_token_time = None
+        token_timestamps = []
+        completion_tokens = 0
+        prompt_tokens = 0
+        total_tokens = 0
+        finish_reason = "unknown"
+        content_pieces = 0
+        raw_data_lines = 0
+
+        # Read SSE line by line for accurate per-event timing
+        with resp:
+            while True:
+                line_bytes = resp.readline()
+                if not line_bytes:
+                    break
+                now = time.perf_counter()
+                raw_data_lines += 1
+                line = line_bytes.decode("utf-8", errors="replace").strip()
+
+                if not line:
+                    continue
+                if not line.startswith("data:"):
+                    continue
+
+                if first_data_line_time is None:
+                    first_data_line_time = now
+
+                data_str = line[5:].strip()
+                if data_str == "[DONE]":
+                    break
+
+                try:
+                    obj = json.loads(data_str)
+                except json.JSONDecodeError:
+                    if DEBUG_MODE:
+                        logging.warning("SSE JSON decode error: %s", data_str[:100])
+                    continue
+
+                if first_json_chunk_time is None:
+                    first_json_chunk_time = now
+
+                choices = obj.get("choices") or []
+                if choices:
+                    delta = choices[0].get("delta") or {}
+                    text_piece = delta.get("content") or delta.get("reasoning_content") or ""
+                    if text_piece:
+                        content_pieces += 1
+                        token_timestamps.append(now)
+                        if first_token_time is None:
+                            first_token_time = now
+                    fr = choices[0].get("finish_reason") or ""
+                    if fr:
+                        finish_reason = fr
+
+                usage_chunk = obj.get("usage") or {}
+                if usage_chunk:
+                    prompt_tokens = usage_chunk.get("prompt_tokens", prompt_tokens)
+                    completion_tokens = usage_chunk.get("completion_tokens", completion_tokens)
+                    total_tokens = usage_chunk.get("total_tokens", prompt_tokens + completion_tokens)
+
+        request_end = time.perf_counter()
+        e2e_latency = request_end - request_start
+
+        # If server didn't return usage, we don't have real token counts
+        token_source = "usage" if completion_tokens > 0 else "missing_usage"
+        if completion_tokens == 0 and DEBUG_MODE:
+            logging.debug("stream: no usage in response, token_source=%s content_pieces=%d",
+                          token_source, content_pieces)
+
+        # Compute TTFT
+        ttft = (first_token_time - request_start) if first_token_time is not None else None
+
+        # Compute TPOT
+        tpot = None
+        if ttft is not None and completion_tokens >= 2 and (e2e_latency - ttft) > 0:
+            tpot = (e2e_latency - ttft) / (completion_tokens - 1)
+
+        # Compute ITL
+        itl_values = []
+        itl_avg = None
+        if len(token_timestamps) >= 2:
+            itl_values = [
+                token_timestamps[i] - token_timestamps[i - 1]
+                for i in range(1, len(token_timestamps))
+            ]
+            itl_avg = statistics.mean(itl_values)
+
+        if DEBUG_MODE:
+            logging.debug("OK (stream) e2e=%.3fs ttft=%.3fs tpot=%.3fs tokens=%d content_pieces=%d finish=%s",
+                          e2e_latency, ttft or -1, tpot or -1, total_tokens, content_pieces, finish_reason)
+
+        debug_fields = {
+            "first_data_line_s": round(first_data_line_time - request_start, 6) if first_data_line_time else None,
+            "first_json_chunk_s": round(first_json_chunk_time - request_start, 6) if first_json_chunk_time else None,
+            "first_non_empty_s": round(first_token_time - request_start, 6) if first_token_time else None,
+            "content_pieces": content_pieces,
+            "raw_data_lines": raw_data_lines,
+        }
+        return _success_result(e2e_latency, ttft, tpot, itl_avg, itl_values,
+                               prompt_tokens, completion_tokens, total_tokens,
+                               finish_reason, True, debug_fields=debug_fields)
+
     except Exception as e:
-        latency = time.perf_counter() - t0
+        e2e_latency = time.perf_counter() - request_start
         err_msg = str(e)
-        # categorize error for GUI troubleshooting advice
+        used_stream = stream
         if isinstance(e, error.HTTPError):
             err_type = f"HTTP {e.code}"
         elif isinstance(e, error.URLError):
@@ -402,8 +912,8 @@ def call_llm(api_url: str, api_key: str, model: str, messages: list[dict],
         else:
             err_type = type(e).__name__
         if DEBUG_MODE:
-            logging.warning("FAIL latency=%.3fs type=%s error=%s", latency, err_type, err_msg)
-        return {"ok": False, "latency": latency, "error": err_msg, "error_type": err_type}
+            logging.warning("FAIL e2e=%.3fs type=%s error=%s", e2e_latency, err_type, err_msg)
+        return _fail_result(e2e_latency, err_msg, err_type, used_stream)
 def normalize_api_url(url: str) -> str:
     """Ensure the URL points to a /chat/completions endpoint.
     Uses urlparse to correctly handle any host:port combination.
@@ -469,49 +979,191 @@ def fetch_models(api_url: str, api_key: str, timeout: int = 10) -> tuple[list[st
         if DEBUG_MODE:
             logging.warning("fetch models failed: %s", e)
         return [], str(e)
+def aggregate_results(results: list[dict], duration: float, config: dict) -> dict:
+    """Aggregate benchmark results into a summary dict.
+
+    Args:
+        results: list of per-request result dicts from call_llm()
+        duration: wall-clock time from first request start to last response end
+        config: dict with keys api_url, model, prompt, max_tokens, temperature,
+                concurrency, total, stream_mode
+
+    Returns:
+        Summary dict with all required metrics (TTFT, TPOT, ITL, E2E, throughput, etc.)
+    """
+    ok_results = [r for r in results if r["ok"]]
+    fail_results = [r for r in results if not r["ok"]]
+    num_total = len(results)
+    num_ok = len(ok_results)
+    num_fail = len(fail_results)
+
+    # ── latencies ──
+    e2e_latencies = [r["e2e_latency"] for r in ok_results]
+    ttfts = [
+        r.get("ttft")
+        for r in ok_results
+        if isinstance(r.get("ttft"), (int, float)) and r.get("ttft") is not None
+    ]
+    tpots = [r["tpot"] for r in ok_results if r.get("tpot") is not None]
+    itl_values_all = []
+    for r in ok_results:
+        itl_values_all.extend(r.get("itl_values", []))
+
+    # ── tokens ──
+    total_input_tokens = sum(r.get("prompt_tokens", 0) for r in ok_results)
+    total_output_tokens = sum(r.get("completion_tokens", 0) for r in ok_results)
+    total_tokens = total_input_tokens + total_output_tokens
+
+    # ── throughput ──
+    dur = max(duration, 0.001)
+    request_throughput_rps = num_ok / dur
+    system_output_tps = total_output_tokens / dur
+    system_total_tps = total_tokens / dur
+
+    # ── per-request output TPS ──
+    per_req_tps = [r.get("per_request_output_tps_e2e", 0) for r in ok_results]
+
+    # ── success rate ──
+    success_rate = (num_ok / num_total * 100) if num_total > 0 else 0.0
+
+    # ── stream mode flag ──
+    stream_mode = any(r.get("stream") for r in ok_results)
+
+    def _p(data, p):
+        return round(percentile(data, p), 3)
+
+    summary = {
+        "api_url": config["api_url"],
+        "model": config["model"],
+        "prompt": config["prompt"],
+        "max_tokens": config["max_tokens"],
+        "temperature": config["temperature"],
+        "concurrency": config["concurrency"],
+        "total": num_total,
+        "success": num_ok,
+        "fail": num_fail,
+        "success_rate": round(success_rate, 1),
+        "duration_sec": round(duration, 2),
+        "stream_mode": stream_mode,
+
+        # ── standard metadata ──
+        "metric_standard": "JISUMAN LLM Benchmark Standard v1",
+        "metric_references": [
+            "vLLM bench serve compatible terminology: ttft/tpot/itl/e2el",
+            "NVIDIA GenAI-Perf/NIM-style terminology: output token throughput/request throughput/TTFT/ITL",
+        ],
+
+        # E2E latency
+        "e2e_latency_min": round(min(e2e_latencies), 3) if e2e_latencies else 0,
+        "e2e_latency_avg": round(statistics.mean(e2e_latencies), 3) if e2e_latencies else 0,
+        "e2e_latency_max": round(max(e2e_latencies), 3) if e2e_latencies else 0,
+        "e2e_latency_p50": _p(e2e_latencies, 50),
+        "e2e_latency_p95": _p(e2e_latencies, 95),
+        "e2e_latency_p99": _p(e2e_latencies, 99),
+
+        # ── standard e2el aliases (vLLM: e2el) ──
+        "e2el_min": round(min(e2e_latencies), 3) if e2e_latencies else 0,
+        "e2el_avg": round(statistics.mean(e2e_latencies), 3) if e2e_latencies else 0,
+        "e2el_max": round(max(e2e_latencies), 3) if e2e_latencies else 0,
+        "e2el_p50": _p(e2e_latencies, 50),
+        "e2el_p95": _p(e2e_latencies, 95),
+        "e2el_p99": _p(e2e_latencies, 99),
+
+        # backward compat: latency_* = e2e_latency_*
+        "latency_min": round(min(e2e_latencies), 3) if e2e_latencies else 0,
+        "latency_avg": round(statistics.mean(e2e_latencies), 3) if e2e_latencies else 0,
+        "latency_max": round(max(e2e_latencies), 3) if e2e_latencies else 0,
+        "latency_p50": _p(e2e_latencies, 50),
+        "latency_p95": _p(e2e_latencies, 95),
+        "latency_p99": _p(e2e_latencies, 99),
+
+        # TTFT
+        "ttft_avg": round(statistics.mean(ttfts), 3) if ttfts else 0,
+        "ttft_p50": _p(ttfts, 50),
+        "ttft_p95": _p(ttfts, 95),
+        "ttft_p99": _p(ttfts, 99),
+
+        # TPOT
+        "tpot_avg": round(statistics.mean(tpots), 3) if tpots else 0,
+        "tpot_p50": _p(tpots, 50),
+        "tpot_p95": _p(tpots, 95),
+        "tpot_p99": _p(tpots, 99),
+
+        # ITL
+        "itl_avg": round(statistics.mean(itl_values_all), 3) if itl_values_all else 0,
+        "itl_p50": _p(itl_values_all, 50),
+        "itl_p95": _p(itl_values_all, 95),
+        "itl_p99": _p(itl_values_all, 99),
+
+        # tokens
+        "total_input_tokens": total_input_tokens,
+        "total_output_tokens": total_output_tokens,
+        "total_tokens": total_tokens,
+
+        # throughput
+        "request_throughput_rps": round(request_throughput_rps, 2),
+        "system_output_tps": round(system_output_tps, 1),
+        "system_total_tps": round(system_total_tps, 1),
+
+        # ── standard throughput aliases (NVIDIA: output_token_throughput / request_throughput) ──
+        "output_token_throughput": round(system_output_tps, 1),
+        "request_throughput": round(request_throughput_rps, 2),
+
+        # per-request TPS (backward compat: tokens_per_sec)
+        "per_request_output_tps_avg": round(statistics.mean(per_req_tps), 2) if per_req_tps else 0,
+        "per_request_output_tps_p50": _p(per_req_tps, 50),
+        "per_request_output_tps_p95": _p(per_req_tps, 95),
+        "tokens_per_sec": round(statistics.mean(per_req_tps), 2) if per_req_tps else 0,
+
+        # detail
+        "detail": ok_results[:200],
+        "fail_detail": fail_results[:50],
+    }
+
+    # ── run metric consistency validation ──
+    warnings = validate_metric_consistency(summary)
+    summary["metric_warnings"] = warnings
+
+    return summary
+
+
 def run_benchmark(api_url: str, api_key: str, model: str, messages: list[dict],
                   max_tokens: int, temperature: float,
                   concurrency: int, num_requests: int,
-                  progress_cb, done_cb) -> None:
+                  progress_cb, done_cb,
+                  stream: bool = True,
+                  preset_name: str = "") -> None:
     """Run benchmark in a background thread; call progress_cb(completed, total)
-    and done_cb(results_dict) on the main thread."""
+    and done_cb(summary_dict) on the main thread."""
     if DEBUG_MODE:
-        logging.info("benchmark start: concurrency=%d total=%d", concurrency, num_requests)
+        logging.info("benchmark start: concurrency=%d total=%d stream=%s preset=%s",
+                     concurrency, num_requests, stream, preset_name)
     results = []
     lock = threading.Lock()
     completed = [0]  # boxed for mutation in closure
+
     def worker():
-        r = call_llm(api_url, api_key, model, messages, max_tokens, temperature)
+        r = call_llm(api_url, api_key, model, messages, max_tokens, temperature,
+                     stream=stream)
         with lock:
             results.append(r)
             completed[0] += 1
             progress_cb(completed[0], num_requests)
         return r
+
     t0 = time.perf_counter()
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures = [pool.submit(worker) for _ in range(num_requests)]
         for f in as_completed(futures):
             pass  # results collected in worker via closure
     duration = time.perf_counter() - t0
+
     if DEBUG_MODE:
         ok_count = sum(1 for r in results if r["ok"])
         fail_count = len(results) - ok_count
         logging.info("benchmark done: ok=%d fail=%d duration=%.2fs", ok_count, fail_count, duration)
-    # --- aggregate ---
-    ok_results = [r for r in results if r["ok"]]
-    fail_results = [r for r in results if not r["ok"]]
-    latencies = sorted([r["latency"] for r in ok_results])
-    ttfts = [r.get("ttft", r["latency"]) for r in ok_results]
-    total_tokens = sum(r.get("total_tokens", 0) for r in ok_results)
-    tps_vals = [r.get("tokens_per_sec", 0) for r in ok_results]
-    def percentile(data, p):
-        if not data:
-            return 0
-        k = (len(data) - 1) * p / 100
-        f = int(k)
-        c = min(f + 1, len(data) - 1)
-        return data[f] + (k - f) * (data[c] - data[f]) if c > f else data[f]
-    summary = {
+
+    config = {
         "api_url": api_url,
         "model": model,
         "prompt": messages[-1]["content"][:100] if messages else "",
@@ -519,21 +1171,14 @@ def run_benchmark(api_url: str, api_key: str, model: str, messages: list[dict],
         "temperature": temperature,
         "concurrency": concurrency,
         "total": num_requests,
-        "success": len(ok_results),
-        "fail": len(fail_results),
-        "latency_min": round(min(latencies), 3) if latencies else 0,
-        "latency_avg": round(statistics.mean(latencies), 3) if latencies else 0,
-        "latency_max": round(max(latencies), 3) if latencies else 0,
-        "latency_p50": round(percentile(latencies, 50), 3),
-        "latency_p95": round(percentile(latencies, 95), 3),
-        "latency_p99": round(percentile(latencies, 99), 3),
-        "ttft_avg": round(statistics.mean(ttfts), 3) if ttfts else 0,
-        "tokens_per_sec": round(statistics.mean(tps_vals), 2) if tps_vals else 0,
-        "total_tokens": total_tokens,
-        "duration_sec": round(duration, 2),
-        "detail": ok_results[:200],
-        "fail_detail": fail_results[:50],
+        "stream_mode": stream,
+        "benchmark_preset_name": preset_name,
+        "benchmark_preset_type": "fixed_concurrency",
     }
+    summary = aggregate_results(results, duration, config)
+    # Also add preset info to output
+    summary["benchmark_preset_name"] = preset_name
+    summary["benchmark_preset_type"] = "fixed_concurrency"
     done_cb(summary)
 # ============================================================
 # GUI
@@ -552,6 +1197,14 @@ class LLMBenchmarkApp:
         self.root.configure(bg=C_STYLE["bg_main"])
         self._benchmark_running = False
         self._smoke_latency = 0.0
+        # ── animated status state ──
+        self._run_started_at = None
+        self._run_completed = 0
+        self._run_total = 0
+        self._run_fail = 0
+        self._run_phase = "idle"
+        self._spinner_index = 0
+        self._spinner_after_id = None
         init_db()
         self._setup_styles()
         self._build_header()
@@ -648,10 +1301,6 @@ class LLMBenchmarkApp:
                                          bg=C_STYLE["bg_stripe"],
                                          fg=C_STYLE["text_secondary"])
         self._status_badge_lbl.pack(side=tk.LEFT)
-        self._status_badge_color = {"空闲": C_STYLE["text_muted"],
-                                    "测试中": C_STYLE["accent"],
-                                    "已完成": C_STYLE["success"],
-                                    "失败": C_STYLE["error"]}
     def _build_body(self):
         body = tk.Frame(self.root, bg=C_STYLE["bg_main"])
         body.pack(fill=tk.BOTH, expand=True, side=tk.TOP,
@@ -728,30 +1377,44 @@ class LLMBenchmarkApp:
         self.max_tokens_var = tk.IntVar(value=512)
         self._labeled_spin(param_grid, "最大 Token 数", self.max_tokens_var,
                            16, 8192, 0, 0)
-        self.temp_var = tk.DoubleVar(value=0.7)
+        self.temp_var = tk.DoubleVar(value=0.0)
         self._labeled_spin(param_grid, "温度参数", self.temp_var,
                            0.0, 2.0, 0, 1, step=0.1)
-        self.total_var = tk.IntVar(value=20)
+        self.total_var = tk.IntVar(value=80)
         self._labeled_spin(param_grid, "请求总数", self.total_var,
                            1, 500, 1, 0, step=5)
-        tk.Label(param_grid, text="并发数", font=C_STYLE["font_body"],
+        tk.Label(param_grid, text="并发预设", font=C_STYLE["font_body"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
             row=1, column=2, sticky="w",
             padx=(C_STYLE["gap_lg"], C_STYLE["pad_sm"]),
             pady=(C_STYLE["gap_sm"], 0))
-        self.concurrency_var = tk.StringVar(value=list(CONCURRENCY_PRESETS.keys())[2])
+        self.concurrency_var = tk.StringVar(value=DEFAULT_PRESET_KEY)
         cb = ttk.Combobox(param_grid, textvariable=self.concurrency_var,
-                          values=list(CONCURRENCY_PRESETS.keys()),
+                          values=list(BENCHMARK_PRESETS.keys()),
                           width=47, state="readonly")
         cb.grid(row=1, column=3, sticky="ew", padx=(0, 0), pady=(C_STYLE["gap_sm"], 0))
         param_grid.columnconfigure(1, weight=1)
         param_grid.columnconfigure(3, weight=1)
-        # enforce: total >= concurrency
+        # enforce: total >= concurrency, and sync total to preset total
         def _sync_total_to_concurrency(*args):
             label = self.concurrency_var.get()
-            conc = CONCURRENCY_PRESETS.get(label, 8)
+            preset_cfg = BENCHMARK_PRESETS.get(label, {})
+            conc = preset_cfg.get("concurrency", 1)
+            ptotal = preset_cfg.get("total", conc)
             if self.total_var.get() < conc:
                 self.total_var.set(conc)
+            self.total_var.set(ptotal)
+        self.concurrency_var.trace_add("write", _sync_total_to_concurrency)
+        # warmup requests
+        tk.Label(param_grid, text="预热请求数", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
+            row=3, column=2, sticky="w",
+            padx=(C_STYLE["gap_lg"], C_STYLE["pad_sm"]),
+            pady=(C_STYLE["gap_sm"], 0))
+        self.warmup_var = tk.IntVar(value=2)
+        ttk.Spinbox(param_grid, from_=0, to=20, increment=1,
+                    textvariable=self.warmup_var, width=10).grid(
+            row=3, column=3, sticky="w", pady=(C_STYLE["gap_sm"], 0))
         self.concurrency_var.trace_add("write", _sync_total_to_concurrency)
         # save report toggle
         tk.Label(param_grid, text="保存测试报告", font=C_STYLE["font_body"],
@@ -762,21 +1425,31 @@ class LLMBenchmarkApp:
         ttk.Combobox(param_grid, textvariable=self.save_report_var,
                      values=["否", "是"], width=47, state="readonly").grid(
             row=2, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
-        # auto-save toggle
-        tk.Label(param_grid, text="自动保存配置", font=C_STYLE["font_body"],
+        # stream mode toggle
+        tk.Label(param_grid, text="流式模式", font=C_STYLE["font_body"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
             row=2, column=2, sticky="w",
             padx=(C_STYLE["gap_lg"], C_STYLE["pad_sm"]),
             pady=(C_STYLE["gap_sm"], 0))
+        self.stream_var = tk.StringVar(value="是")
+        ttk.Combobox(param_grid, textvariable=self.stream_var,
+                     values=["是", "否"], width=47, state="readonly").grid(
+            row=2, column=3, sticky="w", pady=(C_STYLE["gap_sm"], 0))
+        # auto-save toggle (moved to row 3)
+        tk.Label(param_grid, text="自动保存配置", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
+            row=3, column=0, sticky="w",
+            padx=(0, C_STYLE["pad_sm"]),
+            pady=(C_STYLE["gap_sm"], 0))
         self.auto_save_var = tk.StringVar(value="否")
         ttk.Combobox(param_grid, textvariable=self.auto_save_var,
                      values=["否", "是"], width=47, state="readonly").grid(
-            row=2, column=3, sticky="w", pady=(C_STYLE["gap_sm"], 0))
+            row=3, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
         # wire auto-save traces on all config vars
         for v in (self.url_var, self.key_var, self.model_var,
                   self.max_tokens_var, self.temp_var, self.total_var,
                   self.concurrency_var, self.save_report_var,
-                  self.auto_save_var):
+                  self.stream_var, self.warmup_var, self.auto_save_var):
             v.trace_add("write", lambda *a: self._auto_save_check())
         card_c = SectionCard(col, "操作")
         card_c.pack(fill=tk.X)
@@ -826,21 +1499,32 @@ class LLMBenchmarkApp:
         self.metrics: dict[str, MetricItem] = {}
         metric_grid = tk.Frame(metrics_card.content, bg=C_STYLE["bg_card"])
         metric_grid.pack(fill=tk.X)
+        # Row 0: 4 cards
+        row0 = tk.Frame(metric_grid, bg=C_STYLE["bg_card"])
+        row0.pack(fill=tk.X, pady=(0, C_STYLE["gap_md"]))
         for i, (key, label) in enumerate([
-            ("ttft", "平均 TTFT"), ("tps", "单请求 Token/s"),
-            ("total_tokens", "总输出 Token 数"), ("agg_tps", "估算总吞吐"),
+            ("ttft", "平均 TTFT"), ("e2e_p95", "E2E P95"),
+            ("system_output_tps", "System Output TPS"), ("rps", "Request RPS"),
         ]):
-            mi = MetricItem(metric_grid, label, metric_key=key)
-            mi.grid(row=0, column=i, sticky="nsew",
+            mi = MetricItem(row0, label, metric_key=key)
+            mi.pack(side=tk.LEFT, fill=tk.BOTH, expand=True,
                     padx=(0 if i == 0 else C_STYLE["gap_md"], 0))
             self.metrics[key] = mi
-        # make metric columns equal-width
-        for i in range(4):
-            metric_grid.columnconfigure(i, weight=1)
+        # Row 1: 4 cards
+        row1 = tk.Frame(metric_grid, bg=C_STYLE["bg_card"])
+        row1.pack(fill=tk.X)
+        for i, (key, label) in enumerate([
+            ("output_tokens", "Output Tokens"), ("tpot", "平均 TPOT"),
+            ("itl", "平均 ITL"), ("success_rate", "Success Rate"),
+        ]):
+            mi = MetricItem(row1, label, metric_key=key)
+            mi.pack(side=tk.LEFT, fill=tk.BOTH, expand=True,
+                    padx=(0 if i == 0 else C_STYLE["gap_md"], 0))
+            self.metrics[key] = mi
         self.notice_banner = NoticeBanner(bf, "info")
         self.notice_banner.grid(row=2, column=0, sticky="ew",
                                 pady=(0, C_STYLE["gap_lg"]))
-        hist_card = SectionCard(bf, "延迟分布直方图")
+        hist_card = SectionCard(bf, "E2E Latency Distribution (e2el)")
         hist_card.grid(row=3, column=0, sticky="nsew",
                        pady=(0, C_STYLE["gap_lg"]))
         hist_card.columnconfigure(0, weight=1)
@@ -921,10 +1605,83 @@ class LLMBenchmarkApp:
                         textvariable=var, width=10)
         s.grid(row=row, column=col * 2 + 1, sticky="w",
                padx=(0, 0), pady=(C_STYLE["gap_sm"], 0))
-    def _set_status_badge(self, status: str):
-        color = self._status_badge_color.get(status, C_STYLE["text_secondary"])
-        self._status_dot.config(foreground=color)
-        self._status_badge_lbl.config(text=status, foreground=color)
+    # ── animated status badge (spinner + progress + elapsed + fail) ──
+    SPINNER_FRAMES = ["|", "/", "-", "\\"]
+
+    def _start_status_animation(self, phase: str, total: int = 0):
+        self._run_started_at = time.perf_counter()
+        self._run_completed = 0
+        self._run_total = total
+        self._run_fail = 0
+        self._run_phase = phase
+        self._spinner_index = 0
+        self._animate_status_badge()
+
+    def _stop_status_animation(self, final_status: str, completed=None, total=None, fail=None):
+        if self._spinner_after_id:
+            try:
+                self.root.after_cancel(self._spinner_after_id)
+            except Exception:
+                pass
+            self._spinner_after_id = None
+        if completed is not None:
+            self._run_completed = completed
+        if total is not None:
+            self._run_total = total
+        if fail is not None:
+            self._run_fail = fail
+        elapsed = self._format_elapsed()
+        if final_status == "completed":
+            self._status_dot.config(text="✓", fg=C_STYLE["success"],
+                                    font=C_STYLE["font_status"])
+            self._status_badge_lbl.config(
+                text=f"已完成 · {self._run_completed}/{self._run_total} · fail={self._run_fail} · {elapsed}",
+                fg=C_STYLE["success"])
+        elif final_status == "failed":
+            self._status_dot.config(text="✕", fg=C_STYLE["error"],
+                                    font=C_STYLE["font_status"])
+            self._status_badge_lbl.config(
+                text=f"失败 · fail={self._run_fail} · {elapsed}",
+                fg=C_STYLE["error"])
+        else:
+            self._status_dot.config(text="●", fg=C_STYLE["text_muted"], font=(FONT_FAMILY, 9))
+            self._status_badge_lbl.config(text="空闲", fg=C_STYLE["text_secondary"])
+
+    def _animate_status_badge(self):
+        if not self._benchmark_running:
+            return
+        frame = self.SPINNER_FRAMES[self._spinner_index % len(self.SPINNER_FRAMES)]
+        self._spinner_index += 1
+        elapsed = self._format_elapsed()
+        progress = ""
+        if self._run_total:
+            progress = f" · {self._run_completed}/{self._run_total}"
+        fail_part = f" · fail={self._run_fail}"
+        phase_text = self._phase_display_name(self._run_phase)
+        self._status_dot.config(text=frame, fg=C_STYLE["accent"], font=(FONT_FAMILY, 9))
+        self._status_badge_lbl.config(
+            text=f"{phase_text}{progress}{fail_part} · {elapsed}",
+            fg=C_STYLE["accent"])
+        self._spinner_after_id = self.root.after(250, self._animate_status_badge)
+
+    def _format_elapsed(self) -> str:
+        if self._run_started_at is None:
+            return "00:00"
+        sec = int(time.perf_counter() - self._run_started_at)
+        return f"{sec // 60:02d}:{sec % 60:02d}"
+
+    def _phase_display_name(self, phase: str) -> str:
+        return {
+            "idle": "空闲",
+            "connectivity": "连接检测中",
+            "models": "获取模型中",
+            "smoke": "基础测试中",
+            "warmup": "预热中",
+            "benchmark": "测试中",
+            "saving": "保存结果中",
+        }.get(phase, phase)
+    # ── end animated status badge ──
+
     def _reset_config(self):
         self.url_var.set("http://192.168.1.12:8000/v1")
         self.key_var.set("change-me-before-production")
@@ -932,9 +1689,11 @@ class LLMBenchmarkApp:
         self.system_var.set("你是一个有帮助的助手。")
         self.prompt_var.set("请用300字左右介绍机器学习。")
         self.max_tokens_var.set(512)
-        self.temp_var.set(0.7)
-        self.total_var.set(20)
-        self.concurrency_var.set(list(CONCURRENCY_PRESETS.keys())[2])
+        self.temp_var.set(0.0)
+        self.total_var.set(80)
+        self.concurrency_var.set(DEFAULT_PRESET_KEY)
+        self.stream_var.set("是")
+        self.warmup_var.set(2)
         self._load_config()  # overlay INI values if available
         self._action_status.config(text="已重置 — 请配置参数后开始测试")
     def _load_config(self):
@@ -967,10 +1726,14 @@ class LLMBenchmarkApp:
                                fallback=self.total_var.get()))
             concurrency_label = cfg.get("test", "concurrency",
                                         fallback=self.concurrency_var.get())
-            if concurrency_label in CONCURRENCY_PRESETS:
+            if concurrency_label in BENCHMARK_PRESETS:
                 self.concurrency_var.set(concurrency_label)
             self.save_report_var.set(cfg.get("test", "save_report",
                                      fallback=self.save_report_var.get()))
+            self.stream_var.set(cfg.get("test", "stream_mode",
+                                  fallback=self.stream_var.get()))
+            self.warmup_var.set(cfg.getint("test", "warmup",
+                                fallback=self.warmup_var.get()))
             self.auto_save_var.set(cfg.get("test", "auto_save",
                                    fallback=self.auto_save_var.get()))
         # sync Text widgets
@@ -997,6 +1760,8 @@ class LLMBenchmarkApp:
             "total_requests": str(self.total_var.get()),
             "concurrency": self.concurrency_var.get(),
             "save_report": self.save_report_var.get(),
+            "stream_mode": self.stream_var.get(),
+            "warmup": str(self.warmup_var.get()),
             "auto_save": self.auto_save_var.get(),
         }
         with open(INI_PATH, "w", encoding="utf-8") as f:
@@ -1328,7 +2093,7 @@ class LLMBenchmarkApp:
         self._benchmark_running = False
         self.start_btn.config(state=tk.NORMAL, text="开始测试")
         self.progress["value"] = 0
-        self._set_status_badge("失败")
+        self._stop_status_animation("failed", fail=max(self._run_fail, 1))
         self.result_text.config(state=tk.NORMAL)
         self.result_text.delete("1.0", tk.END)
         if step == "connectivity":
@@ -1371,24 +2136,44 @@ class LLMBenchmarkApp:
         temperature = self.temp_var.get()
         total = self.total_var.get()
         concurrency_label = self.concurrency_var.get()
-        concurrency = CONCURRENCY_PRESETS.get(concurrency_label, 8)
+        preset_cfg = BENCHMARK_PRESETS.get(concurrency_label, {})
+        concurrency = preset_cfg.get("concurrency", 8)
+        preset_name = concurrency_label
+        stream = self.stream_var.get() == "是"
+        warmup = self.warmup_var.get()
         if not api_url:
             messagebox.showerror("错误", "请输入 API 地址")
             return
         if not user_prompt:
             messagebox.showerror("错误", "请输入用户提示词")
             return
+
+        # C32+ pressure test confirmation
+        if concurrency >= 32:
+            ok = messagebox.askyesno(
+                "压力测试确认",
+                f"您选择了「{preset_name}」\n\n"
+                f"并发={concurrency} 请求={total}\n\n"
+                "高并发压力测试可能导致：\n"
+                "• 服务端排队严重，延迟大幅上升\n"
+                "• API 限流 (429) 或服务端超时\n"
+                "• GPU 显存压力增大\n\n"
+                "确定要继续吗？"
+            )
+            if not ok:
+                return
+
         api_url = normalize_api_url(api_url)
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
         if DEBUG_MODE:
-            logging.info("benchmark requested: url=%s model=%s concurrency=%d total=%d",
-                         api_url, model, concurrency, total)
+            logging.info("benchmark requested: url=%s model=%s concurrency=%d total=%d warmup=%d preset=%s",
+                         api_url, model, concurrency, total, warmup, preset_name)
         self._benchmark_running = True
         self.start_btn.config(state=tk.DISABLED, text="测试中...")
-        self._set_status_badge("测试中")
+        self._start_status_animation("connectivity", total=total)
         self._action_status.config(text="准备开始...")
         self._reset_indicators()
         self.progress["value"] = 0
@@ -1405,12 +2190,13 @@ class LLMBenchmarkApp:
         t = threading.Thread(
             target=self._run_preflight_and_benchmark,
             args=(api_url, api_key, model, messages, max_tokens, temperature,
-                  concurrency, total),
+                  concurrency, total, stream, warmup, preset_name),
             daemon=True,
         )
         t.start()
     def _run_preflight_and_benchmark(self, api_url, api_key, model, messages,
-                                      max_tokens, temperature, concurrency, total):
+                                      max_tokens, temperature, concurrency, total, stream,
+                                      warmup=0, preset_name=""):
         if DEBUG_MODE:
             logging.info("preflight: step 1 — connectivity check")
         self.root.after(0, lambda: self._set_indicator("connectivity", "checking"))
@@ -1424,6 +2210,7 @@ class LLMBenchmarkApp:
             return
         self.root.after(0, lambda: self._set_indicator("connectivity", "pass", "连接正常"))
         # ── Step 1.5: fetch model list and let user pick if needed ──
+        self.root.after(0, lambda: setattr(self, '_run_phase', 'models'))
         if DEBUG_MODE:
             logging.info("preflight: step 1.5 — fetch model list")
         self.root.after(0, lambda: self.status_label.config(
@@ -1461,13 +2248,28 @@ class LLMBenchmarkApp:
         elif fetch_err:
             if DEBUG_MODE:
                 logging.warning("model fetch failed, using manual entry: %s", fetch_err)
-        # ── Step 2: smoke test ──
+        # ── Step 2: warmup + smoke test ──
+        if warmup > 0:
+            if DEBUG_MODE:
+                logging.info("preflight: warmup — sending %d warmup requests", warmup)
+            self.root.after(0, lambda: setattr(self, '_run_phase', 'warmup'))
+            self.root.after(0, lambda: self.status_label.config(
+                text=f"预热中 ({warmup} 次请求)...", fg=C_STYLE["accent"]))
+            for i in range(warmup):
+                call_llm(api_url, api_key, model, messages, max_tokens, temperature,
+                        stream=stream)
+                self.root.after(0, lambda c=i+1: self._action_status.config(
+                    text=f"预热中 — {c}/{warmup}"))
+
+        self.root.after(0, lambda: setattr(self, '_run_phase', 'smoke'))
+
         if DEBUG_MODE:
             logging.info("preflight: step 2 — smoke test")
         self.root.after(0, lambda: self._set_indicator("smoke", "checking"))
         self.root.after(0, lambda: self.status_label.config(
             text="正在执行基线测试 (1 次请求)...", fg=C_STYLE["accent"]))
-        smoke = call_llm(api_url, api_key, model, messages, max_tokens, temperature)
+        smoke = call_llm(api_url, api_key, model, messages, max_tokens, temperature,
+                        stream=stream)
         if not smoke["ok"]:
             if DEBUG_MODE:
                 logging.warning("preflight FAIL at smoke: type=%s error=%s",
@@ -1484,34 +2286,49 @@ class LLMBenchmarkApp:
         self.root.after(0, lambda: self.status_label.config(
             text="正在执行压力测试...", fg=C_STYLE["accent"]))
         self.root.after(0, lambda: self.progress.configure(maximum=total))
+        self.root.after(0, lambda: setattr(self, '_run_phase', 'benchmark'))
+
+        def _done_with_warmup(s):
+            s["warmup_requests"] = warmup
+            self._on_done(s)
+
         run_benchmark(api_url, api_key, model, messages, max_tokens, temperature,
-                      concurrency, total, self._on_progress, self._on_done)
+                      concurrency, total, self._on_progress, _done_with_warmup,
+                      stream=stream, preset_name=preset_name)
     def _on_progress(self, completed, total):
         self.root.after(0, lambda: self._update_progress(completed, total))
     def _update_progress(self, completed, total):
+        self._run_completed = completed
+        self._run_total = total
         self.progress["value"] = completed
+        elapsed = self._format_elapsed()
         self.status_label.config(text=f"进度: {completed}/{total}")
-        self._action_status.config(text=f"测试中... {completed}/{total}")
+        self._action_status.config(
+            text=f"测试中 — {completed}/{total} · fail={self._run_fail} · {elapsed}")
         self._set_indicator("benchmark", "checking", f"{completed}/{total}")
     def _on_done(self, summary: dict):
         self.root.after(0, lambda: self._show_results(summary))
     def _show_results(self, summary: dict):
         self._benchmark_running = False
         self.start_btn.config(state=tk.NORMAL, text="开始测试")
-        self._action_status.config(text="测试完成")
+        elapsed = self._format_elapsed()
+        self._action_status.config(
+            text=f"已完成 — {summary['total']} 请求 · success={summary['success']} · fail={summary['fail']} · {elapsed}")
         total = max(summary["total"], 1)
         success_rate = summary["success"] / total * 100
         if summary["fail"] == 0:
             self._set_indicator("benchmark", "pass", f"{success_rate:.0f}% 通过")
-            self._set_status_badge("已完成")
+            self._stop_status_animation("completed",
+                completed=summary["success"], total=summary["total"], fail=0)
             self.status_label.config(text="测试完成")
         elif summary["success"] > 0:
             self._set_indicator("benchmark", "fail", f"{success_rate:.0f}% 通过")
-            self._set_status_badge("已完成")
+            self._stop_status_animation("completed",
+                completed=summary["success"], total=summary["total"], fail=summary["fail"])
             self.status_label.config(text="测试完成（部分失败）")
         else:
             self._set_indicator("benchmark", "fail", "全部失败")
-            self._set_status_badge("失败")
+            self._stop_status_animation("failed", fail=summary["fail"])
             self.status_label.config(text="测试完成（全部失败）")
             # popup with categorized error for first failure
             fail_detail = summary.get("fail_detail", [])
@@ -1523,23 +2340,35 @@ class LLMBenchmarkApp:
                 self.root.after(100, lambda: self._show_error_popup(
                     "压力测试全部失败", esum, eadv))
         self._set_indicator("duration", "idle", f"{summary['duration_sec']:.1f}s")
-        self.metrics["ttft"].set_value(f"{summary['ttft_avg']:.3f}s")
-        self.metrics["tps"].set_value(f"{summary['tokens_per_sec']:.2f}")
-        self.metrics["total_tokens"].set_value(str(summary["total_tokens"]))
-        if summary["duration_sec"] > 0:
-            agg = summary["total_tokens"] / summary["duration_sec"]
-            self.metrics["agg_tps"].set_value(f"~{agg:.1f} tok/s")
+        # ── 8 metric cards ──
+        # Row 0
+        self.metrics["ttft"].set_value(
+            f"{summary['ttft_avg']:.3f}s" if summary.get("stream_mode") else "N/A")
+        self.metrics["e2e_p95"].set_value(f"{summary['e2e_latency_p95']:.3f}s")
+        self.metrics["system_output_tps"].set_value(
+            f"{summary['system_output_tps']:.1f} tok/s")
+        self.metrics["rps"].set_value(f"{summary['request_throughput_rps']:.2f} req/s")
+        # Row 1
+        self.metrics["output_tokens"].set_value(str(summary.get("total_output_tokens", summary.get("total_tokens", 0))))
+        tpot_val = summary.get("tpot_avg", 0)
+        self.metrics["tpot"].set_value(
+            f"{tpot_val:.3f}s" if summary.get("stream_mode") and tpot_val > 0 else "N/A")
+        itl_val = summary.get("itl_avg", 0)
+        self.metrics["itl"].set_value(
+            f"{itl_val:.3f}s" if summary.get("stream_mode") and itl_val > 0 else "N/A")
+        self.metrics["success_rate"].set_value(f"{summary.get('success_rate', 0):.1f}%")
         diag = self._diagnose(summary)
         level = "success" if summary["fail"] == 0 and len(diag) == 1 else \
                 "warn" if summary["fail"] == 0 else "error"
         self.notice_banner._level = level
         self.notice_banner.set_text("\n".join(diag) if diag else "")
         if DEBUG_MODE:
-            logging.info("result: success=%d fail=%d rate=%.1f%% avg_lat=%.3fs p95=%.3fs tps=%.2f",
+            logging.info("result: success=%d fail=%d rate=%.1f%% e2e_avg=%.3fs e2e_p95=%.3fs output_tps=%.1f",
                          summary["success"], summary["fail"], success_rate,
-                         summary["latency_avg"], summary["latency_p95"],
-                         summary["tokens_per_sec"])
+                         summary["e2e_latency_avg"], summary["e2e_latency_p95"],
+                         summary["system_output_tps"])
         try:
+            self._run_phase = "saving"
             save_result(summary)
         except Exception as e:
             if DEBUG_MODE:
@@ -1580,6 +2409,11 @@ class LLMBenchmarkApp:
         total = max(summary["total"], 1)
         concurrency = summary["concurrency"]
         fail_detail = summary.get("fail_detail", [])
+        stream_mode = summary.get("stream_mode", False)
+
+        if not stream_mode:
+            tips.append("  ℹ 非流式模式：TTFT/TPOT/ITL 不可用 (vLLM bench serve 需 stream)。")
+
         if fail_detail:
             tips.append("  ⚠ 存在失败请求，按类型分布：")
             cats: dict[str, int] = {}
@@ -1590,10 +2424,10 @@ class LLMBenchmarkApp:
                 tips.append(f"    - {cat}: {count} 次")
             tips.append("  处理方法请参见下方的错误分析。")
         if self._smoke_latency > 0 and summary["success"] > 0:
-            ratio = summary["latency_avg"] / max(self._smoke_latency, 0.001)
+            ratio = summary["e2e_latency_avg"] / max(self._smoke_latency, 0.001)
             if ratio > 2.0 and concurrency > 1:
                 tips.append(
-                    f"  ⚠ 并发延迟放大: 平均延迟 ({summary['latency_avg']:.2f}s)"
+                    f"  ⚠ 并发延迟放大: 平均 E2E ({summary['e2e_latency_avg']:.2f}s)"
                     f" 是基线 ({self._smoke_latency:.2f}s) 的 {ratio:.1f}x。")
                 if ratio > 5:
                     tips.append("    服务端可能已达并发上限，建议降低并发数。")
@@ -1601,106 +2435,198 @@ class LLMBenchmarkApp:
                     tips.append("    服务端负载较高，可适当降低并发数以获更低延迟。")
                 else:
                     tips.append("    并发带来了可接受的延迟增加。")
-        if concurrency >= 16 and summary['latency_p95'] > summary['latency_avg'] * 1.5:
+        if concurrency >= 16 and summary['e2e_latency_p95'] > summary['e2e_latency_avg'] * 1.5:
             tips.append(
-                f"  ⚠ P95 延迟 ({summary['latency_p95']:.2f}s) 显著高于平均"
-                f" ({summary['latency_avg']:.2f}s)，表明高并发下存在排队等待。")
-            tips.append("    建议: 检查服务端 `--max-num-seqs` 等并发限制参数。")
+                f"  ⚠ P95 E2E ({summary['e2e_latency_p95']:.2f}s) 显著高于平均"
+                f" ({summary['e2e_latency_avg']:.2f}s)，表明高并发下存在排队等待。")
+            tips.append("    建议: 检查 vLLM --max-num-seqs / --max-model-len 等并发限制参数。")
         if summary["success"] > 0 and summary["duration_sec"] > 0:
-            aggregate_tps = summary["total_tokens"] / summary["duration_sec"]
-            if concurrency >= 32 and aggregate_tps < summary["tokens_per_sec"] * concurrency * 0.5:
+            sys_tps = summary.get("system_output_tps", 0)
+            per_req_tps = summary.get("per_request_output_tps_avg", 0)
+            if concurrency >= 32 and sys_tps < per_req_tps * concurrency * 0.5:
                 tips.append(
-                    f"  ⚠ 总吞吐 (~{aggregate_tps:.0f} tok/s) 远低于"
-                    f" 理论值 ({summary['tokens_per_sec'] * concurrency:.0f} tok/s)，"
+                    f"  ⚠ Output Token Throughput (~{sys_tps:.0f} tok/s) 远低于"
+                    f" 理论值 ({per_req_tps * concurrency:.0f} tok/s)，"
                     f"服务端可能已达吞吐上限。")
-        if summary["fail"] == 0 and not tips:
+                tips.append("    建议: 检查 vLLM --max-num-seqs 或 GPU 利用率。")
+        if summary["fail"] == 0 and len(tips) <= (1 if not stream_mode else 0):
             tips.append("  ✓ 所有检查通过，未发现异常。")
         return tips
     def _generate_report(self, summary: dict) -> str:
         total = max(summary["total"], 1)
-        success_rate = summary["success"] / total * 100
-        fail_rate = summary["fail"] / total * 100
+        success_rate = summary.get("success_rate", summary["success"] / total * 100)
+        stream_mode = summary.get("stream_mode", False)
         sep = "─" * 58
         r = []
         r.append("=" * 60)
         r.append("  LLM 并发性能测试报告")
         r.append("=" * 60)
         r.append(f"  测试时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        r.append(f"  API 地址: {summary['api_url']}")
-        r.append(f"  模型:     {summary['model']}")
-        r.append(f"  提示词:   {summary.get('prompt', '')[:60]}")
+        r.append("")
+        r.append(f"  Metric Standard: {summary.get('metric_standard', 'JISUMAN LLM Benchmark Standard v1')}")
+        r.append(f"  Reference: vLLM bench serve + NVIDIA GenAI-Perf/NIM-style serving benchmark")
+
+        # ── 一、测试配置 ──
         r.append("")
         r.append(sep)
-        r.append("  1. 请求成功率")
+        r.append("  一、测试配置")
         r.append(sep)
-        r.append(f"  总请求数:   {summary['total']}")
-        r.append(f"  成功:       {summary['success']}  ({success_rate:.1f}%)")
-        r.append(f"  失败:       {summary['fail']}  ({fail_rate:.1f}%)")
-        if summary["fail"] == 0:
-            r.append("  状态:       PASS — 全部通过")
-        elif success_rate >= 90:
-            r.append("  状态:       WARN — 部分失败")
+        r.append(f"  API URL:     {summary['api_url']}")
+        r.append(f"  Model:       {summary['model']}")
+        r.append(f"  Concurrency: {summary['concurrency']}")
+        r.append(f"  Total Req:   {summary['total']}")
+        r.append(f"  Max Tokens:  {summary['max_tokens']}")
+        r.append(f"  Temperature: {summary['temperature']}")
+        r.append(f"  Stream Mode: {'流式 (stream=True)' if stream_mode else '非流式 (stream=False)'}")
+        r.append(f"  Load Mode:   fixed concurrency")
+        preset = summary.get("benchmark_preset_name", "")
+        warmup_r = summary.get("warmup_requests", 0)
+        if preset:
+            r.append(f"  Benchmark Preset: {preset}")
+        if warmup_r:
+            r.append(f"  Warmup Requests:  {warmup_r}")
+
+        # ── 二、成功失败 ──
+        r.append("")
+        r.append(sep)
+        r.append("  二、成功 / 失败")
+        r.append(sep)
+        r.append(f"  Success:      {summary['success']}")
+        r.append(f"  Fail:         {summary['fail']}")
+        r.append(f"  Success Rate: {success_rate:.1f}%")
+        fail_detail = summary.get("fail_detail", [])
+        if fail_detail:
+            from collections import Counter
+            error_types = Counter(r_.get("error_type", "unknown") for r_ in fail_detail)
+            r.append("  Error Types:")
+            for et, count in error_types.most_common():
+                r.append(f"    - {et}: {count}")
+
+        # ── 三、延迟指标 (Latency Metrics) ──
+        # Aligned with: vLLM bench serve (ttft/tpot/itl/e2el), NVIDIA GenAI-Perf
+        r.append("")
+        r.append(sep)
+        r.append("  三、延迟指标 (Latency Metrics)")
+        r.append(sep)
+        r.append(f"  End-to-End Latency (vLLM: e2el) — 请求发出到完整响应结束:")
+        r.append(f"    min: {summary['e2e_latency_min']:.3f}s  avg: {summary['e2e_latency_avg']:.3f}s  max: {summary['e2e_latency_max']:.3f}s")
+        r.append(f"    p50: {summary['e2e_latency_p50']:.3f}s  p95: {summary['e2e_latency_p95']:.3f}s  p99: {summary['e2e_latency_p99']:.3f}s")
+        if stream_mode and summary.get("ttft_avg", 0) > 0:
+            r.append(f"  Time to First Token (vLLM/NVIDIA: ttft) — 首个输出 chunk 的时间:")
+            r.append(f"    avg: {summary['ttft_avg']:.3f}s  p50: {summary.get('ttft_p50', 0):.3f}s  p95: {summary.get('ttft_p95', 0):.3f}s  p99: {summary.get('ttft_p99', 0):.3f}s")
+            r.append(f"  Time per Output Token (vLLM: tpot) — (e2el - ttft) / (output_tokens - 1):")
+            r.append(f"    avg: {summary.get('tpot_avg', 0):.3f}s  p50: {summary.get('tpot_p50', 0):.3f}s  p95: {summary.get('tpot_p95', 0):.3f}s  p99: {summary.get('tpot_p99', 0):.3f}s")
+            r.append(f"  Inter-Token Latency (vLLM/NVIDIA: itl) — 相邻流式 chunk 间隔:")
+            r.append(f"    avg: {summary.get('itl_avg', 0):.3f}s  p50: {summary.get('itl_p50', 0):.3f}s  p95: {summary.get('itl_p95', 0):.3f}s  p99: {summary.get('itl_p99', 0):.3f}s")
         else:
-            r.append("  状态:       FAIL — 成功率过低")
+            r.append("  TTFT / TPOT / ITL: N/A（非流式模式无法真实测量）")
+
+        # ── TTFT Debug (for calibration against probe scripts) ──
+        ok_count_rpt = summary.get("success", 0)
+        if stream_mode and ok_count_rpt > 0:
+            fdl_vals = [r.get("first_data_line_s") for r in (summary.get("detail") or [])
+                       if r.get("ok") and r.get("first_data_line_s") is not None]
+            fjc_vals = [r.get("first_json_chunk_s") for r in (summary.get("detail") or [])
+                       if r.get("ok") and r.get("first_json_chunk_s") is not None]
+            fne_vals = [r.get("first_non_empty_s") for r in (summary.get("detail") or [])
+                       if r.get("ok") and r.get("first_non_empty_s") is not None]
+            if fne_vals:
+                r.append("")
+                r.append("  TTFT Debug (校准参考):")
+                r.append(f"    first_data_line  avg: {statistics.mean(fdl_vals):.4f}s" if fdl_vals else "    first_data_line:  N/A")
+                r.append(f"    first_json_chunk avg: {statistics.mean(fjc_vals):.4f}s" if fjc_vals else "    first_json_chunk: N/A")
+                r.append(f"    first_non_empty  avg: {statistics.mean(fne_vals):.4f}s" if fne_vals else "    first_non_empty:  N/A")
+
+        # ── 四、Token 统计 (Token Counts) ──
         r.append("")
         r.append(sep)
-        r.append("  2. 延迟分析")
+        r.append("  四、Token 统计 (Token Counts)")
         r.append(sep)
-        r.append(f"  并发数:     {summary['concurrency']}")
-        r.append(f"  总耗时:     {summary['duration_sec']:.2f}s")
-        r.append(f"  基线延迟:   {self._smoke_latency:.3f}s" if self._smoke_latency > 0 else
-                 f"  基线延迟:   (未记录)")
-        r.append(f"  最小延迟:   {summary['latency_min']:.3f}s")
-        r.append(f"  平均延迟:   {summary['latency_avg']:.3f}s")
-        r.append(f"  最大延迟:   {summary['latency_max']:.3f}s")
-        r.append(f"  P50 延迟:   {summary['latency_p50']:.3f}s")
-        r.append(f"  P95 延迟:   {summary['latency_p95']:.3f}s")
-        r.append(f"  P99 延迟:   {summary['latency_p99']:.3f}s")
-        if self._smoke_latency > 0 and summary['concurrency'] > 1:
-            amp = summary['latency_avg'] / max(self._smoke_latency, 0.001)
-            r.append(f"  延迟放大:   {amp:.1f}x (平均 / 基线)")
+        r.append(f"  Input Tokens:  {summary.get('total_input_tokens', 0)}")
+        r.append(f"  Output Tokens: {summary.get('total_output_tokens', 0)}")
+        r.append(f"  Total Tokens:  {summary.get('total_tokens', 0)}")
+        has_output = summary.get("total_output_tokens", 0) > 0
+        r.append(f"  Token Source: {'usage (服务端返回)' if has_output else 'missing_usage (服务端未返回 usage，token 不可信)'}")
+
+        # ── 五、吞吐指标 (Throughput) ──
+        # Aligned with: NVIDIA GenAI-Perf output_token_throughput / request_throughput
         r.append("")
         r.append(sep)
-        r.append("  3. 吞吐量")
+        r.append("  五、吞吐指标 (Throughput)")
         r.append(sep)
-        r.append(f"  平均 TTFT:          {summary['ttft_avg']:.3f}s")
-        r.append(f"  单请求 Token/s:     {summary['tokens_per_sec']:.2f}")
-        r.append(f"  总输出 Token 数:    {summary['total_tokens']}")
-        if summary["duration_sec"] > 0:
-            agg = summary["total_tokens"] / summary["duration_sec"]
-            r.append(f"  估算总吞吐:         ~{agg:.1f} token/s")
+        r.append(f"  Request Throughput (NVIDIA: request_throughput): {summary.get('request_throughput_rps', 0):.2f} req/s  (= success / duration)")
+        r.append(f"  Output Token Throughput (NVIDIA: output_token_throughput): {summary.get('system_output_tps', 0):.1f} tok/s  (= output_tokens / duration)")
+        r.append(f"  Total Token Throughput:                                {summary.get('system_total_tps', 0):.1f} tok/s  (= total_tokens / duration)")
+        r.append(f"  Per-request Output Token Throughput (avg):              {summary.get('per_request_output_tps_avg', 0):.2f} tok/s")
+        r.append(f"    p50: {summary.get('per_request_output_tps_p50', 0):.2f}  p95: {summary.get('per_request_output_tps_p95', 0):.2f}")
+
+        # ── 六、口径说明 (Metric Definitions) ──
+        # Aligned with: vLLM bench serve, NVIDIA GenAI-Perf, NIM Benchmark
         r.append("")
         r.append(sep)
-        r.append("  4. 诊断与建议")
+        r.append("  六、口径说明 (Metric Definitions — vLLM / NVIDIA GenAI-Perf)")
+        r.append(sep)
+        r.append("  本工具的指标口径对齐以下行业标准：")
+        r.append("    • vLLM bench serve (ttft, tpot, itl, e2el)")
+        r.append("    • NVIDIA GenAI-Perf / NIM Benchmark (ttft, itl, output_token_throughput, request_throughput)")
+        r.append("")
+        r.append("  TTFT (Time to First Token):")
+        r.append("    请求发出 → 首个非空输出 chunk (delta.content / delta.reasoning_content)")
+        r.append("    对应 vLLM bench serve --percentile-metrics ttft")
+        r.append("")
+        r.append("  E2E Latency (End-to-End, vLLM: e2el):")
+        r.append("    请求发出 → 完整响应结束 (最后一个 chunk 到达)")
+        r.append("    对应 vLLM bench serve --percentile-metrics e2el")
+        r.append("")
+        r.append("  TPOT (Time per Output Token):")
+        r.append("    (e2el - ttft) / (completion_tokens - 1)  当 completion_tokens >= 2")
+        r.append("    对应 vLLM bench serve --percentile-metrics tpot")
+        r.append("")
+        r.append("  ITL (Inter-Token Latency):")
+        r.append("    相邻流式响应 chunk 的时间间隔")
+        r.append("    对应 vLLM bench serve --percentile-metrics itl")
+        r.append("    ⚠ 本工具无 tokenizer，ITL 基于 SSE chunk 估算")
+        r.append("      若服务端一个 chunk 包含多个 token，ITL 为近似值（上界）")
+        r.append("")
+        r.append("  Output Token Throughput:")
+        r.append("    total_output_tokens / duration_sec")
+        r.append("    对应 NVIDIA GenAI-Perf output_token_throughput")
+        r.append("")
+        r.append("  Request Throughput:")
+        r.append("    success / duration_sec")
+        r.append("    对应 NVIDIA GenAI-Perf request_throughput")
+        r.append("")
+        r.append("  负载模式: fixed concurrency (固定并发数)")
+
+        # ── 七、诊断与建议 ──
+        r.append("")
+        r.append(sep)
+        r.append("  七、诊断与建议")
         r.append(sep)
         diag = self._diagnose(summary)
+
+        # ── metric consistency check ──
+        mw = summary.get("metric_warnings", [])
+        if mw:
+            r.append("")
+            r.append("  ⚠ 指标一致性警告 (Metric Consistency Warnings):")
+            for w in mw:
+                r.append(f"    - {w}")
+        else:
+            r.append("")
+            r.append("  ✓ 指标一致性检查通过 (Metric Consistency Check Passed)。")
+
         if diag:
+            r.append("")
             r.extend(diag)
         else:
             r.append("  (无特殊建议)")
+
         r.append("")
-        r.append(sep)
-        r.append("  5. 结论")
-        r.append(sep)
-        if summary["fail"] == 0:
-            if self._smoke_latency > 0 and summary["concurrency"] > 1:
-                amp = summary["latency_avg"] / max(self._smoke_latency, 0.001)
-                if amp > 3:
-                    r.append(f"  全部请求成功。{summary['concurrency']} 并发下平均延迟是基线的 {amp:.1f}x，")
-                    r.append(f"  服务端可能存在排队瓶颈，建议降低并发数以获更稳定延迟。")
-                else:
-                    r.append(f"  全部请求成功，{summary['concurrency']} 并发下性能表现稳定。")
-            else:
-                r.append(f"  全部请求成功，性能表现正常。")
-        elif summary["success"] > 0:
-            r.append(f"  成功率 {success_rate:.1f}%，部分请求失败。")
-            r.append(f"  请根据上方诊断建议排查问题后重试。")
-        else:
-            r.append(f"  所有请求均失败。请检查 API 地址、Key 和模型名称后重试。")
         r.append("=" * 60)
         return "\n".join(r)
     def _draw_histogram(self, summary: dict):
-        """Draw histogram on the main benchmark canvas."""
+        """Draw E2E latency histogram on the main benchmark canvas."""
         detail = summary.get("detail", [])
         if not detail:
             self.hist_canvas.delete("all")
@@ -1708,7 +2634,7 @@ class LLMBenchmarkApp:
                                          font=C_STYLE["font_body"],
                                          fill=C_STYLE["text_secondary"])
             return
-        latencies = [r["latency"] for r in detail if r["ok"]]
+        latencies = [r["e2e_latency"] for r in detail if r["ok"]]
         if not latencies:
             self.hist_canvas.delete("all")
             self.hist_canvas.create_text(300, 100, text="暂无成功请求",
@@ -1818,7 +2744,7 @@ class LLMBenchmarkApp:
         table_card.grid(row=1, column=0, sticky="nsew")
         table_card.grid_columnconfigure(0, weight=1)
         table_card.grid_rowconfigure(0, weight=1)
-        cols = ("id", "时间", "模型", "并发", "总数", "成功", "失败", "平均延迟", "P95", "Token/s", "耗时")
+        cols = ("id", "时间", "模型", "并发", "请求", "成功率", "E2E P95", "TTFT Avg", "Output TPS", "Req/s", "耗时", "标准")
         self.hist_tree = ttk.Treeview(table_card, columns=cols,
                                       show="headings", selectmode="browse",
                                       style="App.Treeview")
@@ -1826,10 +2752,15 @@ class LLMBenchmarkApp:
             self.hist_tree.heading(c, text=c)
             self.hist_tree.column(c, width=80, anchor="center")
         self.hist_tree.column("id", width=40)
-        self.hist_tree.column("时间", width=150)
-        self.hist_tree.column("模型", width=120)
-        self.hist_tree.column("平均延迟", width=85)
-        self.hist_tree.column("P95", width=85)
+        self.hist_tree.column("时间", width=130)
+        self.hist_tree.column("模型", width=100)
+        self.hist_tree.column("成功率", width=65)
+        self.hist_tree.column("E2E P95", width=80)
+        self.hist_tree.column("TTFT Avg", width=75)
+        self.hist_tree.column("Output TPS", width=80)
+        self.hist_tree.column("Req/s", width=60)
+        self.hist_tree.column("耗时", width=65)
+        self.hist_tree.column("标准", width=60)
         scrollbar = ttk.Scrollbar(table_card, orient=tk.VERTICAL,
                                   command=self.hist_tree.yview)
         self.hist_tree.configure(yscrollcommand=scrollbar.set)
@@ -1845,13 +2776,27 @@ class LLMBenchmarkApp:
         for item in self.hist_tree.get_children():
             self.hist_tree.delete(item)
         for row in load_history():
-            rid, created, model, conc, total, ok, fail, avg_lat, p95, tps, dur = row
+            rid = row["id"]
+            created = row["created_at"]
+            model = row["model"]
+            conc = row["concurrency"]
+            total = row["total"]
+            success_rate = row["success_rate"] or 0.0
+            e2e_p95 = row["e2e_latency_p95"] or 0.0
+            ttft_avg = row["ttft_avg"]
+            sys_tps = row["system_output_tps"] or 0.0
+            rps = row["request_throughput_rps"] or 0.0
+            dur = row["duration_sec"]
+            std = "v1" if (row["metric_standard"] or "").startswith("JISUMAN") else "-"
             self.hist_tree.insert("", tk.END, values=(
-                rid, created, model, conc, total, ok, fail,
-                f"{avg_lat:.2f}s" if avg_lat else "-",
-                f"{p95:.2f}s" if p95 else "-",
-                f"{tps:.1f}" if tps else "-",
+                rid, created, model, conc, total,
+                f"{success_rate:.0f}%" if success_rate else "-",
+                f"{e2e_p95:.2f}s" if e2e_p95 else "-",
+                f"{ttft_avg:.3f}s" if ttft_avg else "-",
+                f"{sys_tps:.1f}" if sys_tps else "-",
+                f"{rps:.2f}" if rps else "-",
                 f"{dur:.1f}s" if dur else "-",
+                std,
             ))
     def _clear_history(self):
         if not messagebox.askyesno("确认", "确定要清空所有历史记录吗？"):
@@ -1937,14 +2882,25 @@ class LLMBenchmarkApp:
             return
         rid = self.hist_tree.item(sel[0], "values")[0]
         conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM benchmarks WHERE id=?",
                            (rid,)).fetchone()
         conn.close()
         if not row:
             return
-        detail = json.loads(row[21]) if row[21] else []
-        latencies = [r["latency"] for r in detail if r["ok"]]
-        fail_detail = [r for r in detail if not r["ok"]]
+        detail = json.loads(row["detail_json"]) if row["detail_json"] else []
+        # backward compat: old records use "latency", new records use "e2e_latency"
+        latencies = [
+            r.get("e2e_latency", r.get("latency", 0))
+            for r in detail if r.get("ok")
+        ] if detail else []
+        fail_detail = [r for r in detail if not r.get("ok")]
+        # load warnings from DB
+        metric_warnings = []
+        try:
+            metric_warnings = json.loads(row["metric_warnings_json"] or "[]")
+        except Exception:
+            pass
 
         top = tk.Toplevel(self.root)
         top.title(f"测试详情  #{rid}")
@@ -1967,49 +2923,68 @@ class LLMBenchmarkApp:
         # row 1: model + concurrency + duration
         r1 = tk.Frame(card_inner, bg=C_STYLE["bg_card"])
         r1.pack(fill=tk.X)
-        tk.Label(r1, text=f"模型: {row[3]}", font=C_STYLE["font_section"],
+        tk.Label(r1, text=f"模型: {row['model']}", font=C_STYLE["font_section"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).pack(side=tk.LEFT)
-        tk.Label(r1, text=f"  并发: {row[7]}", font=C_STYLE["font_body"],
+        tk.Label(r1, text=f"  并发: {row['concurrency']}", font=C_STYLE["font_body"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_secondary"]).pack(
             side=tk.LEFT, padx=(C_STYLE["pad_md"], 0))
-        tk.Label(r1, text=f"请求: {row[8]}", font=C_STYLE["font_body"],
+        tk.Label(r1, text=f"请求: {row['total']}", font=C_STYLE["font_body"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_secondary"]).pack(
             side=tk.LEFT, padx=(C_STYLE["pad_md"], 0))
-        succ_color = C_STYLE["success"] if row[9] == row[8] else \
-                     C_STYLE["warning"] if row[9] > 0 else C_STYLE["error"]
-        tk.Label(r1, text=f"成功: {row[9]}", font=C_STYLE["font_body"],
+        succ = row["success"] or 0
+        fail = row["fail"] or 0
+        total = row["total"] or 1
+        succ_color = C_STYLE["success"] if succ == total else \
+                     C_STYLE["warning"] if succ > 0 else C_STYLE["error"]
+        tk.Label(r1, text=f"成功: {succ}", font=C_STYLE["font_body"],
                  bg=C_STYLE["bg_card"], fg=succ_color).pack(
             side=tk.LEFT, padx=(C_STYLE["pad_md"], 0))
-        if row[10] > 0:
-            tk.Label(r1, text=f"失败: {row[10]}", font=C_STYLE["font_body"],
+        if fail > 0:
+            tk.Label(r1, text=f"失败: {fail}", font=C_STYLE["font_body"],
                      bg=C_STYLE["bg_card"], fg=C_STYLE["error"]).pack(
                 side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
-        tk.Label(r1, text=f"耗时: {row[20]:.1f}s" if row[20] else "耗时: —",
+        dur = row["duration_sec"]
+        tk.Label(r1, text=f"耗时: {dur:.1f}s" if dur else "耗时: —",
                  font=C_STYLE["font_body"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_secondary"]).pack(
             side=tk.RIGHT)
-        # row 2: latency metrics
+        # row 2: latency + TTFT/TPOT metrics
         r2 = tk.Frame(card_inner, bg=C_STYLE["bg_card"])
         r2.pack(fill=tk.X, pady=(C_STYLE["gap_sm"], 0))
         metrics_text = (
-            f"最小: {row[11]:.3f}s" if row[11] else "最小: —"
+            f"E2E avg: {row['e2e_latency_avg']:.3f}s" if row["e2e_latency_avg"] else "E2E avg: —"
         ) + "    " + (
-            f"平均: {row[12]:.3f}s" if row[12] else "平均: —"
+            f"E2E P95: {row['e2e_latency_p95']:.3f}s" if row["e2e_latency_p95"] else "E2E P95: —"
         ) + "    " + (
-            f"最大: {row[13]:.3f}s" if row[13] else "最大: —"
+            f"TTFT: {row['ttft_avg']:.3f}s" if row["ttft_avg"] else "TTFT: —"
         )
         tk.Label(r2, text=metrics_text, font=C_STYLE["font_small"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).pack(side=tk.LEFT)
         pct_text = (
-            f"P50: {row[14]:.3f}s" if row[14] else "P50: —"
+            f"Output TPS: {row['system_output_tps']:.1f}" if row["system_output_tps"] else "Output TPS: —"
         ) + "    " + (
-            f"P95: {row[15]:.3f}s" if row[15] else "P95: —"
+            f"Req/s: {row['request_throughput_rps']:.2f}" if row["request_throughput_rps"] else "Req/s: —"
         ) + "    " + (
-            f"P99: {row[16]:.3f}s" if row[16] else "P99: —"
+            f"Success: {row['success_rate']:.0f}%" if row["success_rate"] else "Success: —"
         )
         tk.Label(r2, text=pct_text, font=C_STYLE["font_small"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_secondary"]).pack(
             side=tk.LEFT, padx=(C_STYLE["gap_lg"], 0))
+
+        # row 3: metric standard + warnings
+        if row["metric_standard"] or metric_warnings:
+            r3 = tk.Frame(card_inner, bg=C_STYLE["bg_card"])
+            r3.pack(fill=tk.X, pady=(C_STYLE["gap_sm"], 0))
+            std_label = f"标准: {row['metric_standard']}" if row["metric_standard"] else "标准: —"
+            warn_label = f"  |  警告: {len(metric_warnings)} 条" if metric_warnings else ""
+            tk.Label(r3, text=std_label + warn_label, font=C_STYLE["font_small"],
+                     bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"] if not metric_warnings else C_STYLE["warning"]).pack(side=tk.LEFT)
+            if metric_warnings:
+                r3w = tk.Frame(card_inner, bg=C_STYLE["bg_card"])
+                r3w.pack(fill=tk.X, pady=(2, 0))
+                for w in metric_warnings[:5]:
+                    tk.Label(r3w, text=f"  • {w[:100]}", font=C_STYLE["font_small"],
+                             bg=C_STYLE["bg_card"], fg=C_STYLE["warning_text"]).pack(anchor="w")
 
         # ── histogram ──
         hist_frame = tk.Frame(top, bg=C_STYLE["bg_card"],
