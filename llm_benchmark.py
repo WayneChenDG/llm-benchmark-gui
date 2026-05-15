@@ -49,6 +49,7 @@ BENCHMARK_PRESETS = {
     "标准基线 — C8/N80（默认）": {"concurrency": 8,  "total": 80,  "desc": "标准并发基线测试，默认推荐"},
     "中高并发 — C16/N160":      {"concurrency": 16, "total": 160, "desc": "中高并发，验证服务端排队行为"},
     "压力测试 — C32/N320":      {"concurrency": 32, "total": 320, "desc": "压力测试，接近服务端上限（需确认）"},
+    "自定义":                    {"concurrency": 64, "total": 640, "desc": "自定义并发与请求数，可手动修改"},
 }
 DEFAULT_PRESET_KEY = "标准基线 — C8/N80（默认）"
 # ---------- 字体自动检测 ----------
@@ -150,6 +151,45 @@ C_STYLE = {
     # ── accent bars ──
     "bar_width": 4,              # left accent strip width
 }
+class ScrollableFrame(tk.Frame):
+    """A scrollable container that can hold any content.
+    Mousewheel scrolling auto-binds on enter/leave."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent, *args, **kwargs)
+        self.canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0,
+                                bg=C_STYLE["bg_main"])
+        self.scrollbar = ttk.Scrollbar(self, orient=tk.VERTICAL, command=self.canvas.yview)
+        self.content = tk.Frame(self.canvas, bg=C_STYLE["bg_main"])
+        self.window_id = self.canvas.create_window((0, 0), window=self.content, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.scrollbar.grid(row=0, column=1, sticky="ns")
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        self.content.bind("<Configure>", lambda e: self.canvas.configure(
+            scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(
+            self.window_id, width=e.width))
+        self._bind_mousewheel()
+    def _bind_mousewheel(self):
+        def _mw(event):
+            try:
+                if hasattr(event, 'delta'):
+                    self.canvas.yview_scroll(int(-event.delta / 120), "units")
+                elif event.num == 4:
+                    self.canvas.yview_scroll(-1, "units")
+                elif event.num == 5:
+                    self.canvas.yview_scroll(1, "units")
+            except Exception:
+                pass
+        self.canvas.bind("<Enter>", lambda e: (
+            self.canvas.bind_all("<MouseWheel>", _mw),
+            self.canvas.bind_all("<Button-4>", _mw),
+            self.canvas.bind_all("<Button-5>", _mw)))
+        self.canvas.bind("<Leave>", lambda e: (
+            self.canvas.unbind_all("<MouseWheel>"),
+            self.canvas.unbind_all("<Button-4>"),
+            self.canvas.unbind_all("<Button-5>")))
 class SectionCard(tk.Frame):
     """卡片容器：白色背景 + 1px浅灰边框 + 标题分隔线 + 内边距"""
     def __init__(self, parent, title: str = "", **kw):
@@ -1391,12 +1431,13 @@ class LLMBenchmarkApp:
         ttk.Label(left, text="OpenAI 兼容接口并发性能测试", style="Subtitle.TLabel").pack(anchor="w")
         right = tk.Frame(inner, bg=C_STYLE["bg_header"])
         right.pack(side=tk.RIGHT)
-        # status pill
+        # status pill (fixed min-width to prevent overflow)
         pill = tk.Frame(right, bg=C_STYLE["bg_stripe"], highlightbackground=C_STYLE["border"],
-                        highlightthickness=1, bd=0)
+                        highlightthickness=1, bd=0, width=240)
         pill.pack(side=tk.RIGHT, padx=(C_STYLE["pad_sm"], 0))
+        pill.pack_propagate(False)  # lock width
         pill_inner = tk.Frame(pill, bg=C_STYLE["bg_stripe"])
-        pill_inner.pack(padx=C_STYLE["pad_sm"], pady=3)
+        pill_inner.pack(padx=C_STYLE["pad_sm"], pady=3, fill=tk.X)
         self._status_dot = tk.Label(pill_inner, text=" ●", font=(FONT_FAMILY, 9),
                                     bg=C_STYLE["bg_stripe"], fg=C_STYLE["text_muted"])
         self._status_dot.pack(side=tk.LEFT)
@@ -1435,10 +1476,18 @@ class LLMBenchmarkApp:
         canvas.create_window((0, 0), window=inner, anchor="nw", tags="inner")
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
         # Bind canvas resize to update inner window width
         def _on_canvas_resize(event):
             canvas.itemconfig("inner", width=event.width)
         canvas.bind("<Configure>", _on_canvas_resize, add="+")
+
+        # Enable mousewheel scrolling
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
 
         col = tk.Frame(inner, bg=C_STYLE["bg_main"])
         col.pack(fill=tk.X, padx=C_STYLE["pad_lg"], pady=C_STYLE["pad_lg"])
@@ -1476,85 +1525,9 @@ class LLMBenchmarkApp:
         self._labeled_text(card_a.content, "用户提示词", self.prompt_var, 4, height=2)
         card_b = SectionCard(col, "测试参数")
         card_b.pack(fill=tk.X, pady=(0, C_STYLE["gap_lg"]))
-        param_grid = tk.Frame(card_b.content, bg=C_STYLE["bg_card"])
-        param_grid.pack(fill=tk.X)
-        self.max_tokens_var = tk.IntVar(value=512)
-        self._labeled_spin(param_grid, "最大 Token 数", self.max_tokens_var,
-                           16, 8192, 0, 0)
-        self.temp_var = tk.DoubleVar(value=0.0)
-        self._labeled_spin(param_grid, "温度参数", self.temp_var,
-                           0.0, 2.0, 0, 1, step=0.1)
-        self.total_var = tk.IntVar(value=80)
-        self._labeled_spin(param_grid, "请求总数", self.total_var,
-                           1, 500, 1, 0, step=5)
-        tk.Label(param_grid, text="并发预设", font=C_STYLE["font_body"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
-            row=1, column=2, sticky="w",
-            padx=(C_STYLE["gap_lg"], C_STYLE["pad_sm"]),
-            pady=(C_STYLE["gap_sm"], 0))
-        self.concurrency_var = tk.StringVar(value=DEFAULT_PRESET_KEY)
-        cb = ttk.Combobox(param_grid, textvariable=self.concurrency_var,
-                          values=list(BENCHMARK_PRESETS.keys()),
-                          width=47, state="readonly")
-        cb.grid(row=1, column=3, sticky="ew", padx=(0, 0), pady=(C_STYLE["gap_sm"], 0))
-        param_grid.columnconfigure(1, weight=1)
-        param_grid.columnconfigure(3, weight=1)
-        # enforce: total >= concurrency, and sync total to preset total
-        def _sync_total_to_concurrency(*args):
-            label = self.concurrency_var.get()
-            preset_cfg = BENCHMARK_PRESETS.get(label, {})
-            conc = preset_cfg.get("concurrency", 1)
-            ptotal = preset_cfg.get("total", conc)
-            if self.total_var.get() < conc:
-                self.total_var.set(conc)
-            self.total_var.set(ptotal)
-        self.concurrency_var.trace_add("write", _sync_total_to_concurrency)
-        # warmup requests
-        tk.Label(param_grid, text="预热请求数", font=C_STYLE["font_body"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
-            row=3, column=2, sticky="w",
-            padx=(C_STYLE["gap_lg"], C_STYLE["pad_sm"]),
-            pady=(C_STYLE["gap_sm"], 0))
-        self.warmup_var = tk.IntVar(value=2)
-        ttk.Spinbox(param_grid, from_=0, to=20, increment=1,
-                    textvariable=self.warmup_var, width=10).grid(
-            row=3, column=3, sticky="w", pady=(C_STYLE["gap_sm"], 0))
-        self.concurrency_var.trace_add("write", _sync_total_to_concurrency)
-        # save report toggle
-        tk.Label(param_grid, text="保存测试报告", font=C_STYLE["font_body"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
-            row=2, column=0, sticky="w",
-            padx=(0, C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0))
-        self.save_report_var = tk.StringVar(value="否")
-        ttk.Combobox(param_grid, textvariable=self.save_report_var,
-                     values=["否", "是"], width=47, state="readonly").grid(
-            row=2, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
-        # stream mode toggle
-        tk.Label(param_grid, text="流式模式", font=C_STYLE["font_body"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
-            row=2, column=2, sticky="w",
-            padx=(C_STYLE["gap_lg"], C_STYLE["pad_sm"]),
-            pady=(C_STYLE["gap_sm"], 0))
-        self.stream_var = tk.StringVar(value="是")
-        ttk.Combobox(param_grid, textvariable=self.stream_var,
-                     values=["是", "否"], width=47, state="readonly").grid(
-            row=2, column=3, sticky="w", pady=(C_STYLE["gap_sm"], 0))
-        # auto-save toggle (moved to row 3)
-        tk.Label(param_grid, text="自动保存配置", font=C_STYLE["font_body"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
-            row=3, column=0, sticky="w",
-            padx=(0, C_STYLE["pad_sm"]),
-            pady=(C_STYLE["gap_sm"], 0))
-        self.auto_save_var = tk.StringVar(value="否")
-        ttk.Combobox(param_grid, textvariable=self.auto_save_var,
-                     values=["否", "是"], width=47, state="readonly").grid(
-            row=3, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
-        # wire auto-save traces on all config vars
-        for v in (self.url_var, self.key_var, self.model_var,
-                  self.max_tokens_var, self.temp_var, self.total_var,
-                  self.concurrency_var, self.save_report_var,
-                  self.stream_var, self.warmup_var, self.auto_save_var):
-            v.trace_add("write", lambda *a: self._auto_save_check())
+        self._build_test_params(card_b.content)
+
+
         card_c = SectionCard(col, "操作")
         card_c.pack(fill=tk.X)
         btn_row = tk.Frame(card_c.content, bg=C_STYLE["bg_card"])
@@ -1578,14 +1551,145 @@ class LLMBenchmarkApp:
         self.progress = ttk.Progressbar(card_c.content, mode="determinate",
                                         style="Accent.Horizontal.TProgressbar")
         self.progress.pack(fill=tk.X, pady=(C_STYLE["pad_sm"], 0))
+    def _build_test_params(self, parent):
+        """Build test parameters area with 3 logical groups: 生成参数, 负载参数, 保存选项."""
+        LABEL_W = 14  # uniform label width
+        SPIN_W = 8    # uniform spinbox width
+
+        def _lbl(pr, text, row, col, **kw):
+            tk.Label(pr, text=text, font=C_STYLE["font_body"], width=LABEL_W,
+                     bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"],
+                     anchor="w").grid(row=row, column=col, sticky="w", **kw)
+
+        # ═══ Group 1: 生成参数 ═══
+        gen = ttk.LabelFrame(parent, text="生成参数", padding=C_STYLE["pad_md"])
+        gen.pack(fill=tk.X, pady=(0, C_STYLE["gap_md"]))
+        gen.columnconfigure(1, weight=1)
+        gen.columnconfigure(3, weight=1)
+
+        self.max_tokens_var = tk.IntVar(value=512)
+        _lbl(gen, "最大 Token 数", 0, 0, padx=(0, C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0))
+        ttk.Spinbox(gen, from_=16, to=8192, increment=16,
+                    textvariable=self.max_tokens_var, width=SPIN_W).grid(
+            row=0, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
+
+        self.temp_var = tk.DoubleVar(value=0.0)
+        _lbl(gen, "温度参数", 0, 2, padx=(C_STYLE["gap_lg"], C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0))
+        ttk.Spinbox(gen, from_=0.0, to=2.0, increment=0.1,
+                    textvariable=self.temp_var, width=SPIN_W).grid(
+            row=0, column=3, sticky="w", pady=(C_STYLE["gap_sm"], 0))
+
+        self.stream_var = tk.StringVar(value="是")
+        _lbl(gen, "流式模式", 1, 0, padx=(0, C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0))
+        ttk.Combobox(gen, textvariable=self.stream_var,
+                     values=["是", "否"], width=10, state="readonly").grid(
+            row=1, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
+
+        # ═══ Group 2: 负载参数 ═══
+        load = ttk.LabelFrame(parent, text="负载参数", padding=C_STYLE["pad_md"])
+        load.pack(fill=tk.X, pady=(0, C_STYLE["gap_md"]))
+        load.columnconfigure(1, weight=1)
+        load.columnconfigure(3, weight=1)
+
+        self.concurrency_var = tk.StringVar(value=DEFAULT_PRESET_KEY)
+        _lbl(load, "并发预设", 0, 0, padx=(0, C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0))
+        ttk.Combobox(load, textvariable=self.concurrency_var,
+                     values=list(BENCHMARK_PRESETS.keys()),
+                     width=30, state="readonly").grid(
+            row=0, column=1, columnspan=3, sticky="w", pady=(C_STYLE["gap_sm"], 0))
+
+        self.custom_conc_var = tk.StringVar(value="8")
+        self.total_var = tk.StringVar(value="80")
+        _lbl(load, "并发数", 1, 0, padx=(0, C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0))
+        self.custom_conc_spin = ttk.Spinbox(load, from_=1, to=512, increment=1,
+                                            textvariable=self.custom_conc_var, width=SPIN_W)
+        self.custom_conc_spin.grid(row=1, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
+        self.custom_conc_spin.configure(state="disabled")
+
+        _lbl(load, "请求总数", 1, 2, padx=(C_STYLE["gap_lg"], C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0))
+        self.total_spin = ttk.Spinbox(load, from_=1, to=9999, increment=5,
+                                      textvariable=self.total_var, width=SPIN_W)
+        self.total_spin.grid(row=1, column=3, sticky="w", pady=(C_STYLE["gap_sm"], 0))
+        self.total_spin.configure(state="disabled")
+
+        self.warmup_var = tk.IntVar(value=2)
+        _lbl(load, "预热请求数", 2, 0, padx=(0, C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0))
+        ttk.Spinbox(load, from_=0, to=20, increment=1,
+                    textvariable=self.warmup_var, width=SPIN_W).grid(
+            row=2, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
+
+        # sync logic: preset <-> concurrency/total (safe parse to avoid TclError)
+        CUSTOM_KEY = "自定义"
+
+        def _safe_int(s, default=0):
+            try:
+                v = str(s).strip()
+                return int(float(v)) if v else default
+            except Exception:
+                return default
+
+        def _sync_total_to_concurrency(*args):
+            label = self.concurrency_var.get()
+            if label == CUSTOM_KEY:
+                self.custom_conc_spin.configure(state="normal")
+                self.total_spin.configure(state="normal")
+            else:
+                self.custom_conc_spin.configure(state="disabled")
+                self.total_spin.configure(state="disabled")
+                preset_cfg = BENCHMARK_PRESETS.get(label, {})
+                conc = preset_cfg.get("concurrency", 8)
+                ptotal = preset_cfg.get("total", conc)
+                self.custom_conc_var.set(str(conc))
+                self.total_var.set(str(ptotal))
+
+        self.concurrency_var.trace_add("write", _sync_total_to_concurrency)
+        self.custom_conc_var.trace_add("write", lambda *a: (
+            self.total_var.set(str(_safe_int(self.custom_conc_var.get()) * 10))
+            if self.concurrency_var.get() == CUSTOM_KEY and _safe_int(self.custom_conc_var.get()) > 0
+            else None
+        ))
+
+        # ═══ Group 3: 保存选项 ═══
+        saveg = ttk.LabelFrame(parent, text="保存选项", padding=C_STYLE["pad_md"])
+        saveg.pack(fill=tk.X, pady=(0, C_STYLE["gap_md"]))
+        saveg.columnconfigure(1, weight=1)
+        saveg.columnconfigure(3, weight=1)
+
+        self.save_report_var = tk.StringVar(value="否")
+        _lbl(saveg, "保存测试报告", 0, 0, padx=(0, C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0))
+        ttk.Combobox(saveg, textvariable=self.save_report_var,
+                     values=["否", "是"], width=10, state="readonly").grid(
+            row=0, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
+
+        self.auto_save_var = tk.StringVar(value="否")
+        _lbl(saveg, "自动保存配置", 0, 2, padx=(C_STYLE["gap_lg"], C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0))
+        ttk.Combobox(saveg, textvariable=self.auto_save_var,
+                     values=["否", "是"], width=10, state="readonly").grid(
+            row=0, column=3, sticky="w", pady=(C_STYLE["gap_sm"], 0))
+
+        # wire auto-save traces
+        for v in (self.url_var, self.key_var, self.model_var,
+                  self.max_tokens_var, self.temp_var, self.total_var,
+                  self.concurrency_var, self.save_report_var,
+                  self.stream_var, self.warmup_var, self.auto_save_var):
+            v.trace_add("write", lambda *a: self._auto_save_check())
     def _build_results_tab(self):
         bf = self.bench_frame
+        bf.grid_columnconfigure(0, weight=1)
+        bf.grid_rowconfigure(0, weight=1)
+
+        bench_scroll = ScrollableFrame(bf, bg=C_STYLE["bg_main"])
+        bench_scroll.grid(row=0, column=0, sticky="nsew")
+        bf_inner = tk.Frame(bench_scroll.content, bg=C_STYLE["bg_main"])
+        bf_inner.pack(fill=tk.BOTH, expand=True, padx=C_STYLE["pad_lg"], pady=C_STYLE["pad_lg"])
+        # redirect bf to inner for existing widget parents
+        bf = bf_inner
         bf.grid_columnconfigure(0, weight=1)
         bf.grid_rowconfigure(0, weight=0)  # status cards — fixed
         bf.grid_rowconfigure(1, weight=0)  # metrics — fixed
         bf.grid_rowconfigure(2, weight=0)  # notice — fixed
-        bf.grid_rowconfigure(3, weight=6)  # histogram — most height
-        bf.grid_rowconfigure(4, weight=1)  # report — compact
+        bf.grid_rowconfigure(3, weight=0)  # histogram — fixed height
+        bf.grid_rowconfigure(4, weight=1)  # report — expandable
         status_row = tk.Frame(bf, bg=C_STYLE["bg_main"])
         status_row.grid(row=0, column=0, sticky="ew", pady=(0, C_STYLE["gap_lg"]))
         for i in range(4):
@@ -1632,10 +1736,9 @@ class LLMBenchmarkApp:
         hist_card.grid(row=3, column=0, sticky="nsew",
                        pady=(0, C_STYLE["gap_lg"]))
         hist_card.columnconfigure(0, weight=1)
-        self.hist_canvas = tk.Canvas(hist_card.content,
+        self.hist_canvas = tk.Canvas(hist_card.content, height=260,
                                      bg=C_STYLE["bg_card"],
-                                     highlightthickness=0, bd=0,
-                                     height=250)
+                                     highlightthickness=0, bd=0)
         self.hist_canvas.grid(row=0, column=0, sticky="nsew")
         report_card = SectionCard(bf, "详细报告")
         report_card.grid(row=4, column=0, sticky="nsew",
@@ -1739,7 +1842,7 @@ class LLMBenchmarkApp:
             self._status_dot.config(text="✓", fg=C_STYLE["success"],
                                     font=C_STYLE["font_status"])
             self._status_badge_lbl.config(
-                text=f"已完成 · {self._run_completed}/{self._run_total} · fail={self._run_fail} · {elapsed}",
+                text=f"已完成 · {self._run_completed}/{self._run_total} · ✕{self._run_fail} · {elapsed}",
                 fg=C_STYLE["success"])
         elif final_status == "failed":
             self._status_dot.config(text="✕", fg=C_STYLE["error"],
@@ -1760,7 +1863,7 @@ class LLMBenchmarkApp:
         progress = ""
         if self._run_total:
             progress = f" · {self._run_completed}/{self._run_total}"
-        fail_part = f" · fail={self._run_fail}"
+        fail_part = f" · ✕{self._run_fail}" if self._run_fail else ""
         phase_text = self._phase_display_name(self._run_phase)
         self._status_dot.config(text=frame, fg=C_STYLE["accent"], font=(FONT_FAMILY, 9))
         self._status_badge_lbl.config(
@@ -1794,7 +1897,7 @@ class LLMBenchmarkApp:
         self.prompt_var.set("请用300字左右介绍机器学习。")
         self.max_tokens_var.set(512)
         self.temp_var.set(0.0)
-        self.total_var.set(80)
+        self.total_var.set("80")
         self.concurrency_var.set(DEFAULT_PRESET_KEY)
         self.stream_var.set("是")
         self.warmup_var.set(2)
@@ -1826,8 +1929,8 @@ class LLMBenchmarkApp:
                                     fallback=self.max_tokens_var.get()))
             self.temp_var.set(cfg.getfloat("test", "temperature",
                               fallback=self.temp_var.get()))
-            self.total_var.set(cfg.getint("test", "total_requests",
-                               fallback=self.total_var.get()))
+            self.total_var.set(str(int(cfg.getint("test", "total_requests",
+                               fallback=80))))
             concurrency_label = cfg.get("test", "concurrency",
                                         fallback=self.concurrency_var.get())
             if concurrency_label in BENCHMARK_PRESETS:
@@ -1837,7 +1940,7 @@ class LLMBenchmarkApp:
             self.stream_var.set(cfg.get("test", "stream_mode",
                                   fallback=self.stream_var.get()))
             self.warmup_var.set(cfg.getint("test", "warmup",
-                                fallback=self.warmup_var.get()))
+                                fallback=2))
             self.auto_save_var.set(cfg.get("test", "auto_save",
                                    fallback=self.auto_save_var.get()))
         # sync Text widgets
@@ -2238,13 +2341,26 @@ class LLMBenchmarkApp:
         user_prompt = self.prompt_var.get().strip()
         max_tokens = self.max_tokens_var.get()
         temperature = self.temp_var.get()
-        total = self.total_var.get()
+        try:
+            total = int(float(str(self.total_var.get()).strip()))
+        except Exception:
+            total = 1
         concurrency_label = self.concurrency_var.get()
-        preset_cfg = BENCHMARK_PRESETS.get(concurrency_label, {})
-        concurrency = preset_cfg.get("concurrency", 8)
+        CUSTOM_KEY2 = "自定义"
+        if concurrency_label == CUSTOM_KEY2:
+            try:
+                concurrency = int(float(str(self.custom_conc_var.get()).strip()))
+            except Exception:
+                concurrency = 1
+        else:
+            preset_cfg = BENCHMARK_PRESETS.get(concurrency_label, {})
+            concurrency = preset_cfg.get("concurrency", 8)
         preset_name = concurrency_label
         stream = self.stream_var.get() == "是"
-        warmup = self.warmup_var.get()
+        try:
+            warmup = int(float(str(self.warmup_var.get()).strip()))
+        except Exception:
+            warmup = 0
         if not api_url:
             messagebox.showerror("错误", "请输入 API 地址")
             return
