@@ -191,6 +191,7 @@ class MetricItem(tk.Frame):
         "system_output_tps": C_STYLE["success"], "output_tokens": C_STYLE["warning"],
         "tpot": C_STYLE["accent"], "itl": C_STYLE["accent"],
         "success_rate": C_STYLE["success"],
+        "visible_ttft": C_STYLE["warning"],
     }
     def __init__(self, parent, label: str, value: str = "—", metric_key: str = "", **kw):
         super().__init__(parent, bg=C_STYLE["bg_card"],
@@ -715,6 +716,7 @@ def call_llm(api_url: str, api_key: str, model: str, messages: list[dict],
     def _success_result(e2e_latency, ttft, tpot, itl_avg, itl_values,
                         prompt_tokens, completion_tokens, total_tokens,
                         finish_reason, used_stream,
+                        visible_ttft=None, visible_tpot=None,
                         debug_fields=None):
         latency = e2e_latency
         per_req_out_tps = completion_tokens / e2e_latency if e2e_latency > 0 and completion_tokens > 0 else 0.0
@@ -726,7 +728,9 @@ def call_llm(api_url: str, api_key: str, model: str, messages: list[dict],
             "e2e_latency": round(e2e_latency, 6),
             "latency": round(latency, 6),
             "ttft": round(ttft, 6) if ttft is not None else None,
+            "visible_ttft": round(visible_ttft, 6) if visible_ttft is not None else None,
             "tpot": round(tpot, 6) if tpot is not None else None,
+            "visible_tpot": round(visible_tpot, 6) if visible_tpot is not None else None,
             "itl_avg": round(itl_avg, 6) if itl_avg is not None else None,
             "itl_values": [round(v, 6) for v in itl_values],
             "prompt_tokens": prompt_tokens,
@@ -797,7 +801,7 @@ def call_llm(api_url: str, api_key: str, model: str, messages: list[dict],
 
         first_data_line_time = None
         first_json_chunk_time = None
-        first_token_time = None
+        first_non_empty_time = None
         token_timestamps = []
         completion_tokens = 0
         prompt_tokens = 0
@@ -845,8 +849,8 @@ def call_llm(api_url: str, api_key: str, model: str, messages: list[dict],
                     if text_piece:
                         content_pieces += 1
                         token_timestamps.append(now)
-                        if first_token_time is None:
-                            first_token_time = now
+                        if first_non_empty_time is None:
+                            first_non_empty_time = now
                     fr = choices[0].get("finish_reason") or ""
                     if fr:
                         finish_reason = fr
@@ -866,13 +870,29 @@ def call_llm(api_url: str, api_key: str, model: str, messages: list[dict],
             logging.debug("stream: no usage in response, token_source=%s content_pieces=%d",
                           token_source, content_pieces)
 
-        # Compute TTFT
-        ttft = (first_token_time - request_start) if first_token_time is not None else None
+        # ── split TTFT: benchmark-aligned (first stream chunk) vs user-visible (first non-empty) ──
+        first_data_line_s  = round(first_data_line_time  - request_start, 6) if first_data_line_time  else None
+        first_json_chunk_s = round(first_json_chunk_time - request_start, 6) if first_json_chunk_time else None
+        first_non_empty_s  = round(first_non_empty_time  - request_start, 6) if first_non_empty_time  else None
 
-        # Compute TPOT
+        # vLLM-compatible TTFT = first JSON chunk (or first data line as fallback)
+        ttft = first_json_chunk_s if first_json_chunk_s is not None else first_data_line_s
+        # user-visible TTFT = first non-empty content
+        visible_ttft = first_non_empty_s
+
+        first_visible_gap_s = None
+        if first_data_line_s is not None and first_non_empty_s is not None:
+            first_visible_gap_s = round(first_non_empty_s - first_data_line_s, 6)
+
+        # Compute TPOT using benchmark-aligned TTFT
         tpot = None
         if ttft is not None and completion_tokens >= 2 and (e2e_latency - ttft) > 0:
-            tpot = (e2e_latency - ttft) / (completion_tokens - 1)
+            tpot = (e2e_latency - ttft) / max(completion_tokens - 1, 1)
+
+        # Visible TPOT (debug only — uses first visible token)
+        visible_tpot = None
+        if visible_ttft is not None and completion_tokens >= 2 and (e2e_latency - visible_ttft) > 0:
+            visible_tpot = (e2e_latency - visible_ttft) / max(completion_tokens - 1, 1)
 
         # Compute ITL
         itl_values = []
@@ -885,19 +905,21 @@ def call_llm(api_url: str, api_key: str, model: str, messages: list[dict],
             itl_avg = statistics.mean(itl_values)
 
         if DEBUG_MODE:
-            logging.debug("OK (stream) e2e=%.3fs ttft=%.3fs tpot=%.3fs tokens=%d content_pieces=%d finish=%s",
-                          e2e_latency, ttft or -1, tpot or -1, total_tokens, content_pieces, finish_reason)
+            logging.debug("OK (stream) e2e=%.3fs ttft=%.3fs visible_ttft=%.3fs tpot=%.3fs tokens=%d content_pieces=%d finish=%s",
+                          e2e_latency, ttft or -1, visible_ttft or -1, tpot or -1, total_tokens, content_pieces, finish_reason)
 
         debug_fields = {
-            "first_data_line_s": round(first_data_line_time - request_start, 6) if first_data_line_time else None,
-            "first_json_chunk_s": round(first_json_chunk_time - request_start, 6) if first_json_chunk_time else None,
-            "first_non_empty_s": round(first_token_time - request_start, 6) if first_token_time else None,
+            "first_data_line_s": first_data_line_s,
+            "first_json_chunk_s": first_json_chunk_s,
+            "first_non_empty_s": first_non_empty_s,
+            "first_visible_gap_s": first_visible_gap_s,
             "content_pieces": content_pieces,
             "raw_data_lines": raw_data_lines,
         }
         return _success_result(e2e_latency, ttft, tpot, itl_avg, itl_values,
                                prompt_tokens, completion_tokens, total_tokens,
-                               finish_reason, True, debug_fields=debug_fields)
+                               finish_reason, True, visible_ttft=visible_ttft,
+                               visible_tpot=visible_tpot, debug_fields=debug_fields)
 
     except Exception as e:
         e2e_latency = time.perf_counter() - request_start
@@ -1004,10 +1026,18 @@ def aggregate_results(results: list[dict], duration: float, config: dict) -> dic
         for r in ok_results
         if isinstance(r.get("ttft"), (int, float)) and r.get("ttft") is not None
     ]
-    tpots = [r["tpot"] for r in ok_results if r.get("tpot") is not None]
+    tpots = [r.get("tpot") for r in ok_results if isinstance(r.get("tpot"), (int, float))]
     itl_values_all = []
     for r in ok_results:
         itl_values_all.extend(r.get("itl_values", []))
+
+    # ── split TTFT: first_stream / first_visible ──
+    first_data_lines    = [r.get("first_data_line_s")  for r in ok_results if isinstance(r.get("first_data_line_s"),  (int, float))]
+    first_json_chunks   = [r.get("first_json_chunk_s") for r in ok_results if isinstance(r.get("first_json_chunk_s"), (int, float))]
+    first_visible_tokens = [r.get("first_non_empty_s") for r in ok_results if isinstance(r.get("first_non_empty_s"), (int, float))]
+    visible_ttfts       = [r.get("visible_ttft")       for r in ok_results if isinstance(r.get("visible_ttft"),       (int, float))]
+    visible_tpots       = [r.get("visible_tpot")       for r in ok_results if isinstance(r.get("visible_tpot"),       (int, float))]
+    first_visible_gaps  = [r.get("first_visible_gap_s") for r in ok_results if isinstance(r.get("first_visible_gap_s"), (int, float))]
 
     # ── tokens ──
     total_input_tokens = sum(r.get("prompt_tokens", 0) for r in ok_results)
@@ -1094,6 +1124,40 @@ def aggregate_results(results: list[dict], duration: float, config: dict) -> dic
         "itl_p50": _p(itl_values_all, 50),
         "itl_p95": _p(itl_values_all, 95),
         "itl_p99": _p(itl_values_all, 99),
+
+        # ── split TTFT: first stream chunk (vLLM-aligned) ──
+        "first_data_line_avg":  round(statistics.mean(first_data_lines),  3) if first_data_lines  else 0,
+        "first_data_line_p50":  _p(first_data_lines, 50),
+        "first_data_line_p95":  _p(first_data_lines, 95),
+        "first_data_line_p99":  _p(first_data_lines, 99),
+
+        "first_json_chunk_avg": round(statistics.mean(first_json_chunks), 3) if first_json_chunks else 0,
+        "first_json_chunk_p50": _p(first_json_chunks, 50),
+        "first_json_chunk_p95": _p(first_json_chunks, 95),
+        "first_json_chunk_p99": _p(first_json_chunks, 99),
+
+        # ── split TTFT: first visible token (user-perceived) ──
+        "first_visible_token_avg": round(statistics.mean(first_visible_tokens), 3) if first_visible_tokens else 0,
+        "first_visible_token_p50": _p(first_visible_tokens, 50),
+        "first_visible_token_p95": _p(first_visible_tokens, 95),
+        "first_visible_token_p99": _p(first_visible_tokens, 99),
+
+        "visible_ttft_avg": round(statistics.mean(visible_ttfts), 3) if visible_ttfts else 0,
+        "visible_ttft_p50": _p(visible_ttfts, 50),
+        "visible_ttft_p95": _p(visible_ttfts, 95),
+        "visible_ttft_p99": _p(visible_ttfts, 99),
+
+        # ── first visible gap ──
+        "first_visible_gap_avg": round(statistics.mean(first_visible_gaps), 3) if first_visible_gaps else 0,
+        "first_visible_gap_p50": _p(first_visible_gaps, 50),
+        "first_visible_gap_p95": _p(first_visible_gaps, 95),
+        "first_visible_gap_p99": _p(first_visible_gaps, 99),
+
+        # ── visible TPOT (debug only) ──
+        "visible_tpot_avg": round(statistics.mean(visible_tpots), 3) if visible_tpots else 0,
+        "visible_tpot_p50": _p(visible_tpots, 50),
+        "visible_tpot_p95": _p(visible_tpots, 95),
+        "visible_tpot_p99": _p(visible_tpots, 99),
 
         # tokens
         "total_input_tokens": total_input_tokens,
@@ -1503,7 +1567,7 @@ class LLMBenchmarkApp:
         row0 = tk.Frame(metric_grid, bg=C_STYLE["bg_card"])
         row0.pack(fill=tk.X, pady=(0, C_STYLE["gap_md"]))
         for i, (key, label) in enumerate([
-            ("ttft", "平均 TTFT"), ("e2e_p95", "E2E P95"),
+            ("ttft", "TTFT"), ("visible_ttft", "首字延迟"),
             ("system_output_tps", "System Output TPS"), ("rps", "Request RPS"),
         ]):
             mi = MetricItem(row0, label, metric_key=key)
@@ -1514,8 +1578,8 @@ class LLMBenchmarkApp:
         row1 = tk.Frame(metric_grid, bg=C_STYLE["bg_card"])
         row1.pack(fill=tk.X)
         for i, (key, label) in enumerate([
-            ("output_tokens", "Output Tokens"), ("tpot", "平均 TPOT"),
-            ("itl", "平均 ITL"), ("success_rate", "Success Rate"),
+            ("tpot", "TPOT"), ("itl", "ITL"),
+            ("e2e_p95", "E2E P95"), ("success_rate", "Success Rate"),
         ]):
             mi = MetricItem(row1, label, metric_key=key)
             mi.pack(side=tk.LEFT, fill=tk.BOTH, expand=True,
@@ -2343,19 +2407,21 @@ class LLMBenchmarkApp:
         # ── 8 metric cards ──
         # Row 0
         self.metrics["ttft"].set_value(
-            f"{summary['ttft_avg']:.3f}s" if summary.get("stream_mode") else "N/A")
-        self.metrics["e2e_p95"].set_value(f"{summary['e2e_latency_p95']:.3f}s")
+            f"{summary['ttft_avg']:.3f}s" if summary.get("stream_mode") and summary.get("ttft_avg", 0) > 0 else "N/A")
+        vt = summary.get("visible_ttft_avg", 0)
+        self.metrics["visible_ttft"].set_value(
+            f"{vt:.3f}s" if summary.get("stream_mode") and vt > 0 else "N/A")
         self.metrics["system_output_tps"].set_value(
             f"{summary['system_output_tps']:.1f} tok/s")
         self.metrics["rps"].set_value(f"{summary['request_throughput_rps']:.2f} req/s")
         # Row 1
-        self.metrics["output_tokens"].set_value(str(summary.get("total_output_tokens", summary.get("total_tokens", 0))))
         tpot_val = summary.get("tpot_avg", 0)
         self.metrics["tpot"].set_value(
             f"{tpot_val:.3f}s" if summary.get("stream_mode") and tpot_val > 0 else "N/A")
         itl_val = summary.get("itl_avg", 0)
         self.metrics["itl"].set_value(
             f"{itl_val:.3f}s" if summary.get("stream_mode") and itl_val > 0 else "N/A")
+        self.metrics["e2e_p95"].set_value(f"{summary['e2e_latency_p95']:.3f}s")
         self.metrics["success_rate"].set_value(f"{summary.get('success_rate', 0):.1f}%")
         diag = self._diagnose(summary)
         level = "success" if summary["fail"] == 0 and len(diag) == 1 else \
@@ -2449,6 +2515,25 @@ class LLMBenchmarkApp:
                     f" 理论值 ({per_req_tps * concurrency:.0f} tok/s)，"
                     f"服务端可能已达吞吐上限。")
                 tips.append("    建议: 检查 vLLM --max-num-seqs 或 GPU 利用率。")
+
+        # ── TTFT split diagnostics ──
+        gap_avg = summary.get("first_visible_gap_avg", 0)
+        gap_p95 = summary.get("first_visible_gap_p95", 0)
+        if gap_avg > 0.5:
+            tips.append(f"  ℹ 首包到首字间隔 (first_visible_gap_avg={gap_avg:.3f}s) > 0.5s，"
+                        f"服务端已较早开始流式响应，但首个可见输出较晚出现。请关注 First Visible Token Latency。")
+        if gap_p95 > 2.0:
+            tips.append(f"  ⚠ 首包到首字 P95 长尾 ({gap_p95:.2f}s)，用户首字体验可能受影响。")
+
+        tpot_avg = summary.get("tpot_avg", 0)
+        itl_avg = summary.get("itl_avg", 0)
+        if tpot_avg > 0 and itl_avg > 0 and abs(tpot_avg - itl_avg) / max(itl_avg, 1e-9) > 0.3:
+            tips.append(f"  ⚠ TPOT ({tpot_avg:.4f}s) 与 ITL ({itl_avg:.4f}s) 差异较大，"
+                        f"请检查 chunk/token 口径、completion_tokens 和 TTFT 口径。")
+
+        visible_tpot_avg = summary.get("visible_tpot_avg", 0)
+        if visible_tpot_avg > 0 and itl_avg > 0 and abs(visible_tpot_avg - itl_avg) / max(itl_avg, 1e-9) > 0.5:
+            tips.append(f"  ℹ Visible TPOT ({visible_tpot_avg:.4f}s) 受首字延迟影响，仅供诊断，不作为主 TPOT。")
         if summary["fail"] == 0 and len(tips) <= (1 if not stream_mode else 0):
             tips.append("  ✓ 所有检查通过，未发现异常。")
         return tips
@@ -2512,30 +2597,34 @@ class LLMBenchmarkApp:
         r.append(f"    min: {summary['e2e_latency_min']:.3f}s  avg: {summary['e2e_latency_avg']:.3f}s  max: {summary['e2e_latency_max']:.3f}s")
         r.append(f"    p50: {summary['e2e_latency_p50']:.3f}s  p95: {summary['e2e_latency_p95']:.3f}s  p99: {summary['e2e_latency_p99']:.3f}s")
         if stream_mode and summary.get("ttft_avg", 0) > 0:
-            r.append(f"  Time to First Token (vLLM/NVIDIA: ttft) — 首个输出 chunk 的时间:")
+            # ── benchmark-aligned TTFT (first stream chunk) ──
+            r.append(f"  Time to First Token / First Stream Chunk (vLLM-compatible ttft):")
             r.append(f"    avg: {summary['ttft_avg']:.3f}s  p50: {summary.get('ttft_p50', 0):.3f}s  p95: {summary.get('ttft_p95', 0):.3f}s  p99: {summary.get('ttft_p99', 0):.3f}s")
-            r.append(f"  Time per Output Token (vLLM: tpot) — (e2el - ttft) / (output_tokens - 1):")
+            # ── first visible token (user-perceived) ──
+            r.append(f"  First Visible Token Latency (用户首字延迟):")
+            r.append(f"    avg: {summary.get('visible_ttft_avg', 0):.3f}s  p50: {summary.get('visible_ttft_p50', 0):.3f}s  p95: {summary.get('visible_ttft_p95', 0):.3f}s  p99: {summary.get('visible_ttft_p99', 0):.3f}s")
+            r.append(f"  First Visible Gap (首包到首字间隔):")
+            r.append(f"    avg: {summary.get('first_visible_gap_avg', 0):.3f}s  p50: {summary.get('first_visible_gap_p50', 0):.3f}s  p95: {summary.get('first_visible_gap_p95', 0):.3f}s  p99: {summary.get('first_visible_gap_p99', 0):.3f}s")
+            # ── TPOT (vLLM-aligned, uses stream-chunk TTFT) ──
+            r.append(f"  Time per Output Token (vLLM-style TPOT):")
             r.append(f"    avg: {summary.get('tpot_avg', 0):.3f}s  p50: {summary.get('tpot_p50', 0):.3f}s  p95: {summary.get('tpot_p95', 0):.3f}s  p99: {summary.get('tpot_p99', 0):.3f}s")
+            r.append(f"  Visible TPOT (debug only — uses First Visible Token):")
+            r.append(f"    avg: {summary.get('visible_tpot_avg', 0):.3f}s  p50: {summary.get('visible_tpot_p50', 0):.3f}s  p95: {summary.get('visible_tpot_p95', 0):.3f}s  p99: {summary.get('visible_tpot_p99', 0):.3f}s")
+            # ── ITL ──
             r.append(f"  Inter-Token Latency (vLLM/NVIDIA: itl) — 相邻流式 chunk 间隔:")
             r.append(f"    avg: {summary.get('itl_avg', 0):.3f}s  p50: {summary.get('itl_p50', 0):.3f}s  p95: {summary.get('itl_p95', 0):.3f}s  p99: {summary.get('itl_p99', 0):.3f}s")
         else:
             r.append("  TTFT / TPOT / ITL: N/A（非流式模式无法真实测量）")
 
-        # ── TTFT Debug (for calibration against probe scripts) ──
+        # ── TTFT Debug ──
         ok_count_rpt = summary.get("success", 0)
         if stream_mode and ok_count_rpt > 0:
-            fdl_vals = [r.get("first_data_line_s") for r in (summary.get("detail") or [])
-                       if r.get("ok") and r.get("first_data_line_s") is not None]
-            fjc_vals = [r.get("first_json_chunk_s") for r in (summary.get("detail") or [])
-                       if r.get("ok") and r.get("first_json_chunk_s") is not None]
-            fne_vals = [r.get("first_non_empty_s") for r in (summary.get("detail") or [])
-                       if r.get("ok") and r.get("first_non_empty_s") is not None]
-            if fne_vals:
-                r.append("")
-                r.append("  TTFT Debug (校准参考):")
-                r.append(f"    first_data_line  avg: {statistics.mean(fdl_vals):.4f}s" if fdl_vals else "    first_data_line:  N/A")
-                r.append(f"    first_json_chunk avg: {statistics.mean(fjc_vals):.4f}s" if fjc_vals else "    first_json_chunk: N/A")
-                r.append(f"    first_non_empty  avg: {statistics.mean(fne_vals):.4f}s" if fne_vals else "    first_non_empty:  N/A")
+            r.append("")
+            r.append("  TTFT Debug (校准参考):")
+            r.append(f"    first_data_line  avg: {summary.get('first_data_line_avg', 0):.4f}s  p50: {summary.get('first_data_line_p50', 0):.4f}s")
+            r.append(f"    first_json_chunk avg: {summary.get('first_json_chunk_avg', 0):.4f}s  p50: {summary.get('first_json_chunk_p50', 0):.4f}s")
+            r.append(f"    first_visible_token avg: {summary.get('first_visible_token_avg', 0):.4f}s  p50: {summary.get('first_visible_token_p50', 0):.4f}s")
+            r.append(f"    first_visible_gap avg: {summary.get('first_visible_gap_avg', 0):.4f}s")
 
         # ── 四、Token 统计 (Token Counts) ──
         r.append("")
