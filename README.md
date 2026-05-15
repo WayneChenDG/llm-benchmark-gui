@@ -62,18 +62,19 @@ python llm_benchmark.py -debug
 
 ## 核心指标
 
-本工具将 TTFT 拆分为两个独立口径，分别对齐 benchmark 和用户体验：
+本工具将 TTFT 拆分为两个独立口径，分别对齐 benchmark 和用户体验。
+GUI 卡片命名统一为中英双语缩写，hover 显示完整口径说明。
 
-| 指标 | 全称 | 口径 |
-|------|------|------|
-| **TTFT** | Time To First Token (vLLM-compatible) | 请求发出 → 首个 JSON chunk（对齐 vLLM bench serve） |
-| **首字延迟** | First Visible Token Latency | 请求发出 → 首个非空 delta.content（用户可见首字） |
-| **首包间隔** | First Visible Gap | 首字延迟 − 首个流式 chunk（越大说明服务端 decode 到可见输出有延迟） |
-| E2E / E2EL | End-to-End Latency | 请求发出 → 完整响应结束 |
-| **TPOT** | Time Per Output Token (vLLM-compatible) | (E2E - TTFT) / (output_tokens - 1)，使用 stream-chunk TTFT |
-| ITL | Inter-Token Latency | 相邻流式 chunk 间隔 (chunk-level approximation) |
-| Output TPS | Output Token Throughput | total_output_tokens / duration_sec |
-| Request RPS | Request Throughput | success / duration_sec |
+| GUI 卡片 | 报告全称 | 口径 |
+|---------|---------|------|
+| **首包延迟 TTFT** | TTFT / First Stream Chunk（首包延迟） | 请求发出 → 首个 JSON chunk（对齐 vLLM bench serve） |
+| **首字延迟 FVT** | First Visible Token Latency（首字延迟） | 请求发出 → 首个非空 delta.content（用户首字体验） |
+| **E2E P95** | E2E Latency / E2EL（端到端延迟） | 请求发出 → 完整响应结束 |
+| **输出吞吐 TPS** | Output Token Throughput（输出 Token 吞吐） | total_output_tokens / duration_sec |
+| **请求吞吐 RPS** | Request Throughput / RPS（请求吞吐） | success / duration_sec |
+| **单 Token 耗时 TPOT** | TPOT / Time Per Output Token（单 Token 耗时） | (E2E − TTFT) / (output_tokens − 1) |
+| **Token 间隔 ITL** | ITL / Inter-Token Latency（Token 间隔） | SSE chunk 间隔 (chunk-level approximation) |
+| **成功率** | Success Rate | success / total_requests |
 
 > **为什么拆分 TTFT？** 部分服务端（如 FP8 量化模型）会先返回空的流式 chunk，可见内容延迟到达。拆开后，TTFT 对齐 vLLM bench serve 口径，首字延迟反映用户真实体感。主 TPOT 使用 TTFT 计算（对齐行业标准），Visible TPOT 仅供诊断。
 

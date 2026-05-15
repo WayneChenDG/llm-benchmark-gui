@@ -183,7 +183,7 @@ class SectionCard(tk.Frame):
         self.content.columnconfigure(0, weight=1)
         self.content.rowconfigure(0, weight=1)
 class MetricItem(tk.Frame):
-    """指标卡片：彩色左边条 + 大数值优先 + 小标签在下（Datadog风格）"""
+    """指标卡片：彩色左边条 + 大数值优先 + 小标签在下（Datadog风格）+ hover tooltip"""
     COLORS = {
         "ttft": C_STYLE["info"], "tps": C_STYLE["accent"],
         "total_tokens": C_STYLE["warning"], "agg_tps": C_STYLE["success"],
@@ -193,6 +193,17 @@ class MetricItem(tk.Frame):
         "success_rate": C_STYLE["success"],
         "visible_ttft": C_STYLE["warning"],
     }
+    # ── tooltip definitions ──
+    TOOLTIPS = {
+        "ttft": "TTFT / First Stream Chunk：请求发出到首个流式响应 chunk 到达时间；\n用于对齐 vLLM bench serve ttft。",
+        "visible_ttft": "FVT / First Visible Token：请求发出到首个非空\ndelta.content / reasoning_content；用于衡量用户首字体验。",
+        "e2e_p95": "E2E P95：请求发出到完整响应结束的 P95 延迟。",
+        "system_output_tps": "Output TPS：total_output_tokens / duration_sec，\n只统计输出 token。",
+        "rps": "RPS：success / duration_sec。",
+        "tpot": "TPOT：(E2E - TTFT) / (completion_tokens - 1)。",
+        "itl": "ITL：相邻流式输出 chunk/token 间隔；\n当前按 SSE chunk 估算。",
+        "success_rate": "Success Rate：success / total_requests。",
+    }
     def __init__(self, parent, label: str, value: str = "—", metric_key: str = "", **kw):
         super().__init__(parent, bg=C_STYLE["bg_card"],
                          highlightbackground=C_STYLE["border"],
@@ -201,6 +212,8 @@ class MetricItem(tk.Frame):
         self._value = value
         self._key = metric_key
         self._bar_color = self.COLORS.get(metric_key, C_STYLE["accent"])
+        self._tooltip_text = self.TOOLTIPS.get(metric_key, "")
+        self._tooltip_win = None
         self._build()
     def _build(self):
         # left accent bar
@@ -219,10 +232,37 @@ class MetricItem(tk.Frame):
                                 anchor="w")
         self.val_lbl.pack(fill=tk.X)
         # small label — below
-        tk.Label(inner, text=self._label, font=C_STYLE["font_small"],
+        lbl = tk.Label(inner, text=self._label, font=C_STYLE["font_small"],
                  bg=C_STYLE["bg_card"],
                  fg=C_STYLE["text_secondary"],
-                 anchor="w").pack(fill=tk.X)
+                 anchor="w")
+        lbl.pack(fill=tk.X)
+        # ── tooltip hover ──
+        if self._tooltip_text:
+            for w in (self, inner, self.val_lbl, lbl, bar):
+                w.bind("<Enter>", self._show_tooltip)
+                w.bind("<Leave>", self._hide_tooltip)
+    def _show_tooltip(self, event=None):
+        if self._tooltip_win:
+            return
+        self._tooltip_win = tw = tk.Toplevel(self)
+        tw.wm_overrideredirect(True)
+        tw.configure(bg=C_STYLE["bg_card"], highlightbackground=C_STYLE["border"],
+                     highlightthickness=1, bd=0)
+        lbl = tk.Label(tw, text=self._tooltip_text, font=C_STYLE["font_small"],
+                       bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"],
+                       justify=tk.LEFT, anchor="w",
+                       padx=C_STYLE["pad_sm"], pady=C_STYLE["pad_sm"])
+        lbl.pack()
+        # position below the widget
+        tw.update_idletasks()
+        x = self.winfo_rootx() + 4
+        y = self.winfo_rooty() + self.winfo_height() + 2
+        tw.geometry(f"+{x}+{y}")
+    def _hide_tooltip(self, event=None):
+        if self._tooltip_win:
+            self._tooltip_win.destroy()
+            self._tooltip_win = None
     def set_value(self, value: str):
         self._value = value
         self.val_lbl.config(text=value)
@@ -1567,8 +1607,8 @@ class LLMBenchmarkApp:
         row0 = tk.Frame(metric_grid, bg=C_STYLE["bg_card"])
         row0.pack(fill=tk.X, pady=(0, C_STYLE["gap_md"]))
         for i, (key, label) in enumerate([
-            ("ttft", "TTFT"), ("visible_ttft", "首字延迟"),
-            ("system_output_tps", "System Output TPS"), ("rps", "Request RPS"),
+            ("ttft", "首包延迟 TTFT"), ("visible_ttft", "首字延迟 FVT"),
+            ("e2e_p95", "E2E P95"), ("system_output_tps", "输出吞吐 TPS"),
         ]):
             mi = MetricItem(row0, label, metric_key=key)
             mi.pack(side=tk.LEFT, fill=tk.BOTH, expand=True,
@@ -1578,8 +1618,8 @@ class LLMBenchmarkApp:
         row1 = tk.Frame(metric_grid, bg=C_STYLE["bg_card"])
         row1.pack(fill=tk.X)
         for i, (key, label) in enumerate([
-            ("tpot", "TPOT"), ("itl", "ITL"),
-            ("e2e_p95", "E2E P95"), ("success_rate", "Success Rate"),
+            ("rps", "请求吞吐 RPS"), ("tpot", "单 Token 耗时 TPOT"),
+            ("itl", "Token 间隔 ITL"), ("success_rate", "成功率"),
         ]):
             mi = MetricItem(row1, label, metric_key=key)
             mi.pack(side=tk.LEFT, fill=tk.BOTH, expand=True,
@@ -2593,25 +2633,37 @@ class LLMBenchmarkApp:
         r.append(sep)
         r.append("  三、延迟指标 (Latency Metrics)")
         r.append(sep)
-        r.append(f"  End-to-End Latency (vLLM: e2el) — 请求发出到完整响应结束:")
+        r.append(f"  E2E Latency / E2EL（端到端延迟）— 请求发出到完整响应结束:")
         r.append(f"    min: {summary['e2e_latency_min']:.3f}s  avg: {summary['e2e_latency_avg']:.3f}s  max: {summary['e2e_latency_max']:.3f}s")
         r.append(f"    p50: {summary['e2e_latency_p50']:.3f}s  p95: {summary['e2e_latency_p95']:.3f}s  p99: {summary['e2e_latency_p99']:.3f}s")
         if stream_mode and summary.get("ttft_avg", 0) > 0:
-            # ── benchmark-aligned TTFT (first stream chunk) ──
-            r.append(f"  Time to First Token / First Stream Chunk (vLLM-compatible ttft):")
+            # ── TTFT / First Stream Chunk（首包延迟）──
+            r.append(f"  TTFT / First Stream Chunk（首包延迟）:")
+            r.append(f"    请求发出 → 首个 SSE data JSON chunk / 首个流式响应 chunk。")
+            r.append(f"    不一定等于用户看到第一个可见文字的时间。")
             r.append(f"    avg: {summary['ttft_avg']:.3f}s  p50: {summary.get('ttft_p50', 0):.3f}s  p95: {summary.get('ttft_p95', 0):.3f}s  p99: {summary.get('ttft_p99', 0):.3f}s")
-            # ── first visible token (user-perceived) ──
-            r.append(f"  First Visible Token Latency (用户首字延迟):")
+            # ── First Visible Token Latency（首字延迟）──
+            r.append(f"  First Visible Token Latency（首字延迟）:")
+            r.append(f"    请求发出 → 首个非空 delta.content / delta.reasoning_content。")
+            r.append(f"    用于衡量用户首字体验。")
             r.append(f"    avg: {summary.get('visible_ttft_avg', 0):.3f}s  p50: {summary.get('visible_ttft_p50', 0):.3f}s  p95: {summary.get('visible_ttft_p95', 0):.3f}s  p99: {summary.get('visible_ttft_p99', 0):.3f}s")
-            r.append(f"  First Visible Gap (首包到首字间隔):")
+            # ── First Visible Gap（首包到首字间隔）──
+            r.append(f"  First Visible Gap（首包到首字间隔）:")
+            r.append(f"    First Visible Token − First Stream Chunk。")
+            r.append(f"    用于观察服务端已开始流式响应但可见内容延迟出现的情况。")
             r.append(f"    avg: {summary.get('first_visible_gap_avg', 0):.3f}s  p50: {summary.get('first_visible_gap_p50', 0):.3f}s  p95: {summary.get('first_visible_gap_p95', 0):.3f}s  p99: {summary.get('first_visible_gap_p99', 0):.3f}s")
-            # ── TPOT (vLLM-aligned, uses stream-chunk TTFT) ──
-            r.append(f"  Time per Output Token (vLLM-style TPOT):")
+            # ── TPOT / Time Per Output Token（单 Token 耗时）──
+            r.append(f"  TPOT / Time Per Output Token（单 Token 耗时）:")
+            r.append(f"    (E2E − TTFT) / (completion_tokens − 1)，使用 First Stream Chunk 作为 TTFT。")
             r.append(f"    avg: {summary.get('tpot_avg', 0):.3f}s  p50: {summary.get('tpot_p50', 0):.3f}s  p95: {summary.get('tpot_p95', 0):.3f}s  p99: {summary.get('tpot_p99', 0):.3f}s")
-            r.append(f"  Visible TPOT (debug only — uses First Visible Token):")
+            # ── Visible TPOT（仅供诊断）──
+            r.append(f"  Visible TPOT（仅供诊断）:")
+            r.append(f"    (E2E − First Visible Token) / (completion_tokens − 1)。")
+            r.append(f"    受首字延迟影响，不作为主 benchmark TPOT。")
             r.append(f"    avg: {summary.get('visible_tpot_avg', 0):.3f}s  p50: {summary.get('visible_tpot_p50', 0):.3f}s  p95: {summary.get('visible_tpot_p95', 0):.3f}s  p99: {summary.get('visible_tpot_p99', 0):.3f}s")
-            # ── ITL ──
-            r.append(f"  Inter-Token Latency (vLLM/NVIDIA: itl) — 相邻流式 chunk 间隔:")
+            # ── ITL / Inter-Token Latency（Token 间隔）──
+            r.append(f"  ITL / Inter-Token Latency（Token 间隔）:")
+            r.append(f"    相邻流式响应 chunk 的时间间隔。")
             r.append(f"    avg: {summary.get('itl_avg', 0):.3f}s  p50: {summary.get('itl_p50', 0):.3f}s  p95: {summary.get('itl_p95', 0):.3f}s  p99: {summary.get('itl_p99', 0):.3f}s")
         else:
             r.append("  TTFT / TPOT / ITL: N/A（非流式模式无法真实测量）")
@@ -2643,8 +2695,8 @@ class LLMBenchmarkApp:
         r.append(sep)
         r.append("  五、吞吐指标 (Throughput)")
         r.append(sep)
-        r.append(f"  Request Throughput (NVIDIA: request_throughput): {summary.get('request_throughput_rps', 0):.2f} req/s  (= success / duration)")
-        r.append(f"  Output Token Throughput (NVIDIA: output_token_throughput): {summary.get('system_output_tps', 0):.1f} tok/s  (= output_tokens / duration)")
+        r.append(f"  Request Throughput / RPS（请求吞吐）: {summary.get('request_throughput_rps', 0):.2f} req/s  (= success / duration)")
+        r.append(f"  Output Token Throughput（输出 Token 吞吐）: {summary.get('system_output_tps', 0):.1f} tok/s  (= output_tokens / duration)")
         r.append(f"  Total Token Throughput:                                {summary.get('system_total_tps', 0):.1f} tok/s  (= total_tokens / duration)")
         r.append(f"  Per-request Output Token Throughput (avg):              {summary.get('per_request_output_tps_avg', 0):.2f} tok/s")
         r.append(f"    p50: {summary.get('per_request_output_tps_p50', 0):.2f}  p95: {summary.get('per_request_output_tps_p95', 0):.2f}")
