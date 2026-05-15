@@ -1277,7 +1277,7 @@ def run_benchmark(api_url: str, api_key: str, model: str, messages: list[dict],
                   progress_cb, done_cb,
                   stream: bool = True,
                   preset_name: str = "") -> None:
-    """Run benchmark in a background thread; call progress_cb(completed, total)
+    """Run benchmark in a background thread; call progress_cb(completed, total, fail)
     and done_cb(summary_dict) on the main thread."""
     if DEBUG_MODE:
         logging.info("benchmark start: concurrency=%d total=%d stream=%s preset=%s",
@@ -1285,6 +1285,7 @@ def run_benchmark(api_url: str, api_key: str, model: str, messages: list[dict],
     results = []
     lock = threading.Lock()
     completed = [0]  # boxed for mutation in closure
+    failed = [0]     # boxed for mutation in closure
 
     def worker():
         r = call_llm(api_url, api_key, model, messages, max_tokens, temperature,
@@ -1292,7 +1293,9 @@ def run_benchmark(api_url: str, api_key: str, model: str, messages: list[dict],
         with lock:
             results.append(r)
             completed[0] += 1
-            progress_cb(completed[0], num_requests)
+            if not r["ok"]:
+                failed[0] += 1
+            progress_cb(completed[0], num_requests, failed[0])
         return r
 
     t0 = time.perf_counter()
@@ -1341,14 +1344,8 @@ class LLMBenchmarkApp:
         self.root.configure(bg=C_STYLE["bg_main"])
         self._benchmark_running = False
         self._smoke_latency = 0.0
-        # ── animated status state ──
-        self._run_started_at = None
-        self._run_completed = 0
-        self._run_total = 0
-        self._run_fail = 0
-        self._run_phase = "idle"
-        self._spinner_index = 0
-        self._spinner_after_id = None
+        self._run_started_at = None      # for elapsed display
+        self._icon_pulse_id = None       # icon pulse after id
         init_db()
         self._setup_styles()
         self._build_header()
@@ -1418,7 +1415,7 @@ class LLMBenchmarkApp:
         h.pack_propagate(False)
         inner = tk.Frame(h, bg=C_STYLE["bg_header"])
         inner.pack(fill=tk.BOTH, expand=True,
-                   padx=C_STYLE["pad_lg"], pady=C_STYLE["pad_sm"])
+                   padx=(C_STYLE["pad_lg"], 0), pady=C_STYLE["pad_sm"])
         left = tk.Frame(inner, bg=C_STYLE["bg_header"])
         left.pack(side=tk.LEFT)
         # icon + title in one line
@@ -1427,6 +1424,7 @@ class LLMBenchmarkApp:
         icon_lbl = tk.Label(title_row, text="⚡", font=(FONT_FAMILY, 16),
                             bg=C_STYLE["bg_header"], fg=C_STYLE["accent"])
         icon_lbl.pack(side=tk.LEFT, padx=(0, 8))
+        self._icon_lbl = icon_lbl
         ttk.Label(title_row, text="LLM Benchmark GUI", style="Title.TLabel").pack(side=tk.LEFT)
         ttk.Label(left, text="OpenAI 兼容接口并发性能测试", style="Subtitle.TLabel").pack(anchor="w")
         right = tk.Frame(inner, bg=C_STYLE["bg_header"])
@@ -1812,82 +1810,45 @@ class LLMBenchmarkApp:
                         textvariable=var, width=10)
         s.grid(row=row, column=col * 2 + 1, sticky="w",
                padx=(0, 0), pady=(C_STYLE["gap_sm"], 0))
-    # ── animated status badge (spinner + progress + elapsed + fail) ──
-    SPINNER_FRAMES = ["|", "/", "-", "\\"]
+    # ── icon pulse (low-overhead running indicator) ──
+    ICON_FRAMES = ["⚡", "✦"]
 
-    def _start_status_animation(self, phase: str, total: int = 0):
+    def _start_icon_pulse(self):
+        self._benchmark_running = True
         self._run_started_at = time.perf_counter()
-        self._run_completed = 0
-        self._run_total = total
-        self._run_fail = 0
-        self._run_phase = phase
-        self._spinner_index = 0
-        self._animate_status_badge()
-
-    def _stop_status_animation(self, final_status: str, completed=None, total=None, fail=None):
-        if self._spinner_after_id:
+        self._icon_index = 0
+        if self._icon_pulse_id:
             try:
-                self.root.after_cancel(self._spinner_after_id)
+                self.root.after_cancel(self._icon_pulse_id)
             except Exception:
                 pass
-            self._spinner_after_id = None
-        if completed is not None:
-            self._run_completed = completed
-        if total is not None:
-            self._run_total = total
-        if fail is not None:
-            self._run_fail = fail
-        elapsed = self._format_elapsed()
-        if final_status == "completed":
-            self._status_dot.config(text="✓", fg=C_STYLE["success"],
-                                    font=C_STYLE["font_status"])
-            self._status_badge_lbl.config(
-                text=f"已完成 · {self._run_completed}/{self._run_total} · ✕{self._run_fail} · {elapsed}",
-                fg=C_STYLE["success"])
-        elif final_status == "failed":
-            self._status_dot.config(text="✕", fg=C_STYLE["error"],
-                                    font=C_STYLE["font_status"])
-            self._status_badge_lbl.config(
-                text=f"失败 · fail={self._run_fail} · {elapsed}",
-                fg=C_STYLE["error"])
-        else:
-            self._status_dot.config(text="●", fg=C_STYLE["text_muted"], font=(FONT_FAMILY, 9))
-            self._status_badge_lbl.config(text="空闲", fg=C_STYLE["text_secondary"])
+            self._icon_pulse_id = None
+        self._pulse_icon()
 
-    def _animate_status_badge(self):
+    def _pulse_icon(self):
         if not self._benchmark_running:
             return
-        frame = self.SPINNER_FRAMES[self._spinner_index % len(self.SPINNER_FRAMES)]
-        self._spinner_index += 1
-        elapsed = self._format_elapsed()
-        progress = ""
-        if self._run_total:
-            progress = f" · {self._run_completed}/{self._run_total}"
-        fail_part = f" · ✕{self._run_fail}" if self._run_fail else ""
-        phase_text = self._phase_display_name(self._run_phase)
-        self._status_dot.config(text=frame, fg=C_STYLE["accent"], font=(FONT_FAMILY, 9))
-        self._status_badge_lbl.config(
-            text=f"{phase_text}{progress}{fail_part} · {elapsed}",
-            fg=C_STYLE["accent"])
-        self._spinner_after_id = self.root.after(250, self._animate_status_badge)
+        f = self.ICON_FRAMES[self._icon_index % len(self.ICON_FRAMES)]
+        self._icon_index += 1
+        self._icon_lbl.config(text=f)
+        self._icon_pulse_id = self.root.after(600, self._pulse_icon)
+
+    def _stop_icon_pulse(self):
+        self._benchmark_running = False
+        if self._icon_pulse_id:
+            try:
+                self.root.after_cancel(self._icon_pulse_id)
+            except Exception:
+                pass
+            self._icon_pulse_id = None
+        self._icon_lbl.config(text="⚡")
+    # ── end icon pulse ──
 
     def _format_elapsed(self) -> str:
         if self._run_started_at is None:
             return "00:00"
         sec = int(time.perf_counter() - self._run_started_at)
         return f"{sec // 60:02d}:{sec % 60:02d}"
-
-    def _phase_display_name(self, phase: str) -> str:
-        return {
-            "idle": "空闲",
-            "connectivity": "连接检测中",
-            "models": "获取模型中",
-            "smoke": "基础测试中",
-            "warmup": "预热中",
-            "benchmark": "测试中",
-            "saving": "保存结果中",
-        }.get(phase, phase)
-    # ── end animated status badge ──
 
     def _reset_config(self):
         self.url_var.set("http://192.168.1.12:8000/v1")
@@ -2297,10 +2258,9 @@ class LLMBenchmarkApp:
             f"无法获取模型列表。\n\n错误：{safe_err}\n\n"
             "请手动输入模型名称后重试。")
     def _on_preflight_fail(self, step: str, payload):
-        self._benchmark_running = False
         self.start_btn.config(state=tk.NORMAL, text="开始测试")
         self.progress["value"] = 0
-        self._stop_status_animation("failed", fail=max(self._run_fail, 1))
+        self._stop_icon_pulse()
         self.result_text.config(state=tk.NORMAL)
         self.result_text.delete("1.0", tk.END)
         if step == "connectivity":
@@ -2391,9 +2351,8 @@ class LLMBenchmarkApp:
         if DEBUG_MODE:
             logging.info("benchmark requested: url=%s model=%s concurrency=%d total=%d warmup=%d preset=%s",
                          api_url, model, concurrency, total, warmup, preset_name)
-        self._benchmark_running = True
         self.start_btn.config(state=tk.DISABLED, text="测试中...")
-        self._start_status_animation("connectivity", total=total)
+        self._start_icon_pulse()
         self._action_status.config(text="准备开始...")
         self._reset_indicators()
         self.progress["value"] = 0
@@ -2430,7 +2389,6 @@ class LLMBenchmarkApp:
             return
         self.root.after(0, lambda: self._set_indicator("connectivity", "pass", "连接正常"))
         # ── Step 1.5: fetch model list and let user pick if needed ──
-        self.root.after(0, lambda: setattr(self, '_run_phase', 'models'))
         if DEBUG_MODE:
             logging.info("preflight: step 1.5 — fetch model list")
         self.root.after(0, lambda: self.status_label.config(
@@ -2472,7 +2430,6 @@ class LLMBenchmarkApp:
         if warmup > 0:
             if DEBUG_MODE:
                 logging.info("preflight: warmup — sending %d warmup requests", warmup)
-            self.root.after(0, lambda: setattr(self, '_run_phase', 'warmup'))
             self.root.after(0, lambda: self.status_label.config(
                 text=f"预热中 ({warmup} 次请求)...", fg=C_STYLE["accent"]))
             for i in range(warmup):
@@ -2480,8 +2437,6 @@ class LLMBenchmarkApp:
                         stream=stream)
                 self.root.after(0, lambda c=i+1: self._action_status.config(
                     text=f"预热中 — {c}/{warmup}"))
-
-        self.root.after(0, lambda: setattr(self, '_run_phase', 'smoke'))
 
         if DEBUG_MODE:
             logging.info("preflight: step 2 — smoke test")
@@ -2506,7 +2461,6 @@ class LLMBenchmarkApp:
         self.root.after(0, lambda: self.status_label.config(
             text="正在执行压力测试...", fg=C_STYLE["accent"]))
         self.root.after(0, lambda: self.progress.configure(maximum=total))
-        self.root.after(0, lambda: setattr(self, '_run_phase', 'benchmark'))
 
         def _done_with_warmup(s):
             s["warmup_requests"] = warmup
@@ -2515,40 +2469,37 @@ class LLMBenchmarkApp:
         run_benchmark(api_url, api_key, model, messages, max_tokens, temperature,
                       concurrency, total, self._on_progress, _done_with_warmup,
                       stream=stream, preset_name=preset_name)
-    def _on_progress(self, completed, total):
-        self.root.after(0, lambda: self._update_progress(completed, total))
-    def _update_progress(self, completed, total):
-        self._run_completed = completed
-        self._run_total = total
+    def _on_progress(self, completed, total, fail=0):
+        self.root.after(0, lambda: self._update_progress(completed, total, fail))
+    def _update_progress(self, completed, total, fail=0):
         self.progress["value"] = completed
+        if total:
+            self.progress["maximum"] = total
         elapsed = self._format_elapsed()
         self.status_label.config(text=f"进度: {completed}/{total}")
         self._action_status.config(
-            text=f"测试中 — {completed}/{total} · fail={self._run_fail} · {elapsed}")
+            text=f"测试中 — {completed}/{total} · fail={fail} · {elapsed}")
         self._set_indicator("benchmark", "checking", f"{completed}/{total}")
     def _on_done(self, summary: dict):
         self.root.after(0, lambda: self._show_results(summary))
     def _show_results(self, summary: dict):
-        self._benchmark_running = False
         self.start_btn.config(state=tk.NORMAL, text="开始测试")
         elapsed = self._format_elapsed()
         self._action_status.config(
             text=f"已完成 — {summary['total']} 请求 · success={summary['success']} · fail={summary['fail']} · {elapsed}")
-        total = max(summary["total"], 1)
-        success_rate = summary["success"] / total * 100
+        total_req = max(summary["total"], 1)
+        success_rate = summary["success"] / total_req * 100
         if summary["fail"] == 0:
             self._set_indicator("benchmark", "pass", f"{success_rate:.0f}% 通过")
-            self._stop_status_animation("completed",
-                completed=summary["success"], total=summary["total"], fail=0)
+            self._stop_icon_pulse()
             self.status_label.config(text="测试完成")
         elif summary["success"] > 0:
             self._set_indicator("benchmark", "fail", f"{success_rate:.0f}% 通过")
-            self._stop_status_animation("completed",
-                completed=summary["success"], total=summary["total"], fail=summary["fail"])
+            self._stop_icon_pulse()
             self.status_label.config(text="测试完成（部分失败）")
         else:
             self._set_indicator("benchmark", "fail", "全部失败")
-            self._stop_status_animation("failed", fail=summary["fail"])
+            self._stop_icon_pulse()
             self.status_label.config(text="测试完成（全部失败）")
             # popup with categorized error for first failure
             fail_detail = summary.get("fail_detail", [])
@@ -2590,7 +2541,6 @@ class LLMBenchmarkApp:
                          summary["e2e_latency_avg"], summary["e2e_latency_p95"],
                          summary["system_output_tps"])
         try:
-            self._run_phase = "saving"
             save_result(summary)
         except Exception as e:
             if DEBUG_MODE:
