@@ -1,4 +1,4 @@
-# LLM Benchmark — LLM 并发性能测试工具
+# LLM Benchmark GUI — LLM 并发性能测试工具
 
 OpenAI 兼容接口的专业 LLM serving benchmark 工具，纯 Python 标准库实现，无需额外依赖。
 

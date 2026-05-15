@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""LLM 并发性能测试工具 — GUI 版
+"""LLM Benchmark GUI — 并发性能测试工具
 纯标准库实现：tkinter + sqlite3 + urllib + threading，无需额外安装依赖。
 支持 OpenAI 兼容 API（通义千问 / DeepSeek / GLM / GPT 等）。
 
@@ -41,7 +41,7 @@ def setup_logging():
             logging.FileHandler(LOG_PATH, encoding="utf-8"),
         ],
     )
-    logging.info("=== LLM Benchmark debug session started ===")
+    logging.info("=== LLM Benchmark GUI debug session started ===")
 # ---------- 并发建议 ----------
 # ---------- 并发建议 ----------
 BENCHMARK_PRESETS = {
@@ -1186,7 +1186,7 @@ def run_benchmark(api_url: str, api_key: str, model: str, messages: list[dict],
 class LLMBenchmarkApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("LLM 并发性能测试工具")
+        self.root.title("LLM Benchmark GUI")
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
         w = int(sw * 1099 / 1920)
@@ -1283,7 +1283,7 @@ class LLMBenchmarkApp:
         icon_lbl = tk.Label(title_row, text="⚡", font=(FONT_FAMILY, 16),
                             bg=C_STYLE["bg_header"], fg=C_STYLE["accent"])
         icon_lbl.pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Label(title_row, text="LLM Benchmark", style="Title.TLabel").pack(side=tk.LEFT)
+        ttk.Label(title_row, text="LLM Benchmark GUI", style="Title.TLabel").pack(side=tk.LEFT)
         ttk.Label(left, text="OpenAI 兼容接口并发性能测试", style="Subtitle.TLabel").pack(anchor="w")
         right = tk.Frame(inner, bg=C_STYLE["bg_header"])
         right.pack(side=tk.RIGHT)
@@ -2459,7 +2459,7 @@ class LLMBenchmarkApp:
         sep = "─" * 58
         r = []
         r.append("=" * 60)
-        r.append("  LLM 并发性能测试报告")
+        r.append("  LLM Benchmark GUI — 性能测试报告")
         r.append("=" * 60)
         r.append(f"  测试时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         r.append("")
@@ -3051,7 +3051,7 @@ if __name__ == "__main__":
     except Exception as e:
         import traceback
         detail = traceback.format_exc()
-        _show_crash("LLM Benchmark 启动失败",
+        _show_crash("LLM Benchmark GUI 启动失败",
                     f"程序启动时发生错误:\n\n{type(e).__name__}: {e}\n\n"
                     f"详细信息已写入 llm_benchmark_crash.log")
         with open(CRASH_LOG, "w", encoding="utf-8") as f:
