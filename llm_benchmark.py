@@ -191,12 +191,20 @@ class ScrollableFrame(tk.Frame):
             self.canvas.unbind_all("<Button-4>"),
             self.canvas.unbind_all("<Button-5>")))
 class SectionCard(tk.Frame):
-    """卡片容器：白色背景 + 1px浅灰边框 + 标题分隔线 + 内边距"""
-    def __init__(self, parent, title: str = "", **kw):
+    """卡片容器：白色背景 + 1px浅灰边框 + 标题分隔线 + 内边距
+    Supports collapsible mode: click title to toggle content visibility."""
+
+    def __init__(self, parent, title: str = "",
+                 collapsible: bool = False, expanded: bool = True, **kw):
+        # Extract our params from kw so they don't propagate to tk.Frame
         super().__init__(parent, bg=C_STYLE["bg_card"],
                          highlightbackground=C_STYLE["border"],
                          highlightthickness=1, bd=0, **kw)
         self._title = title
+        self._collapsible = collapsible
+        self._expanded = expanded
+        self._sep = None       # separator frame
+        self._hdr = None       # header frame
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
         self._build()
@@ -209,19 +217,58 @@ class SectionCard(tk.Frame):
         inner.rowconfigure(0, weight=0)
         inner.rowconfigure(2, weight=1)
         if self._title:
-            hdr = tk.Frame(inner, bg=C_STYLE["bg_card"])
-            hdr.grid(row=0, column=0, sticky="ew", pady=(0, C_STYLE["pad_md"]))
-            self.title_lbl = ttk.Label(hdr, text=self._title, style="Section.TLabel")
+            self._hdr = tk.Frame(inner, bg=C_STYLE["bg_card"])
+            self._hdr.grid(row=0, column=0, sticky="ew", pady=(0, C_STYLE["pad_md"]))
+            self.title_lbl = ttk.Label(self._hdr, text=self._title,
+                                       style="Section.TLabel")
             self.title_lbl.pack(side=tk.LEFT)
-            sep = tk.Frame(inner, height=1, bg=C_STYLE["border"])
-            sep.grid(row=1, column=0, sticky="ew", pady=(0, C_STYLE["pad_md"]))
+            self._sep = tk.Frame(inner, height=1, bg=C_STYLE["border"])
+            self._sep.grid(row=1, column=0, sticky="ew", pady=(0, C_STYLE["pad_md"]))
             self.content = tk.Frame(inner, bg=C_STYLE["bg_card"])
             self.content.grid(row=2, column=0, sticky="nsew")
+
+            # Collapsible behavior
+            if self._collapsible:
+                self.title_lbl.configure(cursor="hand2")
+                self.title_lbl.bind("<Button-1>", lambda e: self.toggle())
+                self._apply_state()
         else:
             self.content = tk.Frame(inner, bg=C_STYLE["bg_card"])
             self.content.grid(row=0, column=0, sticky="nsew")
         self.content.columnconfigure(0, weight=1)
         self.content.rowconfigure(0, weight=1)
+
+    def _apply_state(self):
+        """Show or hide content based on _expanded state."""
+        if not self._collapsible or not self._title:
+            return
+        prefix = "▼ " if self._expanded else "▶ "
+        self.title_lbl.config(text=prefix + self._title)
+        if self._sep:
+            self._sep.grid() if self._expanded else self._sep.grid_remove()
+        self.content.grid() if self._expanded else self.content.grid_remove()
+
+    def toggle(self):
+        """Toggle the collapsed/expanded state. Safe to call from any thread
+        via root.after if needed."""
+        if not self._collapsible:
+            return
+        self._expanded = not self._expanded
+        self._apply_state()
+
+    def expand(self):
+        """Expand the section (show content)."""
+        if not self._collapsible:
+            return
+        self._expanded = True
+        self._apply_state()
+
+    def collapse(self):
+        """Collapse the section (hide content)."""
+        if not self._collapsible:
+            return
+        self._expanded = False
+        self._apply_state()
 class MetricItem(tk.Frame):
     """指标卡片：彩色左边条 + 大数值优先 + 小标签在下（Datadog风格）+ hover tooltip"""
     COLORS = {
@@ -377,6 +424,8 @@ def _create_latest_schema(conn):
     conn.execute("""CREATE TABLE benchmarks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         created_at TEXT NOT NULL,
+        record_type TEXT NOT NULL DEFAULT 'single',
+        status TEXT NOT NULL DEFAULT 'completed',
 
         api_url TEXT NOT NULL,
         model TEXT NOT NULL,
@@ -440,7 +489,19 @@ def _create_latest_schema(conn):
 
         detail_json TEXT,
         fail_detail_json TEXT,
-        summary_json TEXT
+        summary_json TEXT,
+
+        config_summary TEXT,
+        primary_metric TEXT,
+        json_path TEXT,
+        markdown_path TEXT,
+        png_path TEXT,
+
+        concurrency_levels TEXT,
+        max_output_tps REAL,
+        max_output_tps_concurrency INTEGER,
+        recommended_concurrency INTEGER,
+        analysis_summary TEXT
     )""")
     conn.execute("""CREATE TABLE benchmark_meta (
         key TEXT PRIMARY KEY,
@@ -467,6 +528,7 @@ def init_db():
         conn = sqlite3.connect(DB_PATH)
         _create_latest_schema(conn)
         conn.commit()
+        _ensure_history_columns(conn)
         conn.close()
         return
 
@@ -475,9 +537,11 @@ def init_db():
         conn = sqlite3.connect(DB_PATH)
         meta = dict(conn.execute("SELECT key, value FROM benchmark_meta").fetchall())
         version = int(meta.get("schema_version", 0))
-        conn.close()
         if version == DB_SCHEMA_VERSION:
+            _ensure_history_columns(conn)
+            conn.close()
             return  # already latest
+        conn.close()
     except Exception:
         pass  # no meta table or unreadable — needs rebuild
 
@@ -496,11 +560,35 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     _create_latest_schema(conn)
     conn.commit()
+    _ensure_history_columns(conn)
     conn.close()
+
+def _ensure_history_columns(conn):
+    """Add additive history fields used by both single and sweep records."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(benchmarks)").fetchall()}
+    columns = {
+        "record_type": "TEXT NOT NULL DEFAULT 'single'",
+        "status": "TEXT NOT NULL DEFAULT 'completed'",
+        "config_summary": "TEXT",
+        "primary_metric": "TEXT",
+        "json_path": "TEXT",
+        "markdown_path": "TEXT",
+        "png_path": "TEXT",
+        "concurrency_levels": "TEXT",
+        "max_output_tps": "REAL",
+        "max_output_tps_concurrency": "INTEGER",
+        "recommended_concurrency": "INTEGER",
+        "analysis_summary": "TEXT",
+    }
+    for name, ddl in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE benchmarks ADD COLUMN {name} {ddl}")
+    conn.commit()
 
 def save_result(d: dict):
     conn = sqlite3.connect(DB_PATH)
-    conn.execute(
+    _ensure_history_columns(conn)
+    cur = conn.execute(
         """INSERT INTO benchmarks
            (created_at, api_url, model, prompt, max_tokens, temperature,
             concurrency, total, stream_mode,
@@ -541,14 +629,104 @@ def save_result(d: dict):
             json.dumps(d, ensure_ascii=False),  # full summary as JSON
         ),
     )
+    config_summary = (
+        f"C{d.get('concurrency')} / N{d.get('total')} / "
+        f"max_tokens={d.get('max_tokens')}"
+    )
+    primary_metric = (
+        f"Output TPS {d.get('system_output_tps', 0) or 0:.1f} | "
+        f"E2E P95 {d.get('e2e_latency_p95', 0) or 0:.3f}s | "
+        f"Success {d.get('success_rate', 0) or 0:.0f}%"
+    )
+    conn.execute(
+        """UPDATE benchmarks
+           SET record_type='single', status=?, config_summary=?, primary_metric=?,
+               json_path='', markdown_path='', png_path=''
+           WHERE id=?""",
+        ("completed" if d.get("fail", 0) == 0 else "completed_with_failures",
+         config_summary, primary_metric, cur.lastrowid),
+    )
+    conn.commit()
+    conn.close()
+
+def save_sweep_history(sweep_result: dict, json_path: str = "",
+                       markdown_path: str = "", png_path: str = "",
+                       status: str = "completed"):
+    """Persist a sweep record without storing PNG binary data."""
+    conn = sqlite3.connect(DB_PATH)
+    _ensure_history_columns(conn)
+
+    cases = sweep_result.get("cases", [])
+    levels = sweep_result.get("concurrency_levels", [])
+    multiplier = sweep_result.get("requests_multiplier", "")
+    model = sweep_result.get("model", "")
+    api_url = sweep_result.get("api_url", "")
+    analysis_summary = sweep_result.get("analysis_summary", [])
+
+    max_output_tps = 0.0
+    max_output_tps_concurrency = None
+    recommended_concurrency = None
+    success_concs = []
+    for case in cases:
+        c = case.get("concurrency")
+        summary = case.get("benchmark_summary", {})
+        tps = summary.get("system_output_tps", 0) or 0
+        if tps >= max_output_tps:
+            max_output_tps = tps
+            max_output_tps_concurrency = c
+        if (summary.get("success_rate", 0) or 0) >= 95:
+            success_concs.append(c)
+    if success_concs:
+        recommended_concurrency = success_concs[-1]
+    elif max_output_tps_concurrency is not None:
+        recommended_concurrency = max_output_tps_concurrency
+
+    config_summary = f"{','.join('C' + str(c) for c in levels)} / multiplier={multiplier}"
+    primary_metric = (
+        f"Max TPS {max_output_tps:.0f} tok/s @ C{max_output_tps_concurrency or '-'} | "
+        f"Recommended C{recommended_concurrency or '-'}"
+    )
+    created_at = sweep_result.get("finished_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    conn.execute(
+        """INSERT INTO benchmarks
+           (created_at, record_type, status, api_url, model, prompt,
+            max_tokens, temperature, concurrency, total, stream_mode,
+            metric_standard, success, fail, success_rate,
+            summary_json, config_summary, primary_metric,
+            json_path, markdown_path, png_path,
+            concurrency_levels, max_output_tps, max_output_tps_concurrency,
+            recommended_concurrency, analysis_summary)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            created_at, "sweep", status, api_url, model, "",
+            None, None, 0, sum(c.get("total_requests", 0) for c in cases), 0,
+            "JISUMAN LLM Benchmark Standard v1",
+            sum((c.get("benchmark_summary", {}).get("success", 0) or 0) for c in cases),
+            sum((c.get("benchmark_summary", {}).get("fail", 0) or 0) for c in cases),
+            None,
+            json.dumps(sweep_result, ensure_ascii=False, default=str),
+            config_summary, primary_metric,
+            json_path or "", markdown_path or "", png_path or "",
+            json.dumps(levels, ensure_ascii=False),
+            max_output_tps, max_output_tps_concurrency,
+            recommended_concurrency,
+            json.dumps(analysis_summary, ensure_ascii=False),
+        ),
+    )
     conn.commit()
     conn.close()
 
 def load_history(limit=50):
     conn = sqlite3.connect(DB_PATH)
+    _ensure_history_columns(conn)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT id, created_at, model, concurrency, total, "
+        "SELECT id, created_at, record_type, status, model, api_url, "
+        "config_summary, primary_metric, json_path, markdown_path, png_path, "
+        "concurrency_levels, max_output_tps, max_output_tps_concurrency, "
+        "recommended_concurrency, analysis_summary, summary_json, "
+        "concurrency, total, "
         "success, fail, success_rate, "
         "e2e_latency_avg, e2e_latency_p95, e2el_avg, e2el_p95, "
         "ttft_avg, "
@@ -1346,12 +1524,44 @@ class LLMBenchmarkApp:
         self._smoke_latency = 0.0
         self._run_started_at = None      # for elapsed display
         self._icon_pulse_id = None       # icon pulse after id
+        self._header_anim_mode = ""
+        self._header_anim_index = 0
         init_db()
         self._setup_styles()
         self._build_header()
         self._build_body()
         self._build_statusbar()
         self._load_config()
+
+    def _load_header_logo(self, path="/opt/llm-bechmark/logo.png", max_height=28, max_width=160):
+        paths = [
+            path,
+            "/opt/llm-benchmark/logo.png",
+            "/home/jisuman/logo.png",
+        ]
+        logo_path = next((p for p in paths if p and os.path.exists(p)), None)
+        if not logo_path:
+            return None
+        try:
+            from PIL import Image, ImageTk
+            img = Image.open(logo_path)
+            img.thumbnail((max_width, max_height), Image.LANCZOS)
+            return ImageTk.PhotoImage(img)
+        except Exception:
+            try:
+                img = tk.PhotoImage(file=logo_path)
+                w = img.width()
+                h = img.height()
+                if w <= 0 or h <= 0:
+                    return None
+                scale_h = max(1, (h + max_height - 1) // max_height)
+                scale_w = max(1, (w + max_width - 1) // max_width)
+                scale = max(scale_h, scale_w)
+                if scale > 1:
+                    img = img.subsample(scale, scale)
+                return img
+            except Exception:
+                return None
     # ---------- style ----------
     def _setup_styles(self):
         st = ttk.Style()
@@ -1421,17 +1631,25 @@ class LLMBenchmarkApp:
         # icon + title in one line
         title_row = tk.Frame(left, bg=C_STYLE["bg_header"])
         title_row.pack(anchor="w")
-        icon_lbl = tk.Label(title_row, text="⚡", font=(FONT_FAMILY, 16),
-                            bg=C_STYLE["bg_header"], fg=C_STYLE["accent"])
-        icon_lbl.pack(side=tk.LEFT, padx=(0, 8))
-        self._icon_lbl = icon_lbl
+        self.logo_image = self._load_header_logo("/opt/llm-bechmark/logo.png",
+                                                 max_height=28, max_width=160)
+        if self.logo_image is not None:
+            icon_lbl = tk.Label(title_row, image=self.logo_image,
+                                bg=C_STYLE["bg_header"])
+            icon_lbl.pack(side=tk.LEFT, padx=(0, 10))
+            self._icon_lbl = None
+        else:
+            icon_lbl = tk.Label(title_row, text="⚡", font=(FONT_FAMILY, 16),
+                                bg=C_STYLE["bg_header"], fg=C_STYLE["accent"])
+            icon_lbl.pack(side=tk.LEFT, padx=(0, 8))
+            self._icon_lbl = icon_lbl
         ttk.Label(title_row, text="LLM Benchmark GUI", style="Title.TLabel").pack(side=tk.LEFT)
         ttk.Label(left, text="OpenAI 兼容接口并发性能测试", style="Subtitle.TLabel").pack(anchor="w")
         right = tk.Frame(inner, bg=C_STYLE["bg_header"])
         right.pack(side=tk.RIGHT)
         # status pill (fixed min-width to prevent overflow)
         pill = tk.Frame(right, bg=C_STYLE["bg_stripe"], highlightbackground=C_STYLE["border"],
-                        highlightthickness=1, bd=0, width=240)
+                        highlightthickness=1, bd=0, width=280)
         pill.pack(side=tk.RIGHT, padx=(C_STYLE["pad_sm"], 0))
         pill.pack_propagate(False)  # lock width
         pill_inner = tk.Frame(pill, bg=C_STYLE["bg_stripe"])
@@ -1454,12 +1672,15 @@ class LLMBenchmarkApp:
         self.nb.grid(row=0, column=0, sticky="nsew")
         self.settings_frame = tk.Frame(self.nb, bg=C_STYLE["bg_main"])
         self.bench_frame = tk.Frame(self.nb, bg=C_STYLE["bg_main"])
+        self.sweep_frame = tk.Frame(self.nb, bg=C_STYLE["bg_main"])
         self.history_frame = tk.Frame(self.nb, bg=C_STYLE["bg_main"])
         self.nb.add(self.settings_frame, text="  参数设置  ")
         self.nb.add(self.bench_frame, text="  基准测试  ")
+        self.nb.add(self.sweep_frame, text="  并发扫测  ")
         self.nb.add(self.history_frame, text="  历史记录  ")
         self._build_settings_tab()
         self._build_results_tab()
+        self._build_sweep_tab()
         self._build_history_tab()
     def _build_settings_tab(self):
         sf = self.settings_frame
@@ -1490,7 +1711,7 @@ class LLMBenchmarkApp:
         col = tk.Frame(inner, bg=C_STYLE["bg_main"])
         col.pack(fill=tk.X, padx=C_STYLE["pad_lg"], pady=C_STYLE["pad_lg"])
 
-        card_a = SectionCard(col, "API 配置")
+        card_a = SectionCard(col, "API 配置", collapsible=True, expanded=True)
         card_a.pack(fill=tk.X, pady=(0, C_STYLE["gap_lg"]))
         self.url_var = tk.StringVar(value="http://192.168.1.12:8000/v1")
         self._labeled_input(card_a.content, "API 地址", self.url_var, 0, width=40)
@@ -1521,12 +1742,12 @@ class LLMBenchmarkApp:
         self._labeled_text(card_a.content, "系统提示词", self.system_var, 3, height=2)
         self.prompt_var = tk.StringVar(value="请用300字左右介绍机器学习。")
         self._labeled_text(card_a.content, "用户提示词", self.prompt_var, 4, height=2)
-        card_b = SectionCard(col, "测试参数")
+        card_b = SectionCard(col, "测试参数", collapsible=True, expanded=True)
         card_b.pack(fill=tk.X, pady=(0, C_STYLE["gap_lg"]))
         self._build_test_params(card_b.content)
 
 
-        card_c = SectionCard(col, "操作")
+        card_c = SectionCard(col, "操作", collapsible=True, expanded=True)
         card_c.pack(fill=tk.X)
         btn_row = tk.Frame(card_c.content, bg=C_STYLE["bg_card"])
         btn_row.pack(fill=tk.X, pady=(0, C_STYLE["gap_sm"]))
@@ -1730,7 +1951,8 @@ class LLMBenchmarkApp:
         self.notice_banner = NoticeBanner(bf, "info")
         self.notice_banner.grid(row=2, column=0, sticky="ew",
                                 pady=(0, C_STYLE["gap_lg"]))
-        hist_card = SectionCard(bf, "E2E Latency Distribution (e2el)")
+        hist_card = SectionCard(bf, "E2E Latency Distribution (e2el)",
+                                collapsible=True, expanded=False)
         hist_card.grid(row=3, column=0, sticky="nsew",
                        pady=(0, C_STYLE["gap_lg"]))
         hist_card.columnconfigure(0, weight=1)
@@ -1810,13 +2032,19 @@ class LLMBenchmarkApp:
                         textvariable=var, width=10)
         s.grid(row=row, column=col * 2 + 1, sticky="w",
                padx=(0, 0), pady=(C_STYLE["gap_sm"], 0))
-    # ── icon pulse (low-overhead running indicator) ──
+    # ── header running indicator (low-overhead animation) ──
     ICON_FRAMES = ["⚡", "✦"]
+    STATUS_FRAMES = ["◐", "◓", "◑", "◒"]
+    STATUS_COLORS = [C_STYLE["accent"], C_STYLE["info"],
+                     C_STYLE["success"], C_STYLE["warning"]]
 
-    def _start_icon_pulse(self):
-        self._benchmark_running = True
+    def _start_icon_pulse(self, mode="基准测试", mark_benchmark=True):
+        if mark_benchmark:
+            self._benchmark_running = True
         self._run_started_at = time.perf_counter()
         self._icon_index = 0
+        self._header_anim_index = 0
+        self._header_anim_mode = mode
         if self._icon_pulse_id:
             try:
                 self.root.after_cancel(self._icon_pulse_id)
@@ -1826,23 +2054,44 @@ class LLMBenchmarkApp:
         self._pulse_icon()
 
     def _pulse_icon(self):
-        if not self._benchmark_running:
+        if not (self._benchmark_running or getattr(self, "_sweep_running", False)):
             return
         f = self.ICON_FRAMES[self._icon_index % len(self.ICON_FRAMES)]
         self._icon_index += 1
-        self._icon_lbl.config(text=f)
+        if self._icon_lbl is not None:
+            self._icon_lbl.config(text=f)
+
+        color = self.STATUS_COLORS[self._header_anim_index % len(self.STATUS_COLORS)]
+        dot = self.STATUS_FRAMES[self._header_anim_index % len(self.STATUS_FRAMES)]
+        self._header_anim_index += 1
+        elapsed = self._format_elapsed()
+        try:
+            self._status_dot.config(text=f" {dot}", fg=color)
+            self._status_badge_lbl.config(
+                text=f"{self._header_anim_mode}运行中 · {elapsed}",
+                fg=C_STYLE["text_primary"])
+        except Exception:
+            pass
         self._icon_pulse_id = self.root.after(600, self._pulse_icon)
 
-    def _stop_icon_pulse(self):
-        self._benchmark_running = False
+    def _stop_icon_pulse(self, mark_benchmark=True, status_text="空闲"):
+        if mark_benchmark:
+            self._benchmark_running = False
         if self._icon_pulse_id:
             try:
                 self.root.after_cancel(self._icon_pulse_id)
             except Exception:
                 pass
             self._icon_pulse_id = None
-        self._icon_lbl.config(text="⚡")
-    # ── end icon pulse ──
+        if self._icon_lbl is not None:
+            self._icon_lbl.config(text="⚡")
+        try:
+            self._status_dot.config(text=" ●", fg=C_STYLE["text_muted"])
+            self._status_badge_lbl.config(text=status_text,
+                                          fg=C_STYLE["text_secondary"])
+        except Exception:
+            pass
+    # ── end header running indicator ──
 
     def _format_elapsed(self) -> str:
         if self._run_started_at is None:
@@ -2944,14 +3193,16 @@ class LLMBenchmarkApp:
                        font=C_STYLE["font_small"],
                        bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"])
         lbl.pack(side=tk.RIGHT)
-        # table card
-        table_card = tk.Frame(hf, bg=C_STYLE["bg_card"],
-                              highlightbackground=C_STYLE["border"],
-                              highlightthickness=1, bd=0)
-        table_card.grid(row=1, column=0, sticky="nsew")
+        # table card — collapsible section (expanded by default)
+        table_section = SectionCard(hf, "历史记录",
+                                    collapsible=True, expanded=True)
+        table_section.grid(row=1, column=0, sticky="nsew")
+        table_section.columnconfigure(0, weight=1)
+        table_section.rowconfigure(0, weight=1)
+        table_card = tk.Frame(table_section.content, bg=C_STYLE["bg_card"])
         table_card.grid_columnconfigure(0, weight=1)
         table_card.grid_rowconfigure(0, weight=1)
-        cols = ("id", "时间", "模型", "并发", "请求", "成功率", "E2E P95", "TTFT Avg", "Output TPS", "Req/s", "耗时", "标准")
+        cols = ("id", "Time", "Type", "Model", "Config", "Key Result", "Status")
         self.hist_tree = ttk.Treeview(table_card, columns=cols,
                                       show="headings", selectmode="browse",
                                       style="App.Treeview")
@@ -2959,15 +3210,12 @@ class LLMBenchmarkApp:
             self.hist_tree.heading(c, text=c)
             self.hist_tree.column(c, width=80, anchor="center")
         self.hist_tree.column("id", width=40)
-        self.hist_tree.column("时间", width=130)
-        self.hist_tree.column("模型", width=100)
-        self.hist_tree.column("成功率", width=65)
-        self.hist_tree.column("E2E P95", width=80)
-        self.hist_tree.column("TTFT Avg", width=75)
-        self.hist_tree.column("Output TPS", width=80)
-        self.hist_tree.column("Req/s", width=60)
-        self.hist_tree.column("耗时", width=65)
-        self.hist_tree.column("标准", width=60)
+        self.hist_tree.column("Time", width=140)
+        self.hist_tree.column("Type", width=80)
+        self.hist_tree.column("Model", width=120)
+        self.hist_tree.column("Config", width=220)
+        self.hist_tree.column("Key Result", width=300)
+        self.hist_tree.column("Status", width=100)
         scrollbar = ttk.Scrollbar(table_card, orient=tk.VERTICAL,
                                   command=self.hist_tree.yview)
         self.hist_tree.configure(yscrollcommand=scrollbar.set)
@@ -2979,31 +3227,1397 @@ class LLMBenchmarkApp:
                        pady=C_STYLE["pad_lg"])
         self.hist_tree.bind("<Double-1>", self._on_history_double_click)
         self._refresh_history()
+    def _build_sweep_tab(self):
+        """Build the 并发扫测 (concurrency sweep) tab."""
+        sf = self.sweep_frame
+        sf.grid_columnconfigure(0, weight=1)
+        sf.grid_rowconfigure(0, weight=1)
+
+        sweep_scroll = ScrollableFrame(sf, bg=C_STYLE["bg_main"])
+        sweep_scroll.grid(row=0, column=0, sticky="nsew")
+        sf_inner = tk.Frame(sweep_scroll.content, bg=C_STYLE["bg_main"])
+        sf_inner.pack(fill=tk.BOTH, expand=True, padx=C_STYLE["pad_lg"], pady=C_STYLE["pad_lg"])
+        sf_inner.grid_columnconfigure(0, weight=1)
+        sf_inner.grid_rowconfigure(0, weight=0)  # config card — fixed
+        sf_inner.grid_rowconfigure(1, weight=0)  # status area — fixed
+        sf_inner.grid_rowconfigure(2, weight=0)  # chart area — fixed height
+        sf_inner.grid_rowconfigure(3, weight=0)  # expert — fixed
+        sf_inner.grid_rowconfigure(4, weight=1)  # output files — expandable
+
+        # ── Config Card ──
+        config_card = SectionCard(sf_inner, "扫测配置与操作",
+                                  collapsible=True, expanded=True)
+        config_card.grid(row=0, column=0, sticky="ew", pady=(0, C_STYLE["gap_lg"]))
+        self._sweep_config_card = config_card
+
+        cfg = config_card.content
+        # Row 0: Concurrency levels
+        tk.Label(cfg, text="并发级别", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
+            row=0, column=0, sticky="w", padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
+        self.sweep_conc_var = tk.StringVar(value="1,5,10,20,40")
+        ttk.Entry(cfg, textvariable=self.sweep_conc_var, width=40).grid(
+            row=0, column=1, sticky="ew", pady=(0, C_STYLE["gap_sm"]))
+        tk.Label(cfg, text="例如: 1,5,10,20,40", font=C_STYLE["font_small"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"]).grid(
+            row=0, column=2, sticky="w", padx=(C_STYLE["pad_sm"], 0), pady=(0, C_STYLE["gap_sm"]))
+
+        # Row 1: Requests multiplier
+        tk.Label(cfg, text="请求倍数", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
+            row=1, column=0, sticky="w", padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
+        self.sweep_mult_var = tk.IntVar(value=10)
+        ttk.Spinbox(cfg, from_=1, to=100, increment=1,
+                    textvariable=self.sweep_mult_var, width=8).grid(
+            row=1, column=1, sticky="w", pady=(0, C_STYLE["gap_sm"]))
+        tk.Label(cfg, text="每个并发级别: 请求数 = 并发数 × 倍数",
+                 font=C_STYLE["font_small"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"]).grid(
+            row=1, column=2, sticky="w", padx=(C_STYLE["pad_sm"], 0), pady=(0, C_STYLE["gap_sm"]))
+
+        # Row 2: Resource mode (always disabled for MVP)
+        tk.Label(cfg, text="资源监测", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
+            row=2, column=0, sticky="w", padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
+        self.sweep_resource_var = tk.StringVar(value="disabled")
+        res_combo = ttk.Combobox(cfg, textvariable=self.sweep_resource_var,
+                                 values=["disabled"], width=12, state="readonly")
+        res_combo.grid(row=2, column=1, sticky="w", pady=(0, C_STYLE["gap_sm"]))
+        res_combo.current(0)
+        tk.Label(cfg, text="MVP 阶段资源监测暂不可用",
+                 font=C_STYLE["font_small"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"]).grid(
+            row=2, column=2, sticky="w", padx=(C_STYLE["pad_sm"], 0), pady=(0, C_STYLE["gap_sm"]))
+
+        # Row 3: Save options
+        save_lbl = tk.Label(cfg, text="保存选项", font=C_STYLE["font_body"],
+                            bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"])
+        save_lbl.grid(row=3, column=0, sticky="w",
+                      padx=(0, C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0))
+        save_row = tk.Frame(cfg, bg=C_STYLE["bg_card"])
+        save_row.grid(row=3, column=1, columnspan=2, sticky="ew",
+                      pady=(C_STYLE["gap_sm"], 0))
+        self.sweep_save_json_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(save_row, text="保存扫测数据 JSON",
+                        variable=self.sweep_save_json_var).pack(side=tk.LEFT)
+        self.sweep_save_md_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(save_row, text="保存文字分析报告 Markdown",
+                        variable=self.sweep_save_md_var).pack(side=tk.LEFT,
+                        padx=(C_STYLE["pad_sm"], 0))
+        self.sweep_save_png_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(save_row, text="保存图表 PNG",
+                        variable=self.sweep_save_png_var).pack(side=tk.LEFT,
+                        padx=(C_STYLE["pad_sm"], 0))
+        self.sweep_save_history_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(save_row, text="保存到历史记录",
+                        variable=self.sweep_save_history_var).pack(side=tk.LEFT,
+                        padx=(C_STYLE["pad_sm"], 0))
+
+        # Row 4: Start button
+        btn_row = tk.Frame(cfg, bg=C_STYLE["bg_card"])
+        btn_row.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(C_STYLE["gap_sm"], 0))
+        self.sweep_start_btn = ttk.Button(btn_row, text="开始扫测",
+                                          style="Primary.TButton",
+                                          command=self._start_sweep)
+        self.sweep_start_btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # ── Status Card (row 1, collapsed) ──
+        status_card = SectionCard(sf_inner, "扫测状态",
+                                  collapsible=True, expanded=False)
+        status_card.grid(row=1, column=0, sticky="ew", pady=(0, C_STYLE["gap_lg"]))
+        self._sweep_status_card = status_card
+        sc = status_card.content
+        self.sweep_status_text = tk.Text(sc, font=C_STYLE["font_small"],
+                                         height=6, wrap=tk.WORD,
+                                         bg=C_STYLE["bg_input"],
+                                         fg=C_STYLE["text_primary"],
+                                         highlightbackground=C_STYLE["border"],
+                                         highlightthickness=1,
+                                         relief=tk.FLAT, borderwidth=0,
+                                         padx=8, pady=6,
+                                         state=tk.DISABLED)
+        self.sweep_status_text.pack(fill=tk.X)
+
+        # ── Chart Frame (row 2, collapsed) ──
+        chart_card = SectionCard(sf_inner, "图形分析",
+                                 collapsible=True, expanded=False)
+        chart_card.grid(row=2, column=0, sticky="ew", pady=(0, C_STYLE["gap_lg"]))
+        self._sweep_chart_card = chart_card
+        chart_card.columnconfigure(0, weight=1)
+        chart_card.rowconfigure(0, weight=1)
+        self.sweep_chart_frame = tk.Frame(chart_card.content, bg=C_STYLE["bg_card"],
+                                          height=520)
+        self.sweep_chart_frame.pack(fill="both", expand=True)
+        self.sweep_chart_frame.pack_propagate(False)
+        # Status label inside chart frame (shown when matplotlib missing)
+        self.sweep_chart_status_var = tk.StringVar(value="")
+        self._sweep_chart_status_lbl = tk.Label(
+            self.sweep_chart_frame, textvariable=self.sweep_chart_status_var,
+            font=C_STYLE["font_body"],
+            bg=C_STYLE["bg_card"], fg=C_STYLE["text_secondary"],
+            wraplength=400)
+        self._sweep_chart_status_lbl.place(relx=0.5, rely=0.5, anchor="center")
+        # state
+        self._sweep_chart_canvas = None
+        self._sweep_chart_figure = None
+
+        # ── Output Files Card (row 4, collapsed) ──
+        results_card = SectionCard(sf_inner, "输出文件",
+                                   collapsible=True, expanded=False)
+        results_card.grid(row=4, column=0, sticky="nsew", pady=(C_STYLE["gap_lg"], 0))
+        self._sweep_output_card = results_card
+        results_card.columnconfigure(0, weight=1)
+        results_card.rowconfigure(0, weight=1)
+        self.sweep_result_text = tk.Text(results_card.content,
+                                         font=C_STYLE["font_code"],
+                                         wrap=tk.WORD,
+                                         bg=C_STYLE["bg_card"],
+                                         fg=C_STYLE["text_primary"],
+                                         relief=tk.FLAT, borderwidth=0,
+                                         state=tk.DISABLED)
+        self.sweep_result_text.grid(row=0, column=0, sticky="nsew")
+        rscroll = ttk.Scrollbar(results_card.content, orient=tk.VERTICAL,
+                                command=self.sweep_result_text.yview)
+        rscroll.grid(row=0, column=1, sticky="ns")
+        self.sweep_result_text.configure(yscrollcommand=rscroll.set)
+
+        # sweep state variables
+        self._sweep_running = False
+        self._sweep_result = None
+
+        # ── Expert Analysis Card (row 4, collapsible, shown after sweep) ──
+        self._expert_card = SectionCard(sf_inner, "专家分析简评",
+                                        collapsible=True, expanded=False)
+        self._expert_card.grid(row=3, column=0, sticky="ew")
+        self._expert_card.columnconfigure(0, weight=1)
+        self._expert_text = tk.Text(self._expert_card.content,
+                                    font=C_STYLE["font_body"],
+                                    wrap=tk.WORD,
+                                    bg=C_STYLE["bg_card"],
+                                    fg=C_STYLE["text_primary"],
+                                    relief=tk.FLAT, borderwidth=0,
+                                    height=6,
+                                    state=tk.DISABLED)
+        self._expert_text.pack(fill=tk.X)
+    def _parse_concurrency_levels(self, text: str) -> list[int]:
+        """Parse comma-separated concurrency levels. Returns sorted unique ints.
+        Raises ValueError for invalid input."""
+        parts = [p.strip() for p in text.split(",") if p.strip()]
+        if not parts:
+            raise ValueError("并发级别不能为空")
+        levels = []
+        for p in parts:
+            try:
+                v = int(p)
+            except ValueError:
+                raise ValueError(f"无效的并发值: '{p}'，请输入逗号分隔的整数，例如: 1,5,10")
+            if v < 1:
+                raise ValueError(f"并发数必须大于 0，收到: {v}")
+            if v > 512:
+                raise ValueError(f"并发数不能超过 512，收到: {v}")
+            levels.append(v)
+        # Sort and deduplicate
+        levels = sorted(set(levels))
+        if not levels:
+            raise ValueError("并发级别不能为空")
+        return levels
+
+    def _compute_analysis_metrics(self, summary: dict, baseline_output_tps: float,
+                                   baseline_concurrency: int) -> dict:
+        """Compute extracted analysis metrics from a benchmark summary.
+        Returns a dict with all analysis_metrics fields."""
+        e2e_avg = summary.get("e2e_latency_avg", 0) or None
+        e2e_p50 = summary.get("e2e_latency_p50", 0) or None
+        e2e_p95 = summary.get("e2e_latency_p95", 0) or None
+        e2e_p99 = summary.get("e2e_latency_p99", 0) or None
+        ttft_avg = summary.get("ttft_avg", None)
+        first_visible_token_avg = summary.get("first_visible_token_avg", None)
+        first_visible_gap_avg = summary.get("first_visible_gap_avg", None)
+        tpot_avg = summary.get("tpot_avg", None)
+        itl_avg = summary.get("itl_avg", None)
+        output_tps = summary.get("system_output_tps", 0) or None
+        total_tps = summary.get("system_total_tps", 0) or None
+        rps = summary.get("request_throughput_rps", 0) or None
+        success_rate = summary.get("success_rate", None)
+        per_request_output_tps = summary.get("per_request_output_tps_avg", 0) or None
+
+        # Throughput efficiency
+        concurrency = summary.get("concurrency", baseline_concurrency)
+        if baseline_output_tps and baseline_output_tps > 0 and concurrency > 0:
+            throughput_efficiency = output_tps / (baseline_output_tps * concurrency) if output_tps else None
+        else:
+            throughput_efficiency = None
+
+        return {
+            "e2e_avg": e2e_avg,
+            "e2e_p50": e2e_p50,
+            "e2e_p95": e2e_p95,
+            "e2e_p99": e2e_p99,
+            "ttft_avg": ttft_avg,
+            "first_visible_token_avg": first_visible_token_avg,
+            "first_visible_gap_avg": first_visible_gap_avg,
+            "tpot_avg": tpot_avg,
+            "itl_avg": itl_avg,
+            "output_tps": output_tps,
+            "total_tps": total_tps,
+            "rps": rps,
+            "success_rate": success_rate,
+            "per_request_output_tps": per_request_output_tps,
+            "throughput_efficiency": throughput_efficiency,
+        }
+
+    def _generate_analysis_summary(self, cases: list[dict]) -> list[str]:
+        """Generate automatic text analysis based on sweep results.
+        Returns a list of Chinese analysis strings."""
+        if len(cases) < 2:
+            return ["数据点不足，无法判断吞吐拐点。"]
+
+        lines = []
+        conc = [c["concurrency"] for c in cases]
+        s = [c["benchmark_summary"] for c in cases]
+
+        # 1. Max output_tps concurrency
+        tps_vals = [(i, cs.get("system_output_tps", 0)) for i, cs in enumerate(s)]
+        max_tps = max(tps_vals, key=lambda x: x[1])
+        if max_tps[1] > 0:
+            lines.append(
+                f"最大输出吞吐出现在并发={conc[max_tps[0]]}，"
+                f"Output TPS = {max_tps[1]:.1f} tok/s。")
+
+        # 2. Output TPS growth slowdown
+        if len(cases) >= 3:
+            tps_seq = [cs.get("system_output_tps", 0) for cs in s]
+            growth_rates = []
+            for i in range(1, len(tps_seq)):
+                if tps_seq[i - 1] > 0:
+                    growth_rates.append(tps_seq[i] / tps_seq[i - 1])
+            if growth_rates:
+                # Check if growth is slowing
+                slowdown = all(
+                    growth_rates[j] < growth_rates[j - 1] * 0.95
+                    for j in range(1, len(growth_rates))
+                )
+                if slowdown and len(growth_rates) >= 2:
+                    lines.append(
+                        "输出吞吐增速持续放缓，可能已接近服务端吞吐上限。")
+                elif growth_rates[-1] < 1.05 and len(growth_rates) >= 2:
+                    lines.append(
+                        f"并发从 {conc[-2]} 增加到 {conc[-1]} 时吞吐几乎不再增长，"
+                        f"拐点约在并发={conc[-2]}。")
+
+        # 3. E2E P95/P99 growth
+        p95_vals = [cs.get("e2e_latency_p95", 0) for cs in s]
+        p99_vals = [cs.get("e2e_latency_p99", 0) for cs in s]
+        if len(p95_vals) >= 2 and p95_vals[0] > 0:
+            p95_growth = p95_vals[-1] / p95_vals[0]
+            if p95_growth > 3:
+                lines.append(
+                    f"E2E P95 从 {p95_vals[0]:.2f}s 增长到 {p95_vals[-1]:.2f}s "
+                    f"（{p95_growth:.1f}x），高并发下延迟长尾明显。")
+            elif p95_growth > 1.5:
+                lines.append(
+                    f"E2E P95 增长 {p95_growth:.1f}x，高并发下存在一定的排队延迟。")
+        if len(p99_vals) >= 2 and p99_vals[0] > 0:
+            p99_growth = p99_vals[-1] / p99_vals[0]
+            if p99_growth > 5:
+                lines.append(
+                    f"E2E P99 增长 {p99_growth:.1f}x，极端延迟大幅恶化，"
+                    f"建议降低并发或检查服务端队列配置。")
+
+        # 4. TPOT/ITL stability
+        tpot_vals = [cs.get("tpot_avg", 0) or 0 for cs in s]
+        itl_vals = [cs.get("itl_avg", 0) or 0 for cs in s]
+        valid_tpot = [v for v in tpot_vals if v > 0]
+        valid_itl = [v for v in itl_vals if v > 0]
+        if valid_tpot:
+            tpot_range = max(valid_tpot) / min(valid_tpot) if min(valid_tpot) > 0 else 1
+            if tpot_range > 2.0:
+                lines.append(
+                    f"TPOT 随并发恶化 {tpot_range:.1f}x，"
+                    f"单 Token 生成速度在高并发下明显下降。")
+            elif tpot_range > 1.3:
+                lines.append(f"TPOT 略有上升（{tpot_range:.1f}x），生成速度轻度受影响。")
+            else:
+                lines.append("TPOT 随并发保持稳定，单 Token 生成速度未受影响。")
+        if valid_itl:
+            itl_range = max(valid_itl) / min(valid_itl) if min(valid_itl) > 0 else 1
+            if itl_range > 2.0:
+                lines.append(f"ITL 随并发恶化 {itl_range:.1f}x，Token 间隔显著增大。")
+            elif itl_range <= 1.3:
+                lines.append("ITL 保持稳定，Token 流式输出间隔未恶化。")
+
+        # 5. First Visible Gap
+        gap_vals = [cs.get("first_visible_gap_avg", 0) or 0 for cs in s]
+        if any(v > 0.5 for v in gap_vals):
+            max_gap = max(gap_vals)
+            lines.append(
+                f"首包到首字间隔 (First Visible Gap) 最大 {max_gap:.3f}s (>0.5s)，"
+                f"服务端已较早开始流式响应，但首个可见输出较晚。")
+
+        # 6. Recommend practical concurrency range
+        # Find the range where success_rate stays > 95% and throughput_efficiency > 0.5
+        good_range = []
+        for i, cs in enumerate(s):
+            sr = cs.get("success_rate", 100)
+            tp = cs.get("system_output_tps", 0)
+            if sr > 95:
+                good_range.append(conc[i])
+        if good_range:
+            if len(good_range) == len(conc):
+                lines.append(
+                    f"所有并发级别成功率均 >95%，建议实际使用范围: "
+                    f"并发 {min(good_range)}–{max(good_range)}。")
+            else:
+                lines.append(
+                    f"成功率 >95% 的并发范围: {good_range}。"
+                    f"建议在此范围内选择实际部署并发数。")
+
+        if not lines:
+            lines.append("数据点不足，无法判断吞吐拐点。")
+        return lines
+
+    def _generate_expert_commentary(self, cases: list[dict],
+                                     analysis_summary: list[str]) -> str:
+        """Generate a 150-300 character professional expert commentary.
+        Based on data, restrained tone, no absolute claims."""
+        if len(cases) < 2:
+            return ("本轮仅测试单一并发档位，无法进行趋势判断。"
+                    "建议至少使用 3 档并发（如 1/5/20）进行复测，"
+                    "以获得可靠的吞吐-延迟关系。")
+
+        s = [c["benchmark_summary"] for c in cases]
+        conc = [c["concurrency"] for c in cases]
+
+        # Build commentary from actual data
+        parts = []
+
+        # Overall trend
+        tps_first = s[0].get("system_output_tps", 0) or 0
+        tps_last = s[-1].get("system_output_tps", 0) or 0
+        e2e_first = s[0].get("e2e_latency_avg", 0) or 0
+        e2e_last = s[-1].get("e2e_latency_avg", 0) or 0
+
+        if tps_last > tps_first * 1.05:
+            parts.append(
+                f"从本轮并发扫测看，系统吞吐随并发提升整体呈上升趋势"
+                f"（{tps_first:.0f} → {tps_last:.0f} tok/s）。")
+        else:
+            parts.append("本轮扫测中系统吞吐未随并发明显提升，可能已接近当前配置下的有效吞吐上限。")
+
+        # Slowdown detection
+        if len(cases) >= 3:
+            tps_vals = [cs.get("system_output_tps", 0) or 0 for cs in s]
+            last_growth = tps_vals[-1] / max(tps_vals[-2], 1)
+            if last_growth < 1.05:
+                parts.append(
+                    f"在 C{conc[-2]}→C{conc[-1]} 区间吞吐已近停滞，"
+                    f"说明服务端可能逐步接近当前配置下的有效吞吐区间。")
+
+        # Latency analysis
+        e2e_p95_first = s[0].get("e2e_latency_p95", 0) or 0
+        e2e_p95_last = s[-1].get("e2e_latency_p95", 0) or 0
+        e2e_p99_first = s[0].get("e2e_latency_p99", 0) or 0
+        e2e_p99_last = s[-1].get("e2e_latency_p99", 0) or 0
+
+        if e2e_p95_first > 0 and e2e_p95_last > e2e_p95_first * 1.5:
+            parts.append(
+                f"E2E P95/P99 的增长幅度高于平均延迟，"
+                f"说明高并发下已经出现一定长尾。")
+
+        # TPOT/ITL stability
+        tpot_first = s[0].get("tpot_avg", 0) or 0
+        tpot_last = s[-1].get("tpot_avg", 0) or 0
+        itl_first = s[0].get("itl_avg", 0) or 0
+        itl_last = s[-1].get("itl_avg", 0) or 0
+
+        if tpot_first > 0 and tpot_last > 0:
+            tpot_ratio = tpot_last / tpot_first
+            if tpot_ratio <= 1.3:
+                parts.append(
+                    "TPOT 与 ITL 整体保持稳定，"
+                    "说明 decode 阶段本身仍较稳定，主要压力更可能来自排队、prefill 或调度侧。")
+            elif tpot_ratio <= 2.0:
+                parts.append(
+                    f"TPOT 随并发略有上升（{tpot_ratio:.1f}x），"
+                    f"decode 阶段开始受到一定影响，但尚未成为主要瓶颈。")
+            else:
+                parts.append(
+                    f"TPOT 随并发明显恶化（{tpot_ratio:.1f}x），"
+                    f"decode 阶段已受到较大压力。")
+
+        # First Visible Gap
+        gap_vals = [cs.get("first_visible_gap_avg", 0) or 0 for cs in s]
+        if any(v > 0.5 for v in gap_vals):
+            parts.append(
+                "First Visible Gap 在高并发下扩大，"
+                "用户首字体验可能先于总吞吐成为体验瓶颈。")
+
+        # Recommendation
+        good_concs = [conc[i] for i, cs in enumerate(s)
+                      if cs.get("success_rate", 0) > 95]
+        if good_concs:
+            parts.append(
+                f"建议后续重点观察 C{min(good_concs)}-C{max(good_concs)} 区间，"
+                "并结合实际业务可接受的 P95 延迟设定生产并发上限。")
+
+        commentary = "".join(parts)
+        # Truncate to ~300 chars
+        if len(commentary) > 350:
+            commentary = commentary[:347] + "..."
+        return commentary
+
+    def _generate_next_steps(self, cases: list[dict],
+                              analysis_summary: list[str]) -> list[str]:
+        """Generate 3-5 actionable next-step recommendations."""
+        steps = []
+        conc = [c["concurrency"] for c in cases]
+        s = [c["benchmark_summary"] for c in cases]
+
+        # 1. If only a few concurrency levels, suggest finer-grained sweep
+        if len(conc) <= 3:
+            steps.append(
+                "建议增加更细并发档位（如 C8/C16/C32）复测，"
+                "以便更精确地定位吞吐拐点和延迟转折点。")
+
+        # 2. If failures exist
+        has_failures = any(cs.get("fail", 0) > 0 for cs in s)
+        if has_failures:
+            steps.append(
+                "存在失败请求，建议优先排查 timeout 配置、HTTP 错误码和 vLLM 服务日志。")
+
+        # 3. Fix prompt/output length
+        steps.append(
+            "建议固定 prompt 和输出长度（如设置 max_tokens 并验证实际输出一致性），"
+            "减少随机输出长度对 E2E 延迟的干扰。")
+
+        # 4. Repeat near saturation point
+        tps_vals = [cs.get("system_output_tps", 0) or 0 for cs in s]
+        if len(tps_vals) >= 3:
+            # Find where growth starts slowing
+            growth = [tps_vals[i] / max(tps_vals[i - 1], 1)
+                      for i in range(1, len(tps_vals))]
+            slow_idx = next((i for i, g in enumerate(growth) if g < 1.1), -1)
+            if slow_idx >= 0:
+                steps.append(
+                    f"吞吐拐点疑似在 C{conc[slow_idx]}-C{conc[slow_idx + 1]} 附近，"
+                    "建议对该区间重复测试 3 轮以确认重复性。")
+
+        # 5. First Visible Gap investigation
+        gap_vals = [cs.get("first_visible_gap_avg", 0) or 0 for cs in s]
+        if any(v > 0.5 for v in gap_vals):
+            steps.append(
+                "建议关注 First Visible Gap 是否由模型思考输出、"
+                "模板前缀、流式 chunk 聚合行为或请求调度导致，"
+                "可通过对比不同 prompt 模板进一步缩小原因。")
+
+        # 6. If throughput efficiency drops significantly
+        if len(s) >= 2:
+            tps_first = s[0].get("system_output_tps", 0) or 0
+            tps_last = s[-1].get("system_output_tps", 0) or 0
+            c_last = conc[-1]
+            if tps_first > 0 and c_last > 0:
+                eff = tps_last / (tps_first * c_last)
+                if eff < 0.3:
+                    steps.append(
+                        f"Throughput Efficiency 已降至 {eff:.2f}，"
+                        "建议检查服务端 --max-num-seqs / --max-model-len 等并发限制参数。")
+
+        # Limit to 5 steps
+        return steps[:5]
+
+    def _generate_sweep_markdown_report(self, sweep_result: dict) -> str:
+        """Generate a full 8-section Markdown analysis report.
+        Returns the report content as a string."""
+        cases = sweep_result.get("cases", [])
+        analysis_summary = sweep_result.get("analysis_summary", [])
+        concurrency_levels = sweep_result.get("concurrency_levels", [])
+
+        if not cases:
+            return "# 推理性能并发扫测分析报告\n\n数据为空，无法生成报告。\n"
+
+        s = [c["benchmark_summary"] for c in cases]
+        conc = [c["concurrency"] for c in cases]
+        stream_mode = s[0].get("stream_mode", False) if s else False
+
+        # Helper: safe format
+        def _f(v, fmt=".2f", default="N/A"):
+            if v is None or v == 0:
+                return default
+            try:
+                return f"{v:{fmt}}"
+            except Exception:
+                return default
+
+        def _fmt_list(vals, fmt=".2f", default="N/A"):
+            formatted = []
+            for v in vals:
+                if v is None or v == 0:
+                    formatted.append(default)
+                else:
+                    try:
+                        formatted.append(f"{v:{fmt}}")
+                    except Exception:
+                        formatted.append(default)
+            return formatted
+
+        # ── Build report ──
+        md = []
+        md.append("# 推理性能并发扫测分析报告")
+        md.append("")
+
+        # ── 一、测试概览 ──
+        md.append("## 一、测试概览")
+        md.append("")
+        md.append(f"- **API URL**: `{sweep_result.get('api_url', 'N/A')}`")
+        md.append(f"- **Model**: `{sweep_result.get('model', 'N/A')}`")
+        md.append(f"- **并发档位**: {concurrency_levels}")
+        md.append(f"- **每档请求规则**: 总请求数 = 并发数 × {sweep_result.get('requests_multiplier', 10)}")
+        md.append(f"- **Max Tokens**: {s[0].get('max_tokens', 'N/A')}")
+        md.append(f"- **Temperature**: {s[0].get('temperature', 'N/A')}")
+        md.append(f"- **Stream Mode**: {'是 (stream=True)' if stream_mode else '否 (stream=False)'}")
+        md.append(f"- **测试开始**: {sweep_result.get('started_at', 'N/A')}")
+        md.append(f"- **测试结束**: {sweep_result.get('finished_at', 'N/A')}")
+
+        # Sample size warning
+        min_req = min(c.get("total_requests", 0) for c in cases) if cases else 0
+        if min_req < 5:
+            md.append("")
+            md.append("> ⚠ **注意**: 部分并发档位请求数较少（<5），样本量偏小，结论仅供快速参考。")
+        if len(cases) < 2:
+            md.append("")
+            md.append("> ⚠ **注意**: 仅测试了单一并发档位，数据点不足，无法进行趋势判断。")
+        md.append("")
+
+        # ── 二、核心结论 ──
+        md.append("## 二、核心结论")
+        md.append("")
+        for line in analysis_summary:
+            md.append(f"- {line}")
+        md.append("")
+
+        # ── 三、延迟分析 ──
+        md.append("## 三、延迟分析")
+        md.append("")
+        if len(cases) < 2:
+            md.append("数据点不足，无法判断明确趋势。")
+        else:
+            # Build table
+            md.append("| 并发 | E2E Avg (s) | E2E P50 (s) | E2E P95 (s) | E2E P99 (s) |")
+            md.append("|------|-------------|-------------|-------------|-------------|")
+            for i, c_val in enumerate(conc):
+                e2e_avg = _f(s[i].get("e2e_latency_avg"))
+                e2e_p50 = _f(s[i].get("e2e_latency_p50"))
+                e2e_p95 = _f(s[i].get("e2e_latency_p95"))
+                e2e_p99 = _f(s[i].get("e2e_latency_p99"))
+                md.append(f"| {c_val} | {e2e_avg} | {e2e_p50} | {e2e_p95} | {e2e_p99} |")
+            md.append("")
+
+            # Analysis text
+            e2e_p50_vals = [cs.get("e2e_latency_p50", 0) or 0 for cs in s]
+            e2e_p99_vals = [cs.get("e2e_latency_p99", 0) or 0 for cs in s]
+            e2e_p95_vals = [cs.get("e2e_latency_p95", 0) or 0 for cs in s]
+
+            if e2e_p50_vals[-1] > 0 and e2e_p99_vals[-1] > 0:
+                tail_ratio = e2e_p99_vals[-1] / e2e_p50_vals[-1] if e2e_p50_vals[-1] > 0 else 0
+                if tail_ratio > 2.0:
+                    md.append(f"P99/P50 比值达 {tail_ratio:.1f}x，高并发下长尾延迟明显。")
+                p95_ratio = e2e_p95_vals[-1] / e2e_p50_vals[-1] if e2e_p50_vals[-1] > 0 else 0
+                if p95_ratio > 1.5:
+                    md.append(f"P95/P50 比值达 {p95_ratio:.1f}x，P95 延迟已有扩散。")
+
+            # Decode vs queuing
+            tpot_first = s[0].get("tpot_avg", 0) or 0
+            tpot_last = s[-1].get("tpot_avg", 0) or 0
+            if tpot_first > 0 and tpot_last > 0:
+                ratio = tpot_last / tpot_first
+                if ratio <= 1.3:
+                    md.append("TPOT/ITL 保持稳定，说明 decode 阶段本身未明显恶化，高并发下延迟增长主要来自排队或调度。")
+                else:
+                    md.append(f"TPOT 从 {tpot_first:.3f}s 增长到 {tpot_last:.3f}s（{ratio:.1f}x），decode 阶段开始受到压力。")
+            else:
+                md.append("TPOT 数据不可用（非流式模式或数据不足），无法判断 decode 阶段是否受压。")
+        md.append("")
+
+        # ── 四、吞吐分析 ──
+        md.append("## 四、吞吐分析")
+        md.append("")
+        if len(cases) < 2:
+            md.append("数据点不足，无法判断吞吐趋势。")
+        else:
+            md.append("| 并发 | Output TPS (tok/s) | Total TPS (tok/s) | RPS (req/s) | Per-req TPS |")
+            md.append("|------|---------------------|-------------------|-------------|-------------|")
+            for i, c_val in enumerate(conc):
+                otps = _f(s[i].get("system_output_tps"), ".1f")
+                ttps = _f(s[i].get("system_total_tps"), ".1f")
+                rrps = _f(s[i].get("request_throughput_rps"), ".2f")
+                prtps = _f(s[i].get("per_request_output_tps_avg"), ".1f")
+                md.append(f"| {c_val} | {otps} | {ttps} | {rrps} | {prtps} |")
+            md.append("")
+
+            # Max TPS
+            tps_vals = [(i, cs.get("system_output_tps", 0) or 0) for i, cs in enumerate(s)]
+            max_idx, max_tps = max(tps_vals, key=lambda x: x[1])
+            if max_tps > 0:
+                md.append(f"最大输出吞吐出现在 C{conc[max_idx]}，Output TPS = {max_tps:.1f} tok/s。")
+
+            # Growth analysis
+            if len(cases) >= 3:
+                growth_ok = True
+                for i in range(1, len(conc)):
+                    tps_g = (s[i].get("system_output_tps", 0) or 0) / max((s[i - 1].get("system_output_tps", 0) or 1), 1)
+                    conc_g = conc[i] / conc[i - 1] if conc[i - 1] > 0 else 1
+                    if tps_g < conc_g * 0.5:
+                        md.append(f"C{conc[i - 1]}→C{conc[i]}：吞吐增长效率明显下降（TPS {tps_g:.2f}x vs 并发 {conc_g:.1f}x），疑似接近拐点。")
+                        growth_ok = False
+                        break
+                if growth_ok and all(
+                    s[i].get("system_output_tps", 0) or 0 > (s[i - 1].get("system_output_tps", 0) or 0) * 1.05
+                    for i in range(1, len(s))
+                ):
+                    md.append("吞吐随并发持续增长，尚未进入明显平台期。")
+        md.append("")
+
+        # ── 五、首包/首字/生成速度分析 ──
+        md.append("## 五、首包 / 首字 / 生成速度分析")
+        md.append("")
+        if not stream_mode:
+            md.append("非流式模式，TTFT/TPOT/ITL 数据不可用。")
+        else:
+            md.append("| 并发 | TTFT (s) | FVT (s) | FVG (s) | TPOT (s) | ITL (s) |")
+            md.append("|------|----------|---------|---------|----------|---------|")
+            for i, c_val in enumerate(conc):
+                ttft = _f(s[i].get("ttft_avg"), ".3f")
+                fvt = _f(s[i].get("first_visible_token_avg"), ".3f")
+                fvg = _f(s[i].get("first_visible_gap_avg"), ".3f")
+                tpot = _f(s[i].get("tpot_avg"), ".3f")
+                itl = _f(s[i].get("itl_avg"), ".3f")
+                md.append(f"| {c_val} | {ttft} | {fvt} | {fvg} | {tpot} | {itl} |")
+            md.append("")
+
+            # TTFT stability
+            ttft_vals = [cs.get("ttft_avg", 0) or 0 for cs in s]
+            valid_ttft = [v for v in ttft_vals if v > 0]
+            if valid_ttft:
+                ttft_range = max(valid_ttft) / min(valid_ttft) if min(valid_ttft) > 0 else 1
+                if ttft_range > 2.0:
+                    md.append(f"TTFT 随并发恶化 {ttft_range:.1f}x，首包延迟在高并发下显著上升。")
+                elif ttft_range > 1.3:
+                    md.append(f"TTFT 略有上升（{ttft_range:.1f}x），首包延迟轻度受影响。")
+                else:
+                    md.append("TTFT 随并发保持稳定。")
+
+            # First Visible Gap
+            fvg_vals = [cs.get("first_visible_gap_avg", 0) or 0 for cs in s]
+            if any(v > 0.5 for v in fvg_vals):
+                md.append("First Visible Gap > 0.5s，首字延迟需要关注。")
+            fvg_p95 = [cs.get("first_visible_gap_p95", 0) or 0 for cs in s]
+            if any(v > 2.0 for v in fvg_p95):
+                md.append("First Visible Gap P95 > 2.0s，首字长尾可能影响交互体验。")
+
+            # TPOT/ITL consistency
+            tpot_vals = [cs.get("tpot_avg", 0) or 0 for cs in s]
+            itl_vals = [cs.get("itl_avg", 0) or 0 for cs in s]
+            if tpot_vals[-1] > 0 and itl_vals[-1] > 0:
+                diff = abs(tpot_vals[-1] - itl_vals[-1]) / max(itl_vals[-1], 1e-9)
+                if diff > 0.3:
+                    md.append("TPOT 与 ITL 差异 >30%，请注意 chunk/token 口径差异。")
+            if tpot_vals[-1] > 0 and tpot_vals[0] > 0:
+                tpot_g = tpot_vals[-1] / tpot_vals[0]
+                if tpot_g > 1.3:
+                    md.append(f"TPOT 从最低并发到最高并发增长 {tpot_g:.1f}x，decode 阶段开始受压。")
+                else:
+                    md.append("TPOT 整体稳定，decode 阶段本身稳定，主要压力可能来自排队或调度。")
+        md.append("")
+
+        # ── 六、稳定性分析 ──
+        md.append("## 六、稳定性分析")
+        md.append("")
+        md.append("| 并发 | Success Rate (%) | Fail | RPS (req/s) | Throughput Efficiency |")
+        md.append("|------|------------------|------|-------------|----------------------|")
+        # Throughput efficiency
+        baseline_tps = s[0].get("system_output_tps", 0) or 0 if s else 0
+        for i, c_val in enumerate(conc):
+            sr = _f(s[i].get("success_rate"), ".1f", "N/A")
+            fail = s[i].get("fail", 0)
+            rps = _f(s[i].get("request_throughput_rps"), ".2f")
+            tps_val = s[i].get("system_output_tps", 0) or 0
+            if baseline_tps > 0 and c_val > 0 and tps_val > 0:
+                eff = tps_val / (baseline_tps * c_val)
+                eff_s = f"{eff:.3f}"
+            else:
+                eff_s = "N/A"
+            md.append(f"| {c_val} | {sr} | {fail} | {rps} | {eff_s} |")
+        md.append("")
+
+        has_failures = any(cs.get("fail", 0) > 0 for cs in s)
+        if has_failures:
+            total_fail = sum(cs.get("fail", 0) for cs in s)
+            md.append(f"存在失败请求（共 {total_fail} 次），需排查 error_type 分布。")
+        else:
+            md.append("所有档位成功率均为 100%。")
+
+        # Success rate warning
+        if any((cs.get("success_rate") or 100) < 99 for cs in s):
+            md.append("部分档位成功率 <99%，建议关注。")
+        md.append("")
+
+        # ── 七、专家简评 ──
+        md.append("## 七、专家简评")
+        md.append("")
+        commentary = self._generate_expert_commentary(cases, analysis_summary)
+        md.append(commentary)
+        md.append("")
+
+        # ── 八、下一步建议 ──
+        md.append("## 八、下一步建议")
+        md.append("")
+        next_steps = self._generate_next_steps(cases, analysis_summary)
+        for i, step in enumerate(next_steps, 1):
+            md.append(f"{i}. {step}")
+        md.append("")
+
+        return "\n".join(md)
+
+    def _start_sweep(self):
+        """Validate inputs and start sweep in a background thread."""
+        if self._sweep_running or self._benchmark_running:
+            messagebox.showwarning("提示", "已有测试正在进行，请等待完成。")
+            return
+
+        api_url = self.url_var.get().strip()
+        if not api_url:
+            messagebox.showerror("错误", "请在「参数设置」中填写 API 地址")
+            return
+
+        user_prompt = self.prompt_var.get().strip()
+        if not user_prompt:
+            messagebox.showerror("错误", "请在「参数设置」中填写用户提示词")
+            return
+
+        # Parse concurrency levels
+        try:
+            concurrency_levels = self._parse_concurrency_levels(
+                self.sweep_conc_var.get())
+        except ValueError as e:
+            messagebox.showerror("输入错误", str(e))
+            return
+
+        multiplier = self.sweep_mult_var.get()
+        if multiplier < 1:
+            messagebox.showerror("输入错误", "请求倍数必须大于 0")
+            return
+
+        api_key = self.key_var.get().strip()
+        model = self.model_var.get().strip()
+        system_prompt = self.system_var.get().strip()
+        max_tokens = self.max_tokens_var.get()
+        temperature = self.temp_var.get()
+        stream = self.stream_var.get() == "是"
+        try:
+            warmup = int(float(str(self.warmup_var.get()).strip()))
+        except Exception:
+            warmup = 0
+
+        api_url = normalize_api_url(api_url)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        # Update UI
+        self._sweep_running = True
+        self._start_icon_pulse(mode="并发扫测", mark_benchmark=False)
+        self._sweep_status_card.expand()
+        self.sweep_start_btn.config(state=tk.DISABLED, text="扫测中...")
+        self.sweep_status_text.config(state=tk.NORMAL)
+        self.sweep_status_text.delete("1.0", tk.END)
+        self.sweep_status_text.insert(tk.END, "准备开始扫测...\n")
+        self.sweep_status_text.config(state=tk.DISABLED)
+        self.sweep_result_text.config(state=tk.NORMAL)
+        self.sweep_result_text.delete("1.0", tk.END)
+        self.sweep_result_text.insert(tk.END, "等待扫测结果...\n")
+        self.sweep_result_text.config(state=tk.DISABLED)
+
+        t = threading.Thread(
+            target=self._run_sweep,
+            args=(api_url, api_key, model, messages, max_tokens, temperature,
+                  concurrency_levels, multiplier, stream, warmup),
+            daemon=True,
+        )
+        t.start()
+
+    def _run_sweep(self, api_url, api_key, model, messages,
+                   max_tokens, temperature,
+                   concurrency_levels, multiplier, stream, warmup):
+        """Run a concurrency sweep in the current (background) thread."""
+        sweep_id = datetime.now().strftime("sweep_%Y%m%d_%H%M%S")
+        started_at = datetime.now().isoformat()
+
+        self._append_sweep_status(f"扫测开始 — {sweep_id}\n")
+        self._append_sweep_status(f"API: {api_url}\n")
+        self._append_sweep_status(f"Model: {model}\n")
+        self._append_sweep_status(f"并发级别: {concurrency_levels}\n")
+        self._append_sweep_status(f"请求倍数: {multiplier}\n\n")
+
+        # Quick connectivity check
+        reachable, err = check_server_reachable(api_url)
+        if not reachable:
+            self._append_sweep_status(f"✕ 服务器连接失败: {err}\n")
+            self.root.after(0, lambda: self._sweep_done(None, f"连接失败: {err}"))
+            return
+        self._append_sweep_status("✓ 服务器连通性检测通过\n")
+
+        # Warmup (single round before all cases)
+        if warmup > 0:
+            self._append_sweep_status(f"预热: 发送 {warmup} 次请求...\n")
+            for i in range(warmup):
+                call_llm(api_url, api_key, model, messages, max_tokens,
+                        temperature, stream=stream)
+            self._append_sweep_status("✓ 预热完成\n\n")
+
+        cases = []
+        total_levels = len(concurrency_levels)
+        baseline_output_tps = 0.0
+        baseline_concurrency = concurrency_levels[0] if concurrency_levels else 1
+
+        for idx, c in enumerate(concurrency_levels):
+            num_requests = c * multiplier
+            self._append_sweep_status(
+                f"[{idx + 1}/{total_levels}] 并发={c}, 请求数={num_requests}... ")
+
+            # Run benchmark synchronously in this thread
+            result_box = []
+            done_event = threading.Event()
+
+            def _progress(completed, total, fail=0):
+                pass  # sweep progress is text-based
+
+            def _done(summary):
+                result_box.append(summary)
+                done_event.set()
+
+            run_benchmark(api_url, api_key, model, messages, max_tokens,
+                         temperature, c, num_requests,
+                         _progress, _done,
+                         stream=stream,
+                         preset_name=f"sweep_C{c}")
+
+            done_event.wait(timeout=600)
+
+            if result_box:
+                summary = result_box[0]
+                # Capture baseline from the first (lowest concurrency) case
+                if idx == 0:
+                    baseline_output_tps = summary.get("system_output_tps", 0) or 0
+                    baseline_concurrency = c
+                analysis_metrics = self._compute_analysis_metrics(
+                    summary, baseline_output_tps, baseline_concurrency)
+                case = {
+                    "concurrency": c,
+                    "total_requests": num_requests,
+                    "benchmark_summary": summary,
+                    "analysis_metrics": analysis_metrics,
+                }
+                cases.append(case)
+                self._append_sweep_status(
+                    f"✓ success={summary['success']} fail={summary['fail']} "
+                    f"E2E_avg={summary['e2e_latency_avg']:.3f}s "
+                    f"Output_TPS={summary['system_output_tps']:.1f} tok/s\n")
+            else:
+                self._append_sweep_status(f"✕ 未返回结果\n")
+
+        finished_at = datetime.now().isoformat()
+        analysis_summary = self._generate_analysis_summary(cases)
+        sweep_result = {
+            "sweep_id": sweep_id,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "api_url": api_url,
+            "model": model,
+            "concurrency_levels": concurrency_levels,
+            "requests_multiplier": multiplier,
+            "cases": cases,
+            "analysis_summary": analysis_summary,
+        }
+        self._sweep_result = sweep_result
+
+        # Export — respect user save options
+        json_path = ""
+        png_path = ""
+        md_path = ""
+        if self.sweep_save_json_var.get():
+            json_path = self._export_sweep_json(sweep_result)
+        else:
+            self._append_sweep_status("⊘ JSON 保存已跳过（用户选项）\n")
+        if self.sweep_save_png_var.get():
+            png_path = self._export_sweep_png(sweep_result) or ""
+        else:
+            self._append_sweep_status("⊘ PNG 保存已跳过（用户选项）\n")
+        if self.sweep_save_md_var.get():
+            md_path = self._export_sweep_markdown(sweep_result)
+        else:
+            self._append_sweep_status("⊘ Markdown 保存已跳过（用户选项）\n")
+        sweep_result["result_json"] = json_path or ""
+        sweep_result["report_png"] = png_path or ""
+        sweep_result["report_md"] = md_path or ""
+        if self.sweep_save_history_var.get():
+            try:
+                save_sweep_history(sweep_result, json_path, md_path, png_path or "")
+                self._append_sweep_status("✓ 已保存到历史记录\n")
+                self.root.after(0, self._refresh_history)
+            except Exception as e:
+                self._append_sweep_status(f"✕ 历史记录保存失败: {e}\n")
+        else:
+            self._append_sweep_status("⊘ 历史记录保存已跳过（用户选项）\n")
+
+        self.root.after(0, lambda: self._sweep_done(sweep_result, None,
+                                                     json_path, png_path, md_path))
+
+    def _append_sweep_status(self, text: str):
+        """Append text to the sweep status widget (thread-safe via root.after)."""
+        self.root.after(0, lambda: self._do_append_sweep_status(text))
+
+    def _do_append_sweep_status(self, text: str):
+        """Actually append to the status widget (on main thread)."""
+        try:
+            self.sweep_status_text.config(state=tk.NORMAL)
+            self.sweep_status_text.insert(tk.END, text)
+            self.sweep_status_text.see(tk.END)
+            self.sweep_status_text.config(state=tk.DISABLED)
+        except Exception:
+            pass
+
+    def _sweep_done(self, sweep_result, error=None, json_path=None, png_path=None,
+                    md_path=None):
+        """Called on main thread when sweep completes or fails."""
+        self._sweep_running = False
+        self.sweep_start_btn.config(state=tk.NORMAL, text="开始扫测")
+
+        if error:
+            self._stop_icon_pulse(mark_benchmark=False, status_text="扫测失败")
+            self._do_append_sweep_status(f"\n✕ 扫测失败: {error}\n")
+            return
+
+        if not sweep_result or not sweep_result.get("cases"):
+            self._stop_icon_pulse(mark_benchmark=False, status_text="扫测完成")
+            self._do_append_sweep_status("\n✕ 扫测未产生结果\n")
+            return
+
+        cases = sweep_result["cases"]
+        self._stop_icon_pulse(mark_benchmark=False, status_text="扫测完成")
+        self._do_append_sweep_status(
+            f"\n✓ 扫测完成 — {len(cases)} 个并发级别\n")
+
+        # Display summary in results area
+        self.sweep_result_text.config(state=tk.NORMAL)
+        self.sweep_result_text.delete("1.0", tk.END)
+        r = []
+        r.append("=" * 60)
+        r.append("  推理性能并发扫测分析报告")
+        r.append("=" * 60)
+        r.append(f"  Sweep ID: {sweep_result['sweep_id']}")
+        r.append(f"  API URL:  {sweep_result['api_url']}")
+        r.append(f"  Model:    {sweep_result['model']}")
+        r.append(f"  并发级别: {sweep_result['concurrency_levels']}")
+        r.append(f"  请求倍数: {sweep_result['requests_multiplier']}")
+        r.append("")
+        r.append(f"{'C':>4} {'Req':>5} {'Success':>7} {'Fail':>5} {'Rate':>6} "
+                 f"{'E2E_avg':>8} {'E2E_P95':>8} {'TTFT_avg':>9} "
+                 f"{'Out_TPS':>8} {'RPS':>7}")
+        r.append("-" * 78)
+        for case in cases:
+            s = case["benchmark_summary"]
+            r.append(
+                f"{case['concurrency']:>4} {case['total_requests']:>5} "
+                f"{s['success']:>7} {s['fail']:>5} "
+                f"{s.get('success_rate', 0):>5.1f}% "
+                f"{s['e2e_latency_avg']:>8.3f} {s['e2e_latency_p95']:>8.3f} "
+                f"{s.get('ttft_avg', 0):>9.3f} "
+                f"{s.get('system_output_tps', 0):>8.1f} "
+                f"{s.get('request_throughput_rps', 0):>7.2f}")
+        r.append("")
+        r.append("-" * 78)
+        r.append("  自动分析摘要")
+        r.append("-" * 78)
+        for i, line in enumerate(sweep_result.get("analysis_summary", []), 1):
+            r.append(f"  {i}. {line}")
+        r.append("")
+        if json_path:
+            r.append(f"  JSON 结果已导出: {json_path}")
+        else:
+            r.append("  JSON 结果: 未保存")
+        png_path_result = sweep_result.get("report_png", "")
+        if png_path_result:
+            r.append(f"  PNG 趋势图已导出: {png_path_result}")
+        elif png_path is None:
+            r.append("  PNG 趋势图: 未生成 (matplotlib unavailable)")
+        else:
+            r.append("  PNG 趋势图: 未保存")
+        md_path_result = sweep_result.get("report_md", "")
+        if md_path_result:
+            r.append(f"  Markdown 分析报告: {md_path_result}")
+        else:
+            r.append("  Markdown 分析报告: 未保存")
+        self.sweep_result_text.insert(tk.END, "\n".join(r) + "\n")
+        self.sweep_result_text.config(state=tk.DISABLED)
+
+        # ── Populate expert analysis area ──
+        commentary = self._generate_expert_commentary(cases,
+                         sweep_result.get("analysis_summary", []))
+        next_steps = self._generate_next_steps(cases,
+                         sweep_result.get("analysis_summary", []))
+
+        expert_content = []
+        expert_content.append("── 核心结论 ──")
+        for i, line in enumerate(sweep_result.get("analysis_summary", []), 1):
+            expert_content.append(f"  {i}. {line}")
+        expert_content.append("")
+        expert_content.append("── 专家简评 ──")
+        expert_content.append(commentary)
+        expert_content.append("")
+        expert_content.append("── 下一步建议 ──")
+        for i, step in enumerate(next_steps, 1):
+            expert_content.append(f"  {i}. {step}")
+
+        self._expert_text.config(state=tk.NORMAL)
+        self._expert_text.delete("1.0", tk.END)
+        self._expert_text.insert(tk.END, "\n".join(expert_content))
+        self._expert_text.config(state=tk.DISABLED)
+
+        # Auto-expand chart and expert cards after sweep completes
+        self._sweep_chart_card.expand()
+        self._expert_card.expand()
+        self._sweep_output_card.expand()
+
+        # ── Render chart in GUI ──
+        self._render_sweep_chart(sweep_result)
+
+    # ── Matplotlib helpers ──
+    @staticmethod
+    def _matplotlib_available() -> bool:
+        """Return True if matplotlib is importable (lazy check)."""
+        try:
+            import matplotlib
+            return True
+        except ImportError:
+            return False
+
+    @staticmethod
+    def _configure_matplotlib_cjk_fonts():
+        """Detect and configure a CJK-compatible font for matplotlib.
+        Must be called after importing matplotlib but before creating any figure."""
+        import matplotlib.font_manager as fm
+        import matplotlib as mpl
+
+        mpl.rcParams["axes.unicode_minus"] = False
+
+        # Find available CJK fonts by family name or known platform font paths.
+        cjk_candidates = [
+            "Noto Sans CJK SC",
+            "Noto Sans Mono CJK SC",
+            "WenQuanYi Micro Hei",
+            "WenQuanYi Zen Hei",
+            "SimHei",
+            "Microsoft YaHei",
+            "PingFang SC",
+            "Droid Sans Fallback",
+        ]
+        available = {f.name for f in fm.fontManager.ttflist}
+        selected = None
+        for name in cjk_candidates:
+            if name in available:
+                selected = name
+                break
+
+        if not selected:
+            font_paths = [
+                r"C:\Windows\Fonts\msyh.ttc",
+                r"C:\Windows\Fonts\simhei.ttf",
+                r"C:\Windows\Fonts\simsun.ttc",
+                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+                "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+                "/usr/share/fonts/opentype/source-han-sans/SourceHanSansSC-Regular.otf",
+            ]
+            for path in font_paths:
+                if os.path.exists(path):
+                    try:
+                        fm.fontManager.addfont(path)
+                        selected = fm.FontProperties(fname=path).get_name()
+                        break
+                    except Exception:
+                        continue
+
+        if selected:
+            # Insert as first sans-serif fallback
+            current = mpl.rcParams.get("font.sans-serif", [])
+            if not isinstance(current, list):
+                current = [current] if current else []
+            if selected not in current:
+                current.insert(0, selected)
+            mpl.rcParams["font.sans-serif"] = current
+            mpl.rcParams["axes.unicode_minus"] = False
+            # Rebuild font cache
+            fm._load_fontmanager(try_read_cache=False)
+            LLMBenchmarkApp._last_cjk_font_available = True
+            return True
+        LLMBenchmarkApp._last_cjk_font_available = False
+        return False
+
+    def _build_sweep_analysis_figure(self, sweep_result: dict):
+        """Build the 2x2 sweep analysis figure. Returns matplotlib.figure.Figure.
+        Used for both GUI embedding and PNG export."""
+        import matplotlib
+        matplotlib.use("Agg")
+        self._configure_matplotlib_cjk_fonts()
+        import matplotlib.pyplot as plt
+
+        cases = sweep_result.get("cases", [])
+        if not cases:
+            return None
+
+        conc = [c["concurrency"] for c in cases]
+        s = [c["benchmark_summary"] for c in cases]
+
+        fig, axes = plt.subplots(2, 2, figsize=(10, 7.5))
+        fig.suptitle("推理性能并发扫测分析报告", fontsize=13, fontweight="bold")
+
+        # Subplot 1: E2E latency trend
+        ax1 = axes[0, 0]
+        e2e_avg = [cs.get("e2e_latency_avg", 0) or None for cs in s]
+        e2e_p50 = [cs.get("e2e_latency_p50", 0) or None for cs in s]
+        e2e_p95 = [cs.get("e2e_latency_p95", 0) or None for cs in s]
+        e2e_p99 = [cs.get("e2e_latency_p99", 0) or None for cs in s]
+        ax1.plot(conc, e2e_avg, "o-", color="#533AFD", linewidth=2, label="E2E Avg")
+        ax1.plot(conc, e2e_p50, "s--", color="#10B981", linewidth=1.5, label="E2E P50")
+        ax1.plot(conc, e2e_p95, "D--", color="#F59E0B", linewidth=1.5, label="E2E P95")
+        ax1.plot(conc, e2e_p99, "^:", color="#EF4444", linewidth=1.5, label="E2E P99")
+        ax1.set_xlabel("总并发数")
+        ax1.set_ylabel("延迟 (s)")
+        ax1.set_title("延迟随并发变化趋势")
+        ax1.legend(fontsize=7)
+        ax1.grid(True, alpha=0.3)
+
+        # Subplot 2: Token throughput
+        ax2 = axes[0, 1]
+        out_tps = [cs.get("system_output_tps", 0) or None for cs in s]
+        total_tps = [cs.get("system_total_tps", 0) or None for cs in s]
+        ax2.plot(conc, out_tps, "o-", color="#533AFD", linewidth=2, label="Output TPS")
+        ax2.plot(conc, total_tps, "s--", color="#10B981", linewidth=1.5, label="Total TPS")
+        ax2.set_xlabel("总并发数")
+        ax2.set_ylabel("吞吐 (tok/s)")
+        ax2.set_title("Token 吞吐随并发变化")
+        ax2.legend(fontsize=7)
+        ax2.grid(True, alpha=0.3)
+
+        # Subplot 3: TTFT / FVT / Generation speed
+        ax3 = axes[1, 0]
+        ttft_avg = [cs.get("ttft_avg") or None for cs in s]
+        fvt_avg = [cs.get("first_visible_token_avg") or None for cs in s]
+        fvg_avg = [cs.get("first_visible_gap_avg") or None for cs in s]
+        tpot_avg = [cs.get("tpot_avg") or None for cs in s]
+        itl_avg = [cs.get("itl_avg") or None for cs in s]
+        if any(v is not None and v > 0 for v in ttft_avg):
+            ax3.plot(conc, ttft_avg, "o-", color="#533AFD", linewidth=1.5,
+                     label="TTFT")
+        if any(v is not None and v > 0 for v in fvt_avg):
+            ax3.plot(conc, fvt_avg, "s--", color="#10B981", linewidth=1.5,
+                     label="FVT")
+        if any(v is not None and v > 0 for v in fvg_avg):
+            ax3.plot(conc, fvg_avg, "D:", color="#F59E0B", linewidth=1.5,
+                     label="FVG")
+        if any(v is not None and v > 0 for v in tpot_avg):
+            ax3.plot(conc, tpot_avg, "^-", color="#EF4444", linewidth=1.5,
+                     label="TPOT")
+        if any(v is not None and v > 0 for v in itl_avg):
+            ax3.plot(conc, itl_avg, "v--", color="#8B5CF6", linewidth=1.5,
+                     label="ITL")
+        ax3.set_xlabel("总并发数")
+        ax3.set_ylabel("时间 (s)")
+        ax3.set_title("首包 / 首字 / 生成速度趋势")
+        ax3.legend(fontsize=6)
+        ax3.grid(True, alpha=0.3)
+
+        # Subplot 4: Efficiency and stability
+        ax4 = axes[1, 1]
+        ax4_twin = ax4.twinx()
+        rps_vals = [cs.get("request_throughput_rps", 0) or None for cs in s]
+        success_rates = [cs.get("success_rate") or None for cs in s]
+        pr_tps = [cs.get("per_request_output_tps_avg", 0) or None for cs in s]
+        baseline_tps = s[0].get("system_output_tps", 0) or 0 if s else 0
+        eff_vals = []
+        for i, cs in enumerate(s):
+            c_val = conc[i]
+            tps_val = cs.get("system_output_tps", 0) or 0
+            if baseline_tps > 0 and c_val > 0 and tps_val > 0:
+                eff_vals.append(tps_val / (baseline_tps * c_val))
+            else:
+                eff_vals.append(None)
+
+        ax4.plot(conc, rps_vals, "o-", color="#533AFD", linewidth=1.5,
+                 label="RPS")
+        ax4.plot(conc, pr_tps, "s--", color="#10B981", linewidth=1.5,
+                 label="Per-req TPS")
+        if any(v is not None for v in eff_vals):
+            ax4.plot(conc, eff_vals, "D:", color="#EF4444", linewidth=1.5,
+                     label="效率")
+        ax4.set_xlabel("总并发数")
+        ax4.set_ylabel("RPS / Per-req TPS", color="#533AFD")
+        ax4_twin.plot(conc, success_rates, "v--", color="#F59E0B", linewidth=2,
+                      label="成功率 (%)")
+        ax4_twin.set_ylabel("成功率 (%)", color="#F59E0B")
+        ax4.set_title("并发效率与稳定性分析")
+        lines1, labels1 = ax4.get_legend_handles_labels()
+        lines2, labels2 = ax4_twin.get_legend_handles_labels()
+        ax4.legend(lines1 + lines2, labels1 + labels2, fontsize=6, loc="upper left")
+        ax4.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        return fig
+
+    def _clear_sweep_chart(self):
+        """Destroy any existing embedded chart canvas and close the figure."""
+        if getattr(self, "_sweep_chart_canvas", None) is not None:
+            try:
+                self._sweep_chart_canvas.get_tk_widget().destroy()
+            except Exception:
+                pass
+            self._sweep_chart_canvas = None
+        if getattr(self, "_sweep_chart_figure", None) is not None:
+            try:
+                import matplotlib.pyplot as plt
+                plt.close(self._sweep_chart_figure)
+            except Exception:
+                pass
+            self._sweep_chart_figure = None
+        # Clear chart status
+        if hasattr(self, "sweep_chart_status_var"):
+            self.sweep_chart_status_var.set("")
+
+    def _render_sweep_chart(self, sweep_result):
+        """Embed a 2x2 sweep analysis chart in the sweep tab.
+        Must be called on the main thread."""
+        self._clear_sweep_chart()
+
+        if not self._matplotlib_available():
+            self.sweep_chart_status_var.set(
+                "matplotlib 未安装，无法在界面显示图表。请安装 matplotlib 后重试。")
+            return
+
+        try:
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+        except Exception:
+            self.sweep_chart_status_var.set(
+                "matplotlib 未安装，无法在界面显示图表。请安装 matplotlib 后重试。")
+            return
+
+        fig = self._build_sweep_analysis_figure(sweep_result)
+        if fig is None:
+            self.sweep_chart_status_var.set("暂无数据，无法生成图表。")
+            return
+
+        self._sweep_chart_figure = fig
+        self._sweep_chart_canvas = FigureCanvasTkAgg(fig, master=self.sweep_chart_frame)
+        self._sweep_chart_canvas.draw()
+
+        widget = self._sweep_chart_canvas.get_tk_widget()
+        widget.pack(fill="both", expand=True)
+
+        if getattr(LLMBenchmarkApp, "_last_cjk_font_available", True):
+            self.sweep_chart_status_var.set("✓ 图表已生成")
+        else:
+            self.sweep_chart_status_var.set("⚠ 未检测到 CJK 字体，中文图表可能显示异常。")
+
+    def _export_sweep_json(self, sweep_result: dict) -> str:
+        """Export sweep result to JSON file. Returns the file path."""
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        json_path = os.path.join(_SCRIPT_DIR, f"sweep_result_{ts}.json")
+        try:
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(sweep_result, f, indent=2, ensure_ascii=False,
+                         default=str)
+            return json_path
+        except Exception as e:
+            self._append_sweep_status(f"✕ JSON 导出失败: {e}\n")
+            return ""
+
+    def _export_sweep_markdown(self, sweep_result: dict) -> str:
+        """Export sweep analysis as Markdown report. Returns the file path."""
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        md_path = os.path.join(_SCRIPT_DIR, f"sweep_analysis_{ts}.md")
+        try:
+            report = self._generate_sweep_markdown_report(sweep_result)
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write(report)
+            self._append_sweep_status(f"✓ Markdown 报告已导出: {md_path}\n")
+            return md_path
+        except Exception as e:
+            self._append_sweep_status(f"✕ Markdown 报告导出失败: {e}\n")
+            return ""
+
+    def _export_sweep_png(self, sweep_result: dict) -> str | None:
+        """Export sweep trend report as PNG using the shared figure builder.
+        Returns path or None if skipped."""
+        if not self._matplotlib_available():
+            self._append_sweep_status("⚠ matplotlib unavailable, PNG report skipped.\n")
+            return None
+
+        cases = sweep_result.get("cases", [])
+        if not cases:
+            return None
+
+        fig = self._build_sweep_analysis_figure(sweep_result)
+        if fig is None:
+            return None
+        if not getattr(LLMBenchmarkApp, "_last_cjk_font_available", True):
+            self._append_sweep_status("⚠ 未检测到 CJK 字体，PNG 中文可能显示异常。\n")
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        png_path = os.path.join(_SCRIPT_DIR, f"sweep_report_{ts}.png")
+        try:
+            fig.savefig(png_path, dpi=150, bbox_inches="tight")
+            import matplotlib.pyplot as plt
+            plt.close(fig)
+            return png_path
+        except Exception as e:
+            try:
+                import matplotlib.pyplot as plt
+                plt.close(fig)
+            except Exception:
+                pass
+            self._append_sweep_status(f"✕ PNG 生成失败: {e}\n")
+            return None
+
     def _refresh_history(self):
         for item in self.hist_tree.get_children():
             self.hist_tree.delete(item)
         for row in load_history():
             rid = row["id"]
             created = row["created_at"]
+            record_type = row["record_type"] or "single"
             model = row["model"]
             conc = row["concurrency"]
             total = row["total"]
             success_rate = row["success_rate"] or 0.0
             e2e_p95 = row["e2e_latency_p95"] or 0.0
-            ttft_avg = row["ttft_avg"]
             sys_tps = row["system_output_tps"] or 0.0
-            rps = row["request_throughput_rps"] or 0.0
-            dur = row["duration_sec"]
-            std = "v1" if (row["metric_standard"] or "").startswith("JISUMAN") else "-"
+            status = row["status"] or "completed"
+            if record_type == "sweep":
+                type_label = "并发扫测"
+                config_summary = row["config_summary"] or "-"
+                primary_metric = row["primary_metric"] or "-"
+            else:
+                type_label = "单次测试"
+                config_summary = row["config_summary"] or (
+                    f"C{conc} / N{total} / max_tokens=-")
+                primary_metric = row["primary_metric"] or (
+                    f"Output TPS {sys_tps:.1f} | E2E P95 {e2e_p95:.3f}s | "
+                    f"Success {success_rate:.0f}%")
             self.hist_tree.insert("", tk.END, values=(
-                rid, created, model, conc, total,
-                f"{success_rate:.0f}%" if success_rate else "-",
-                f"{e2e_p95:.2f}s" if e2e_p95 else "-",
-                f"{ttft_avg:.3f}s" if ttft_avg else "-",
-                f"{sys_tps:.1f}" if sys_tps else "-",
-                f"{rps:.2f}" if rps else "-",
-                f"{dur:.1f}s" if dur else "-",
-                std,
+                rid, created, type_label, model, config_summary,
+                primary_metric, status,
             ))
     def _clear_history(self):
         if not messagebox.askyesno("确认", "确定要清空所有历史记录吗？"):
@@ -3083,6 +4697,123 @@ class LLMBenchmarkApp:
                            font=C_STYLE["font_small"],
                            fill=C_STYLE["text_secondary"])
 
+    def _show_sweep_history_detail(self, rid, row):
+        try:
+            sweep_result = json.loads(row["summary_json"] or "{}")
+        except Exception:
+            sweep_result = {}
+        cases = sweep_result.get("cases", [])
+        top = tk.Toplevel(self.root)
+        top.title(f"扫测详情  #{rid}")
+        top.geometry("920x760")
+        top.configure(bg=C_STYLE["bg_main"])
+        top.minsize(760, 560)
+        top.grid_columnconfigure(0, weight=1)
+        top.grid_rowconfigure(0, weight=1)
+
+        scroll = ScrollableFrame(top, bg=C_STYLE["bg_main"])
+        scroll.grid(row=0, column=0, sticky="nsew")
+        inner = scroll.content
+        inner.configure(bg=C_STYLE["bg_main"])
+        inner.grid_columnconfigure(0, weight=1)
+
+        overview = SectionCard(inner, "扫测概览", collapsible=True, expanded=True)
+        overview.grid(row=0, column=0, sticky="ew", padx=C_STYLE["pad_lg"],
+                      pady=(C_STYLE["pad_lg"], C_STYLE["gap_lg"]))
+        ov = overview.content
+        ov_text = (
+            f"模型: {row['model']}\n"
+            f"API: {row['api_url']}\n"
+            f"配置: {row['config_summary'] or '-'}\n"
+            f"核心结果: {row['primary_metric'] or '-'}\n"
+            f"状态: {row['status'] or '-'}"
+        )
+        tk.Label(ov, text=ov_text, justify=tk.LEFT, anchor="w",
+                 font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["text_primary"]).pack(fill=tk.X)
+
+        table = SectionCard(inner, "并发档位明细", collapsible=True, expanded=True)
+        table.grid(row=1, column=0, sticky="ew", padx=C_STYLE["pad_lg"],
+                   pady=(0, C_STYLE["gap_lg"]))
+        cols = ("C", "Req", "Success", "Fail", "Success Rate", "E2E P95", "Output TPS", "RPS")
+        tv = ttk.Treeview(table.content, columns=cols, show="headings",
+                          height=min(max(len(cases), 3), 8), style="App.Treeview")
+        for c in cols:
+            tv.heading(c, text=c)
+            tv.column(c, anchor="center", width=95)
+        tv.pack(fill=tk.X)
+        for case in cases:
+            s = case.get("benchmark_summary", {})
+            tv.insert("", tk.END, values=(
+                case.get("concurrency", "-"),
+                case.get("total_requests", "-"),
+                s.get("success", 0),
+                s.get("fail", 0),
+                f"{s.get('success_rate', 0) or 0:.0f}%",
+                f"{s.get('e2e_latency_p95', 0) or 0:.3f}s",
+                f"{s.get('system_output_tps', 0) or 0:.1f}",
+                f"{s.get('request_throughput_rps', 0) or 0:.2f}",
+            ))
+
+        chart = SectionCard(inner, "图形分析", collapsible=True, expanded=True)
+        chart.grid(row=2, column=0, sticky="ew", padx=C_STYLE["pad_lg"],
+                   pady=(0, C_STYLE["gap_lg"]))
+        chart_frame = tk.Frame(chart.content, bg=C_STYLE["bg_card"], height=460)
+        chart_frame.pack(fill=tk.BOTH, expand=True)
+        chart_frame.pack_propagate(False)
+        if self._matplotlib_available() and cases:
+            try:
+                from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+                fig = self._build_sweep_analysis_figure(sweep_result)
+                if fig is not None:
+                    canvas = FigureCanvasTkAgg(fig, master=chart_frame)
+                    canvas.draw()
+                    canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+                    top._sweep_hist_chart_canvas = canvas
+                    top._sweep_hist_chart_figure = fig
+                else:
+                    raise RuntimeError("暂无数据，无法生成图表")
+            except Exception as e:
+                tk.Label(chart_frame, text=f"matplotlib 图表不可用: {e}",
+                         font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                         fg=C_STYLE["warning_text"], wraplength=700).pack(expand=True)
+        else:
+            tk.Label(chart_frame, text="matplotlib 未安装或暂无数据，无法显示图表。",
+                     font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                     fg=C_STYLE["warning_text"], wraplength=700).pack(expand=True)
+
+        expert = SectionCard(inner, "专家分析简评", collapsible=True, expanded=True)
+        expert.grid(row=3, column=0, sticky="ew", padx=C_STYLE["pad_lg"],
+                    pady=(0, C_STYLE["gap_lg"]))
+        lines = sweep_result.get("analysis_summary") or []
+        commentary = self._generate_expert_commentary(cases, lines) if cases else ""
+        expert_text = "\n".join([*lines, "", commentary]).strip() or "未生成专家分析。"
+        tk.Label(expert.content, text=expert_text, justify=tk.LEFT, anchor="w",
+                 font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["text_primary"], wraplength=820).pack(fill=tk.X)
+
+        paths = SectionCard(inner, "输出文件", collapsible=True, expanded=True)
+        paths.grid(row=4, column=0, sticky="ew", padx=C_STYLE["pad_lg"],
+                   pady=(0, C_STYLE["gap_lg"]))
+        path_text = (
+            f"JSON: {row['json_path'] or '未保存'}\n"
+            f"Markdown: {row['markdown_path'] or '未保存'}\n"
+            f"PNG: {row['png_path'] or '未保存'}"
+        )
+        tk.Label(paths.content, text=path_text, justify=tk.LEFT, anchor="w",
+                 font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["text_primary"]).pack(fill=tk.X)
+
+        raw = SectionCard(inner, "Raw JSON", collapsible=True, expanded=False)
+        raw.grid(row=5, column=0, sticky="ew", padx=C_STYLE["pad_lg"],
+                 pady=(0, C_STYLE["pad_lg"]))
+        txt = tk.Text(raw.content, height=12, wrap=tk.WORD, font=C_STYLE["font_code"],
+                      bg=C_STYLE["bg_input"], fg=C_STYLE["text_primary"],
+                      relief=tk.FLAT, borderwidth=0)
+        txt.insert(tk.END, json.dumps(sweep_result, ensure_ascii=False, indent=2, default=str))
+        txt.config(state=tk.DISABLED)
+        txt.pack(fill=tk.BOTH, expand=True)
+
     def _on_history_double_click(self, event):
         sel = self.hist_tree.selection()
         if not sel:
@@ -3094,6 +4825,9 @@ class LLMBenchmarkApp:
                            (rid,)).fetchone()
         conn.close()
         if not row:
+            return
+        if (row["record_type"] or "single") == "sweep":
+            self._show_sweep_history_detail(rid, row)
             return
         detail = json.loads(row["detail_json"]) if row["detail_json"] else []
         # backward compat: old records use "latency", new records use "e2e_latency"
