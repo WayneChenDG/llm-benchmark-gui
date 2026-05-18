@@ -41,6 +41,16 @@ Ubuntu 桌面快捷方式：
 cp llm_benchmark.desktop ~/Desktop/
 ```
 
+可选依赖安装：
+
+```bash
+# sweep 图表展示和 PNG 导出
+python3 -m pip install matplotlib
+
+# 更好的 header logo 缩放（可选）
+python3 -m pip install Pillow
+```
+
 ## 默认配置
 
 | 参数 | 默认值 |
@@ -222,6 +232,12 @@ PNG 二进制不会写入 SQLite，只保存文件路径。
 - 标准库：`sqlite3`、`urllib`、`threading`、`configparser`
 - 可选：`Pillow` 用于更好的 header logo 缩放
 - 可选：`matplotlib` 用于 sweep 图表和 PNG 导出
+
+可选安装命令：
+
+```bash
+python3 -m pip install matplotlib Pillow
+```
 
 ## 项目结构
 
