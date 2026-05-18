@@ -90,6 +90,251 @@ def _detect_font_family() -> str:
 
 FONT_FAMILY = _detect_font_family()
 
+I18N = {
+    "zh_CN": {
+        "app.title": "JISUMAN LLM Benchmark GUI",
+        "app.subtitle": "OpenAI 兼容接口并发性能测试",
+        "language.label": "语言",
+        "language.zh": "简体中文",
+        "language.en": "English",
+        "tab.settings": "参数设置",
+        "tab.benchmark": "基准测试",
+        "tab.sweep": "并发扫测",
+        "tab.history": "历史记录",
+        "status.idle": "空闲",
+        "status.ready": "就绪",
+        "status.benchmarking": "测试中",
+        "status.sweeping": "扫测中",
+        "status.completed": "已完成",
+        "status.failed": "失败",
+        "status.no_history": "暂无历史记录",
+        "status.select_history": "请选择一条历史记录查看详情",
+        "status.history_count": "共 {count} 条记录，双击行查看完整详情",
+        "status.ready_action": "就绪 — 请配置参数后开始测试",
+        "status.reset_action": "已重置 — 请配置参数后开始测试",
+        "status.saved_config": "配置已保存到 llm_benchmark.ini",
+        "section.api": "API 配置",
+        "section.test_params": "测试参数",
+        "section.generation": "生成参数",
+        "section.load": "负载参数",
+        "section.save_options": "保存选项",
+        "section.actions": "操作",
+        "section.result_summary": "结果摘要",
+        "section.e2e_distribution": "E2E 端到端延迟分布（e2el）",
+        "section.detail_report": "详细报告",
+        "section.sweep_config": "扫测配置与操作",
+        "section.sweep_status": "扫测状态",
+        "section.chart_analysis": "图形分析",
+        "section.expert_summary": "专家分析简评",
+        "section.output_files": "输出文件",
+        "section.history_preview": "历史详情预览",
+        "section.sweep_overview": "扫测概览",
+        "section.sweep_case_detail": "并发档位明细",
+        "button.start_benchmark": "开始基准测试",
+        "button.benchmarking": "基准测试中...",
+        "button.start_sweep": "开始扫测",
+        "button.sweeping": "扫测中...",
+        "button.save_config": "保存配置",
+        "button.reset_config": "重置配置",
+        "button.query": "查询",
+        "button.show": "显示",
+        "button.refresh": "↻ 刷新",
+        "button.clear_records": "✕ 清空记录",
+        "button.close": "关闭",
+        "button.confirm_selection": "确认选择",
+        "button.skip": "跳过",
+        "button.view_report_detail": "在报告中查看详情",
+        "label.api_url": "API 地址",
+        "label.api_key": "API 密钥",
+        "label.model_optional": "模型名称（选填）",
+        "label.system_prompt": "系统提示词",
+        "label.user_prompt": "用户提示词",
+        "label.max_tokens": "Max Tokens",
+        "label.temperature": "Temperature",
+        "label.stream": "流式输出",
+        "label.warmup": "预热请求",
+        "label.concurrency": "并发级别",
+        "label.requests_multiplier": "请求倍数",
+        "label.resource_monitoring": "资源监测",
+        "label.history_type": "类型",
+        "label.save_report": "保存测试报告",
+        "label.auto_save": "自动保存配置",
+        "label.total_requests": "总请求数",
+        "label.custom_concurrency": "自定义并发",
+        "hint.concurrency": "例如: 1,5,10,20,40",
+        "hint.multiplier": "每个并发级别: 请求数 = 并发数 × 倍数",
+        "hint.resource_disabled": "MVP 阶段资源监测暂不可用",
+        "sweep.save_json": "保存扫测数据 JSON",
+        "sweep.save_md": "保存文字分析报告 Markdown",
+        "sweep.save_png": "保存图表 PNG",
+        "sweep.save_history": "保存到历史记录",
+        "history.id": "ID",
+        "history.time": "时间",
+        "history.type": "类型",
+        "history.model": "模型",
+        "history.config": "配置",
+        "history.key_result": "核心结果",
+        "history.status": "状态",
+        "history.single": "单次测试",
+        "history.sweep": "并发扫测",
+        "history.type_all": "All",
+        "history.type_single": "Single",
+        "history.type_sweep": "Sweep",
+        "chart.sweep_title": "推理性能并发扫测分析报告",
+        "chart.latency_vs_concurrency": "延迟随并发变化趋势",
+        "chart.throughput_vs_concurrency": "Token 吞吐随并发变化",
+        "chart.first_generation": "首包 / 首字 / 生成速度趋势",
+        "chart.efficiency_stability": "并发效率与稳定性分析",
+        "chart.concurrency_axis": "总并发数",
+        "chart.latency_axis": "延迟 (s)",
+        "chart.throughput_axis": "吞吐 (tok/s)",
+        "chart.time_axis": "时间 (s)",
+        "chart.success_rate_axis": "成功率 (%)",
+        "chart.hist_empty": "暂无延迟数据",
+        "chart.hist_latency_axis": "延迟 (秒)",
+        "chart.hist_count_axis": "请求数",
+        "msg.error": "错误",
+        "msg.warning": "提示",
+        "msg.confirm": "确认",
+        "msg.close": "关闭",
+        "msg.input_error": "输入错误",
+        "msg.clear_history_confirm": "确定要清空所有历史记录吗？",
+        "msg.running": "已有测试正在进行，请等待完成。",
+        "msg.api_required": "请输入 API 地址",
+        "msg.api_required_settings": "请在「参数设置」中填写 API 地址",
+        "msg.prompt_required": "请输入用户提示词",
+        "msg.prompt_required_settings": "请在「参数设置」中填写用户提示词",
+        "msg.multiplier_positive": "请求倍数必须大于 0",
+    },
+    "en_US": {
+        "app.title": "JISUMAN LLM Benchmark GUI",
+        "app.subtitle": "OpenAI-compatible API concurrency benchmark",
+        "language.label": "Language",
+        "language.zh": "简体中文",
+        "language.en": "English",
+        "tab.settings": "Settings",
+        "tab.benchmark": "Benchmark",
+        "tab.sweep": "Concurrency Sweep",
+        "tab.history": "History",
+        "status.idle": "Idle",
+        "status.ready": "Ready",
+        "status.benchmarking": "Benchmarking",
+        "status.sweeping": "Sweeping",
+        "status.completed": "Completed",
+        "status.failed": "Failed",
+        "status.no_history": "No history records",
+        "status.select_history": "Select a history record to view details",
+        "status.history_count": "{count} records. Double-click a row for full details",
+        "status.ready_action": "Ready — configure parameters before starting",
+        "status.reset_action": "Reset complete — configure parameters before starting",
+        "status.saved_config": "Config saved to llm_benchmark.ini",
+        "section.api": "API Configuration",
+        "section.test_params": "Test Parameters",
+        "section.generation": "Generation Parameters",
+        "section.load": "Load Parameters",
+        "section.save_options": "Save Options",
+        "section.actions": "Actions",
+        "section.result_summary": "Result Summary",
+        "section.e2e_distribution": "E2E Latency Distribution (e2el)",
+        "section.detail_report": "Detailed Report",
+        "section.sweep_config": "Sweep Configuration and Actions",
+        "section.sweep_status": "Sweep Status",
+        "section.chart_analysis": "Chart Analysis",
+        "section.expert_summary": "Expert Analysis Summary",
+        "section.output_files": "Output Files",
+        "section.history_preview": "History Detail Preview",
+        "section.sweep_overview": "Sweep Overview",
+        "section.sweep_case_detail": "Concurrency Case Details",
+        "button.start_benchmark": "Start Benchmark",
+        "button.benchmarking": "Benchmarking...",
+        "button.start_sweep": "Start Sweep",
+        "button.sweeping": "Sweeping...",
+        "button.save_config": "Save Config",
+        "button.reset_config": "Reset Config",
+        "button.query": "Query",
+        "button.show": "Show",
+        "button.refresh": "↻ Refresh",
+        "button.clear_records": "✕ Clear Records",
+        "button.close": "Close",
+        "button.confirm_selection": "Confirm Selection",
+        "button.skip": "Skip",
+        "button.view_report_detail": "View Details in Report",
+        "label.api_url": "API URL",
+        "label.api_key": "API Key",
+        "label.model_optional": "Model (optional)",
+        "label.system_prompt": "System Prompt",
+        "label.user_prompt": "User Prompt",
+        "label.max_tokens": "Max Tokens",
+        "label.temperature": "Temperature",
+        "label.stream": "Stream",
+        "label.warmup": "Warmup Requests",
+        "label.concurrency": "Concurrency Levels",
+        "label.requests_multiplier": "Request Multiplier",
+        "label.resource_monitoring": "Resource Monitoring",
+        "label.history_type": "Type",
+        "label.save_report": "Save Test Report",
+        "label.auto_save": "Auto-save Config",
+        "label.total_requests": "Total Requests",
+        "label.custom_concurrency": "Custom Concurrency",
+        "hint.concurrency": "Example: 1,5,10,20,40",
+        "hint.multiplier": "Requests per level = concurrency × multiplier",
+        "hint.resource_disabled": "Resource monitoring is unavailable in MVP",
+        "sweep.save_json": "Save Sweep JSON",
+        "sweep.save_md": "Save Markdown Analysis Report",
+        "sweep.save_png": "Save PNG Chart",
+        "sweep.save_history": "Save to History",
+        "history.id": "ID",
+        "history.time": "Time",
+        "history.type": "Type",
+        "history.model": "Model",
+        "history.config": "Config",
+        "history.key_result": "Key Result",
+        "history.status": "Status",
+        "history.single": "Single",
+        "history.sweep": "Sweep",
+        "history.type_all": "All",
+        "history.type_single": "Single",
+        "history.type_sweep": "Sweep",
+        "chart.sweep_title": "Inference Performance Concurrency Sweep Analysis Report",
+        "chart.latency_vs_concurrency": "Latency vs Concurrency",
+        "chart.throughput_vs_concurrency": "Token Throughput vs Concurrency",
+        "chart.first_generation": "First Chunk / First Visible Token / Generation Speed",
+        "chart.efficiency_stability": "Concurrency Efficiency and Stability",
+        "chart.concurrency_axis": "Concurrency",
+        "chart.latency_axis": "Latency (s)",
+        "chart.throughput_axis": "Throughput (tok/s)",
+        "chart.time_axis": "Time (s)",
+        "chart.success_rate_axis": "Success Rate (%)",
+        "chart.hist_empty": "No latency data",
+        "chart.hist_latency_axis": "Latency (s)",
+        "chart.hist_count_axis": "Requests",
+        "msg.error": "Error",
+        "msg.warning": "Notice",
+        "msg.confirm": "Confirm",
+        "msg.close": "Close",
+        "msg.input_error": "Input Error",
+        "msg.clear_history_confirm": "Clear all history records?",
+        "msg.running": "A test is already running. Please wait until it finishes.",
+        "msg.api_required": "Enter an API URL.",
+        "msg.api_required_settings": "Enter an API URL in Settings.",
+        "msg.prompt_required": "Enter a user prompt.",
+        "msg.prompt_required_settings": "Enter a user prompt in Settings.",
+        "msg.multiplier_positive": "Request multiplier must be greater than 0.",
+    },
+}
+
+I18N_TEXT_KEYS = {
+    text: key
+    for key, text in I18N["zh_CN"].items()
+    if isinstance(text, str) and text
+}
+I18N_TEXT_KEYS.update({
+    "E2E Latency Distribution (e2el)": "section.e2e_distribution",
+    "Max Tokens": "label.max_tokens",
+    "Temperature": "label.temperature",
+    "Stream": "label.stream",
+})
+
 # ---------- UI 样式常量 ----------
 # Design: Modern SaaS dashboard — warm gray bg, white cards, left-accent metrics,
 #         Stripe purple accent, Datadog/Linear-inspired clean hierarchy.
@@ -565,6 +810,13 @@ def init_db():
 
 def _ensure_history_columns(conn):
     """Add additive history fields used by both single and sweep records."""
+    has_benchmarks = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='benchmarks'"
+    ).fetchone()
+    if not has_benchmarks:
+        _create_latest_schema(conn)
+        conn.commit()
+        return
     existing = {row[1] for row in conn.execute("PRAGMA table_info(benchmarks)").fetchall()}
     columns = {
         "record_type": "TEXT NOT NULL DEFAULT 'single'",
@@ -1511,7 +1763,7 @@ def run_benchmark(api_url: str, api_key: str, model: str, messages: list[dict],
 class LLMBenchmarkApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("LLM Benchmark GUI")
+        self.root.title("JISUMAN LLM Benchmark GUI")
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
         w = int(sw * 1099 / 1920)
@@ -1522,22 +1774,135 @@ class LLMBenchmarkApp:
         self.root.configure(bg=C_STYLE["bg_main"])
         self._benchmark_running = False
         self._smoke_latency = 0.0
-        self._run_started_at = None      # for elapsed display
-        self._icon_pulse_id = None       # icon pulse after id
-        self._header_anim_mode = ""
-        self._header_anim_index = 0
+        self._run_started_at = None
+        self._run_completed = 0
+        self._run_total = 0
+        self._run_fail = 0
+        self._run_phase = ""
+        self._run_current_label = ""
+        self._spinner_index = 0
+        self._spinner_after_id = None
+        self._icon_pulse_id = None
+        self._latest_e2e_latencies = []
+        self._hist_redraw_after_id = None
+        self.lang_code = self._load_language_config()
+        self.language_var = tk.StringVar(
+            value=I18N[self.lang_code]["language.en"]
+            if self.lang_code == "en_US" else I18N["zh_CN"]["language.zh"])
+        self._i18n_widgets = []
+        self._i18n_callbacks = []
         init_db()
         self._setup_styles()
         self._build_header()
         self._build_body()
         self._build_statusbar()
         self._load_config()
+        self._refresh_ui_language()
 
-    def _load_header_logo(self, path="/opt/llm-bechmark/logo.png", max_height=28, max_width=160):
+    def tr(self, key, default=None):
+        return I18N.get(self.lang_code, I18N["zh_CN"]).get(
+            key, default if default is not None else key)
+
+    def _load_language_config(self):
+        cfg = ConfigParser()
+        try:
+            cfg.read(INI_PATH, encoding="utf-8")
+            lang = cfg.get("ui", "language", fallback="zh_CN")
+        except Exception:
+            lang = "zh_CN"
+        return lang if lang in I18N else "zh_CN"
+
+    def _save_language_config(self):
+        cfg = ConfigParser()
+        try:
+            cfg.read(INI_PATH, encoding="utf-8")
+        except Exception:
+            pass
+        if not cfg.has_section("ui"):
+            cfg.add_section("ui")
+        cfg.set("ui", "language", self.lang_code)
+        with open(INI_PATH, "w", encoding="utf-8") as f:
+            cfg.write(f)
+
+    def _register_i18n_widget(self, widget, key, attr="text"):
+        self._i18n_widgets.append((widget, key, attr))
+        try:
+            widget.configure(**{attr: self.tr(key)})
+        except Exception:
+            pass
+        return widget
+
+    def _register_i18n_callback(self, callback):
+        self._i18n_callbacks.append(callback)
+        return callback
+
+    def _bind_existing_i18n_widgets(self, parent=None):
+        parent = parent or self.root
+        zh_reverse = I18N_TEXT_KEYS
+        for child in parent.winfo_children():
+            try:
+                text = child.cget("text")
+                key = getattr(child, "_i18n_key", None) or zh_reverse.get(text)
+                if key:
+                    child._i18n_key = key
+                    child.configure(text=self.tr(key))
+            except Exception:
+                pass
+            if isinstance(child, SectionCard):
+                key = getattr(child, "_i18n_title_key", None) or zh_reverse.get(child._title)
+                if key:
+                    child._i18n_title_key = key
+                    child._title = self.tr(key)
+                    child._apply_state()
+            self._bind_existing_i18n_widgets(child)
+
+    def _set_language(self, lang_code):
+        if lang_code not in I18N:
+            return
+        self.lang_code = lang_code
+        desired = I18N[lang_code]["language.en"] if lang_code == "en_US" else I18N["zh_CN"]["language.zh"]
+        if self.language_var.get() != desired:
+            self.language_var.set(desired)
+        self._save_language_config()
+        self._refresh_ui_language()
+
+    def _on_language_selected(self, event=None):
+        display = self.language_var.get()
+        lang_code = "en_US" if display == I18N["en_US"]["language.en"] else "zh_CN"
+        self._set_language(lang_code)
+
+    def _refresh_ui_language(self):
+        self.root.title(self.tr("app.title"))
+        self._bind_existing_i18n_widgets()
+        for widget, key, attr in getattr(self, "_i18n_widgets", []):
+            try:
+                widget.configure(**{attr: self.tr(key)})
+            except Exception:
+                pass
+        for cb in getattr(self, "_i18n_callbacks", []):
+            try:
+                cb()
+            except Exception:
+                pass
+        if hasattr(self, "nb"):
+            self.nb.tab(self.settings_frame, text=f"  {self.tr('tab.settings')}  ")
+            self.nb.tab(self.bench_frame, text=f"  {self.tr('tab.benchmark')}  ")
+            self.nb.tab(self.sweep_frame, text=f"  {self.tr('tab.sweep')}  ")
+            self.nb.tab(self.history_frame, text=f"  {self.tr('tab.history')}  ")
+        self._refresh_history_headers()
+        if hasattr(self, "hist_tree"):
+            self._refresh_history()
+        if hasattr(self, "history_detail_text") and not self.hist_tree.selection():
+            self._set_history_detail_text(self.tr("status.select_history"))
+        if hasattr(self, "_status_badge_lbl") and not (self._benchmark_running or getattr(self, "_sweep_running", False)):
+            self._status_badge_lbl.config(text=self.tr("status.idle"))
+        if hasattr(self, "hist_canvas"):
+            self.root.after_idle(self._redraw_e2e_histogram)
+
+    def _load_header_logo(self, path="/home/jisuman/logo.png", max_height=28, max_width=160):
         paths = [
             path,
             "/opt/llm-benchmark/logo.png",
-            "/home/jisuman/logo.png",
         ]
         logo_path = next((p for p in paths if p and os.path.exists(p)), None)
         if not logo_path:
@@ -1631,7 +1996,7 @@ class LLMBenchmarkApp:
         # icon + title in one line
         title_row = tk.Frame(left, bg=C_STYLE["bg_header"])
         title_row.pack(anchor="w")
-        self.logo_image = self._load_header_logo("/opt/llm-bechmark/logo.png",
+        self.logo_image = self._load_header_logo("/home/jisuman/logo.png",
                                                  max_height=28, max_width=160)
         if self.logo_image is not None:
             icon_lbl = tk.Label(title_row, image=self.logo_image,
@@ -1643,13 +2008,30 @@ class LLMBenchmarkApp:
                                 bg=C_STYLE["bg_header"], fg=C_STYLE["accent"])
             icon_lbl.pack(side=tk.LEFT, padx=(0, 8))
             self._icon_lbl = icon_lbl
-        ttk.Label(title_row, text="LLM Benchmark GUI", style="Title.TLabel").pack(side=tk.LEFT)
-        ttk.Label(left, text="OpenAI 兼容接口并发性能测试", style="Subtitle.TLabel").pack(anchor="w")
+        title_lbl = ttk.Label(title_row, text=self.tr("app.title"), style="Title.TLabel")
+        title_lbl.pack(side=tk.LEFT)
+        self._register_i18n_widget(title_lbl, "app.title")
+        subtitle_lbl = ttk.Label(left, text=self.tr("app.subtitle"), style="Subtitle.TLabel")
+        subtitle_lbl.pack(anchor="w")
+        self._register_i18n_widget(subtitle_lbl, "app.subtitle")
         right = tk.Frame(inner, bg=C_STYLE["bg_header"])
         right.pack(side=tk.RIGHT)
+        lang_frame = tk.Frame(right, bg=C_STYLE["bg_header"])
+        lang_frame.pack(side=tk.RIGHT, padx=(C_STYLE["pad_sm"], 0))
+        lang_lbl = tk.Label(lang_frame, text=self.tr("language.label"),
+                            font=C_STYLE["font_small"],
+                            bg=C_STYLE["bg_header"], fg=C_STYLE["text_secondary"])
+        lang_lbl.pack(side=tk.LEFT, padx=(0, 6))
+        self._register_i18n_widget(lang_lbl, "language.label")
+        self.language_combo = ttk.Combobox(
+            lang_frame, textvariable=self.language_var,
+            values=[I18N["zh_CN"]["language.zh"], I18N["en_US"]["language.en"]],
+            width=10, state="readonly")
+        self.language_combo.pack(side=tk.LEFT)
+        self.language_combo.bind("<<ComboboxSelected>>", self._on_language_selected)
         # status pill (fixed min-width to prevent overflow)
         pill = tk.Frame(right, bg=C_STYLE["bg_stripe"], highlightbackground=C_STYLE["border"],
-                        highlightthickness=1, bd=0, width=280)
+                        highlightthickness=1, bd=0, width=360)
         pill.pack(side=tk.RIGHT, padx=(C_STYLE["pad_sm"], 0))
         pill.pack_propagate(False)  # lock width
         pill_inner = tk.Frame(pill, bg=C_STYLE["bg_stripe"])
@@ -1751,7 +2133,7 @@ class LLMBenchmarkApp:
         card_c.pack(fill=tk.X)
         btn_row = tk.Frame(card_c.content, bg=C_STYLE["bg_card"])
         btn_row.pack(fill=tk.X, pady=(0, C_STYLE["gap_sm"]))
-        self.start_btn = ttk.Button(btn_row, text="开始测试",
+        self.start_btn = ttk.Button(btn_row, text="开始基准测试",
                                     style="Primary.TButton",
                                     command=self._start_benchmark)
         self.start_btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
@@ -1953,13 +2335,19 @@ class LLMBenchmarkApp:
                                 pady=(0, C_STYLE["gap_lg"]))
         hist_card = SectionCard(bf, "E2E Latency Distribution (e2el)",
                                 collapsible=True, expanded=False)
+        self._hist_card = hist_card
         hist_card.grid(row=3, column=0, sticky="nsew",
                        pady=(0, C_STYLE["gap_lg"]))
         hist_card.columnconfigure(0, weight=1)
+        hist_card.content.grid_columnconfigure(0, weight=1)
+        hist_card.content.grid_rowconfigure(0, weight=1)
         self.hist_canvas = tk.Canvas(hist_card.content, height=260,
                                      bg=C_STYLE["bg_card"],
                                      highlightthickness=0, bd=0)
         self.hist_canvas.grid(row=0, column=0, sticky="nsew")
+        self.hist_canvas.bind("<Configure>",
+                              lambda e: self._redraw_e2e_histogram(),
+                              add="+")
         report_card = SectionCard(bf, "详细报告")
         report_card.grid(row=4, column=0, sticky="nsew",
                          pady=(0, C_STYLE["gap_lg"]))
@@ -2032,66 +2420,115 @@ class LLMBenchmarkApp:
                         textvariable=var, width=10)
         s.grid(row=row, column=col * 2 + 1, sticky="w",
                padx=(0, 0), pady=(C_STYLE["gap_sm"], 0))
-    # ── header running indicator (low-overhead animation) ──
-    ICON_FRAMES = ["⚡", "✦"]
-    STATUS_FRAMES = ["◐", "◓", "◑", "◒"]
-    STATUS_COLORS = [C_STYLE["accent"], C_STYLE["info"],
-                     C_STYLE["success"], C_STYLE["warning"]]
+    # ── lightweight status animation (text-only, root.after) ──
+    SPINNER_FRAMES = ["|", "/", "-", "\\"]
 
-    def _start_icon_pulse(self, mode="基准测试", mark_benchmark=True):
-        if mark_benchmark:
-            self._benchmark_running = True
+    def _phase_display_name(self, phase: str) -> str:
+        return {
+            "benchmark": self.tr("status.benchmarking"),
+            "sweep": self.tr("status.sweeping"),
+            "preflight": self.tr("status.ready"),
+        }.get(phase, "运行中")
+
+    def _start_status_animation(self, phase: str, total: int = 0,
+                                current_label: str = ""):
+        self._benchmark_running = phase == "benchmark"
         self._run_started_at = time.perf_counter()
-        self._icon_index = 0
-        self._header_anim_index = 0
-        self._header_anim_mode = mode
-        if self._icon_pulse_id:
+        self._run_completed = 0
+        self._run_total = int(total or 0)
+        self._run_fail = 0
+        self._run_phase = phase
+        self._run_current_label = current_label
+        self._spinner_index = 0
+        if self._spinner_after_id:
             try:
-                self.root.after_cancel(self._icon_pulse_id)
+                self.root.after_cancel(self._spinner_after_id)
             except Exception:
                 pass
-            self._icon_pulse_id = None
-        self._pulse_icon()
+            self._spinner_after_id = None
+        self._animate_status_badge()
 
-    def _pulse_icon(self):
+    def _update_status_animation(self, completed: int | None = None,
+                                 total: int | None = None,
+                                 fail: int | None = None,
+                                 phase: str | None = None,
+                                 current_label: str | None = None):
+        if completed is not None:
+            self._run_completed = int(completed)
+        if total is not None:
+            self._run_total = int(total)
+        if fail is not None:
+            self._run_fail = int(fail)
+        if phase is not None:
+            self._run_phase = phase
+        if current_label is not None:
+            self._run_current_label = current_label
+        self._render_status_badge(
+            self.SPINNER_FRAMES[self._spinner_index % len(self.SPINNER_FRAMES)])
+
+    def _animate_status_badge(self):
         if not (self._benchmark_running or getattr(self, "_sweep_running", False)):
             return
-        f = self.ICON_FRAMES[self._icon_index % len(self.ICON_FRAMES)]
-        self._icon_index += 1
-        if self._icon_lbl is not None:
-            self._icon_lbl.config(text=f)
+        frame = self.SPINNER_FRAMES[self._spinner_index % len(self.SPINNER_FRAMES)]
+        self._spinner_index += 1
+        self._render_status_badge(frame)
+        self._spinner_after_id = self.root.after(500, self._animate_status_badge)
 
-        color = self.STATUS_COLORS[self._header_anim_index % len(self.STATUS_COLORS)]
-        dot = self.STATUS_FRAMES[self._header_anim_index % len(self.STATUS_FRAMES)]
-        self._header_anim_index += 1
-        elapsed = self._format_elapsed()
+    def _render_status_badge(self, prefix: str):
+        phase_name = self._phase_display_name(self._run_phase)
+        progress = f"{self._run_completed}/{self._run_total}" if self._run_total else f"{self._run_completed}"
+        parts = [f"{prefix} {phase_name}", progress]
+        if self._run_current_label:
+            parts.append(self._run_current_label)
+        parts.append(f"fail={self._run_fail}")
+        parts.append(self._format_elapsed())
         try:
-            self._status_dot.config(text=f" {dot}", fg=color)
+            self._status_dot.config(text="", fg=C_STYLE["accent"])
             self._status_badge_lbl.config(
-                text=f"{self._header_anim_mode}运行中 · {elapsed}",
+                text=" · ".join(parts),
                 fg=C_STYLE["text_primary"])
         except Exception:
             pass
-        self._icon_pulse_id = self.root.after(600, self._pulse_icon)
 
-    def _stop_icon_pulse(self, mark_benchmark=True, status_text="空闲"):
-        if mark_benchmark:
-            self._benchmark_running = False
-        if self._icon_pulse_id:
+    def _stop_status_animation(self, success: bool = True, completed: int | None = None,
+                               total: int | None = None, fail: int | None = None,
+                               message: str | None = None):
+        if completed is not None:
+            self._run_completed = int(completed)
+        if total is not None:
+            self._run_total = int(total)
+        if fail is not None:
+            self._run_fail = int(fail)
+        self._benchmark_running = False
+        if self._spinner_after_id:
             try:
-                self.root.after_cancel(self._icon_pulse_id)
+                self.root.after_cancel(self._spinner_after_id)
             except Exception:
                 pass
-            self._icon_pulse_id = None
-        if self._icon_lbl is not None:
-            self._icon_lbl.config(text="⚡")
+            self._spinner_after_id = None
+        prefix = "✓" if success else "✕"
+        label = message or (self.tr("status.completed") if success else self.tr("status.failed"))
+        progress = f"{self._run_completed}/{self._run_total}" if self._run_total else f"{self._run_completed}"
+        if success:
+            text = f"{prefix} {label} · {progress} · fail={self._run_fail} · {self._format_elapsed()}"
+        else:
+            text = f"{prefix} {label} · fail={self._run_fail} · {self._format_elapsed()}"
         try:
-            self._status_dot.config(text=" ●", fg=C_STYLE["text_muted"])
-            self._status_badge_lbl.config(text=status_text,
-                                          fg=C_STYLE["text_secondary"])
+            self._status_dot.config(text="", fg=C_STYLE["text_muted"])
+            self._status_badge_lbl.config(
+                text=text, fg=C_STYLE["success_text"] if success else C_STYLE["error_text"])
         except Exception:
             pass
-    # ── end header running indicator ──
+
+    def _start_icon_pulse(self, mode="基准测试", mark_benchmark=True):
+        phase = "benchmark" if mark_benchmark else "sweep"
+        self._start_status_animation(phase=phase, total=self._run_total,
+                                     current_label=self._run_current_label)
+
+    def _stop_icon_pulse(self, mark_benchmark=True, status_text="空闲"):
+        msg = self.tr("status.idle") if status_text == "空闲" else status_text
+        self._stop_status_animation(success=True, message=msg)
+    # ── end lightweight status animation ──
 
     def _format_elapsed(self) -> str:
         if self._run_started_at is None:
@@ -2112,7 +2549,7 @@ class LLMBenchmarkApp:
         self.stream_var.set("是")
         self.warmup_var.set(2)
         self._load_config()  # overlay INI values if available
-        self._action_status.config(text="已重置 — 请配置参数后开始测试")
+        self._action_status.config(text=self.tr("status.reset_action"))
     def _load_config(self):
         """Load defaults from INI file. Silently skip if file missing or malformed."""
         cfg = ConfigParser()
@@ -2181,10 +2618,11 @@ class LLMBenchmarkApp:
             "warmup": str(self.warmup_var.get()),
             "auto_save": self.auto_save_var.get(),
         }
+        cfg["ui"] = {"language": self.lang_code}
         with open(INI_PATH, "w", encoding="utf-8") as f:
             cfg.write(f)
         if not silent:
-            self._action_status.config(text="配置已保存到 llm_benchmark.ini")
+            self._action_status.config(text=self.tr("status.saved_config"))
     def _auto_save_check(self):
         """Auto-save if enabled. Silently skip if disabled."""
         if self.auto_save_var.get() == "是":
@@ -2199,7 +2637,7 @@ class LLMBenchmarkApp:
         inner = tk.Frame(sb, bg=C_STYLE["bg_header"])
         inner.pack(fill=tk.BOTH, expand=True,
                    padx=C_STYLE["pad_lg"], pady=2)
-        self.status_label = tk.Label(inner, text="就绪",
+        self.status_label = tk.Label(inner, text=self.tr("status.ready"),
                                      font=C_STYLE["font_small"],
                                      bg=C_STYLE["bg_header"],
                                      fg=C_STYLE["text_secondary"])
@@ -2507,9 +2945,11 @@ class LLMBenchmarkApp:
             f"无法获取模型列表。\n\n错误：{safe_err}\n\n"
             "请手动输入模型名称后重试。")
     def _on_preflight_fail(self, step: str, payload):
-        self.start_btn.config(state=tk.NORMAL, text="开始测试")
+        self.start_btn.config(state=tk.NORMAL, text=self.tr("button.start_benchmark"))
         self.progress["value"] = 0
-        self._stop_icon_pulse()
+        self._stop_status_animation(success=False, completed=self._run_completed,
+                                    total=self._run_total, fail=max(self._run_fail, 1),
+                                    message=self.tr("status.failed"))
         self.result_text.config(state=tk.NORMAL)
         self.result_text.delete("1.0", tk.END)
         if step == "connectivity":
@@ -2571,10 +3011,10 @@ class LLMBenchmarkApp:
         except Exception:
             warmup = 0
         if not api_url:
-            messagebox.showerror("错误", "请输入 API 地址")
+            messagebox.showerror(self.tr("msg.error"), self.tr("msg.api_required"))
             return
         if not user_prompt:
-            messagebox.showerror("错误", "请输入用户提示词")
+            messagebox.showerror(self.tr("msg.error"), self.tr("msg.prompt_required"))
             return
 
         # C32+ pressure test confirmation
@@ -2600,8 +3040,8 @@ class LLMBenchmarkApp:
         if DEBUG_MODE:
             logging.info("benchmark requested: url=%s model=%s concurrency=%d total=%d warmup=%d preset=%s",
                          api_url, model, concurrency, total, warmup, preset_name)
-        self.start_btn.config(state=tk.DISABLED, text="测试中...")
-        self._start_icon_pulse()
+        self.start_btn.config(state=tk.DISABLED, text=self.tr("button.benchmarking"))
+        self._start_status_animation(phase="benchmark", total=total)
         self._action_status.config(text="准备开始...")
         self._reset_indicators()
         self.progress["value"] = 0
@@ -2724,6 +3164,8 @@ class LLMBenchmarkApp:
         self.progress["value"] = completed
         if total:
             self.progress["maximum"] = total
+        self._update_status_animation(completed=completed, total=total,
+                                      fail=fail, phase="benchmark")
         elapsed = self._format_elapsed()
         self.status_label.config(text=f"进度: {completed}/{total}")
         self._action_status.config(
@@ -2732,7 +3174,7 @@ class LLMBenchmarkApp:
     def _on_done(self, summary: dict):
         self.root.after(0, lambda: self._show_results(summary))
     def _show_results(self, summary: dict):
-        self.start_btn.config(state=tk.NORMAL, text="开始测试")
+        self.start_btn.config(state=tk.NORMAL, text=self.tr("button.start_benchmark"))
         elapsed = self._format_elapsed()
         self._action_status.config(
             text=f"已完成 — {summary['total']} 请求 · success={summary['success']} · fail={summary['fail']} · {elapsed}")
@@ -2740,15 +3182,21 @@ class LLMBenchmarkApp:
         success_rate = summary["success"] / total_req * 100
         if summary["fail"] == 0:
             self._set_indicator("benchmark", "pass", f"{success_rate:.0f}% 通过")
-            self._stop_icon_pulse()
+            self._stop_status_animation(success=True, completed=summary["total"],
+                                        total=summary["total"], fail=summary["fail"],
+                                        message=self.tr("status.completed"))
             self.status_label.config(text="测试完成")
         elif summary["success"] > 0:
             self._set_indicator("benchmark", "fail", f"{success_rate:.0f}% 通过")
-            self._stop_icon_pulse()
+            self._stop_status_animation(success=True, completed=summary["success"],
+                                        total=summary["total"], fail=summary["fail"],
+                                        message=self.tr("status.completed"))
             self.status_label.config(text="测试完成（部分失败）")
         else:
             self._set_indicator("benchmark", "fail", "全部失败")
-            self._stop_icon_pulse()
+            self._stop_status_animation(success=False, completed=0,
+                                        total=summary["total"], fail=summary["fail"],
+                                        message=self.tr("status.failed"))
             self.status_label.config(text="测试完成（全部失败）")
             # popup with categorized error for first failure
             fail_detail = summary.get("fail_detail", [])
@@ -3082,22 +3530,66 @@ class LLMBenchmarkApp:
         r.append("=" * 60)
         return "\n".join(r)
     def _draw_histogram(self, summary: dict):
-        """Draw E2E latency histogram on the main benchmark canvas."""
-        detail = summary.get("detail", [])
-        if not detail:
-            self.hist_canvas.delete("all")
-            self.hist_canvas.create_text(300, 100, text="暂无数据",
-                                         font=C_STYLE["font_body"],
-                                         fill=C_STYLE["text_secondary"])
+        """Store E2E latencies and redraw after the histogram canvas is laid out."""
+        self._latest_e2e_latencies = self._get_success_e2e_latencies(summary)
+        if hasattr(self, "_hist_card"):
+            try:
+                self._hist_card.expand()
+            except Exception:
+                pass
+        self.root.after_idle(self._redraw_e2e_histogram)
+        self.root.after(100, self._redraw_e2e_histogram)
+
+    def _get_success_e2e_latencies(self, summary):
+        latencies = []
+        for r in summary.get("detail", []):
+            if not r.get("ok"):
+                continue
+            v = r.get("e2e_latency", r.get("latency"))
+            if isinstance(v, (int, float)) and v > 0:
+                latencies.append(float(v))
+        return latencies
+
+    def _redraw_e2e_histogram(self):
+        canvas = getattr(self, "hist_canvas", None)
+        if canvas is None:
             return
-        latencies = [r["e2e_latency"] for r in detail if r["ok"]]
-        if not latencies:
-            self.hist_canvas.delete("all")
-            self.hist_canvas.create_text(300, 100, text="暂无成功请求",
-                                         font=C_STYLE["font_body"],
-                                         fill=C_STYLE["text_secondary"])
-            return
-        self._draw_popup_histogram(self.hist_canvas, latencies)
+        try:
+            canvas.delete("all")
+            latencies = getattr(self, "_latest_e2e_latencies", [])
+            canvas.update_idletasks()
+            w = canvas.winfo_width()
+            h = canvas.winfo_height()
+            if not latencies:
+                canvas.create_text(
+                    max(w // 2, 160), max(h // 2, 80),
+                    text=self.tr("chart.hist_empty", "暂无延迟数据"),
+                    font=C_STYLE["font_body"],
+                    fill=C_STYLE["text_secondary"],
+                )
+                return
+            if w < 100 or h < 80:
+                if getattr(self, "_hist_redraw_after_id", None):
+                    try:
+                        self.root.after_cancel(self._hist_redraw_after_id)
+                    except Exception:
+                        pass
+                self._hist_redraw_after_id = self.root.after(
+                    100, self._redraw_e2e_histogram)
+                return
+            self._hist_redraw_after_id = None
+            self._draw_popup_histogram(canvas, latencies)
+        except Exception as e:
+            try:
+                canvas.delete("all")
+                canvas.create_text(
+                    180, 80,
+                    text=f"{self.tr('chart.hist_empty', '暂无延迟数据')}: {e}",
+                    font=C_STYLE["font_small"],
+                    fill=C_STYLE["error_text"],
+                )
+            except Exception:
+                pass
     def _analyze_failures(self, fail_detail: list) -> tuple[str, str]:
         if not fail_detail:
             return "", ""
@@ -3178,6 +3670,7 @@ class LLMBenchmarkApp:
         hf.grid_columnconfigure(0, weight=1)
         hf.grid_rowconfigure(0, weight=0)  # toolbar
         hf.grid_rowconfigure(1, weight=1)  # table
+        hf.grid_rowconfigure(2, weight=0)  # detail preview
         # toolbar with subtle background
         toolbar = tk.Frame(hf, bg=C_STYLE["bg_card"],
                            highlightbackground=C_STYLE["border"],
@@ -3187,19 +3680,30 @@ class LLMBenchmarkApp:
         toolbar_inner.pack(fill=tk.X, padx=C_STYLE["pad_lg"], pady=C_STYLE["pad_sm"])
         ttk.Button(toolbar_inner, text="↻ 刷新", style="Secondary.TButton",
                    command=self._refresh_history).pack(side=tk.LEFT)
+        tk.Label(toolbar_inner, text="类型", font=C_STYLE["font_small"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_secondary"]).pack(
+                     side=tk.LEFT, padx=(C_STYLE["pad_md"], C_STYLE["pad_sm"]))
+        self.history_type_filter_var = tk.StringVar(value="All")
+        type_filter = ttk.Combobox(toolbar_inner,
+                                   textvariable=self.history_type_filter_var,
+                                   values=["All", "Single", "Sweep"],
+                                   width=10, state="readonly")
+        self.history_type_filter = type_filter
+        type_filter.pack(side=tk.LEFT)
+        type_filter.bind("<<ComboboxSelected>>", lambda e: self._refresh_history())
         ttk.Button(toolbar_inner, text="✕ 清空记录", style="Secondary.TButton",
                    command=self._clear_history).pack(side=tk.LEFT, padx=C_STYLE["pad_sm"])
-        lbl = tk.Label(toolbar_inner, text="双击行查看详情",
+        self.history_status_var = tk.StringVar(value="")
+        lbl = tk.Label(toolbar_inner, textvariable=self.history_status_var,
                        font=C_STYLE["font_small"],
                        bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"])
         lbl.pack(side=tk.RIGHT)
-        # table card — collapsible section (expanded by default)
-        table_section = SectionCard(hf, "历史记录",
-                                    collapsible=True, expanded=True)
-        table_section.grid(row=1, column=0, sticky="nsew")
-        table_section.columnconfigure(0, weight=1)
-        table_section.rowconfigure(0, weight=1)
-        table_card = tk.Frame(table_section.content, bg=C_STYLE["bg_card"])
+
+        # Direct table display. History must not be wrapped in a collapsible section.
+        table_card = tk.Frame(hf, bg=C_STYLE["bg_card"],
+                              highlightbackground=C_STYLE["border"],
+                              highlightthickness=1, bd=0)
+        table_card.grid(row=1, column=0, sticky="nsew")
         table_card.grid_columnconfigure(0, weight=1)
         table_card.grid_rowconfigure(0, weight=1)
         cols = ("id", "Time", "Type", "Model", "Config", "Key Result", "Status")
@@ -3225,8 +3729,46 @@ class LLMBenchmarkApp:
         scrollbar.grid(row=0, column=1, sticky="ns",
                        padx=(0, C_STYLE["pad_lg"]),
                        pady=C_STYLE["pad_lg"])
+        self.hist_tree.bind("<<TreeviewSelect>>", self._on_history_select)
         self.hist_tree.bind("<Double-1>", self._on_history_double_click)
+
+        detail_card = tk.Frame(hf, bg=C_STYLE["bg_card"],
+                               highlightbackground=C_STYLE["border"],
+                               highlightthickness=1, bd=0)
+        detail_card.grid(row=2, column=0, sticky="ew", pady=(C_STYLE["gap_lg"], 0))
+        detail_card.grid_columnconfigure(0, weight=1)
+        tk.Label(detail_card, text="历史详情预览", font=C_STYLE["font_section"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
+                     row=0, column=0, sticky="w",
+                     padx=C_STYLE["pad_lg"], pady=(C_STYLE["pad_md"], C_STYLE["gap_sm"]))
+        self.history_detail_text = tk.Text(detail_card, height=7, wrap=tk.WORD,
+                                           font=C_STYLE["font_small"],
+                                           bg=C_STYLE["bg_input"],
+                                           fg=C_STYLE["text_primary"],
+                                           relief=tk.FLAT, borderwidth=0,
+                                           state=tk.DISABLED)
+        self.history_detail_text.grid(row=1, column=0, sticky="ew",
+                                      padx=C_STYLE["pad_lg"],
+                                      pady=(0, C_STYLE["pad_md"]))
         self._refresh_history()
+
+    def _refresh_history_headers(self):
+        if not hasattr(self, "hist_tree"):
+            return
+        headers = {
+            "id": "history.id",
+            "Time": "history.time",
+            "Type": "history.type",
+            "Model": "history.model",
+            "Config": "history.config",
+            "Key Result": "history.key_result",
+            "Status": "history.status",
+        }
+        for col, key in headers.items():
+            try:
+                self.hist_tree.heading(col, text=self.tr(key))
+            except Exception:
+                pass
     def _build_sweep_tab(self):
         """Build the 并发扫测 (concurrency sweep) tab."""
         sf = self.sweep_frame
@@ -3733,7 +4275,8 @@ class LLMBenchmarkApp:
         concurrency_levels = sweep_result.get("concurrency_levels", [])
 
         if not cases:
-            return "# 推理性能并发扫测分析报告\n\n数据为空，无法生成报告。\n"
+            empty = "数据为空，无法生成报告。" if self.lang_code == "zh_CN" else "No data. Report cannot be generated."
+            return f"# {self.tr('chart.sweep_title')}\n\n{empty}\n"
 
         s = [c["benchmark_summary"] for c in cases]
         conc = [c["concurrency"] for c in cases]
@@ -3762,11 +4305,21 @@ class LLMBenchmarkApp:
 
         # ── Build report ──
         md = []
-        md.append("# 推理性能并发扫测分析报告")
+        headings = {
+            "overview": "一、测试概览" if self.lang_code == "zh_CN" else "1. Test Overview",
+            "conclusion": "二、核心结论" if self.lang_code == "zh_CN" else "2. Key Conclusions",
+            "latency": "三、延迟分析" if self.lang_code == "zh_CN" else "3. Latency Analysis",
+            "throughput": "四、吞吐分析" if self.lang_code == "zh_CN" else "4. Throughput Analysis",
+            "first": "五、首包 / 首字 / 生成速度分析" if self.lang_code == "zh_CN" else "5. First Chunk / First Visible Token / Generation Speed",
+            "stability": "六、稳定性分析" if self.lang_code == "zh_CN" else "6. Stability Analysis",
+            "expert": "七、专家简评" if self.lang_code == "zh_CN" else "7. Expert Summary",
+            "next": "八、下一步建议" if self.lang_code == "zh_CN" else "8. Next Steps",
+        }
+        md.append(f"# {self.tr('chart.sweep_title')}")
         md.append("")
 
         # ── 一、测试概览 ──
-        md.append("## 一、测试概览")
+        md.append(f"## {headings['overview']}")
         md.append("")
         md.append(f"- **API URL**: `{sweep_result.get('api_url', 'N/A')}`")
         md.append(f"- **Model**: `{sweep_result.get('model', 'N/A')}`")
@@ -3789,14 +4342,14 @@ class LLMBenchmarkApp:
         md.append("")
 
         # ── 二、核心结论 ──
-        md.append("## 二、核心结论")
+        md.append(f"## {headings['conclusion']}")
         md.append("")
         for line in analysis_summary:
             md.append(f"- {line}")
         md.append("")
 
         # ── 三、延迟分析 ──
-        md.append("## 三、延迟分析")
+        md.append(f"## {headings['latency']}")
         md.append("")
         if len(cases) < 2:
             md.append("数据点不足，无法判断明确趋势。")
@@ -3839,7 +4392,7 @@ class LLMBenchmarkApp:
         md.append("")
 
         # ── 四、吞吐分析 ──
-        md.append("## 四、吞吐分析")
+        md.append(f"## {headings['throughput']}")
         md.append("")
         if len(cases) < 2:
             md.append("数据点不足，无法判断吞吐趋势。")
@@ -3878,7 +4431,7 @@ class LLMBenchmarkApp:
         md.append("")
 
         # ── 五、首包/首字/生成速度分析 ──
-        md.append("## 五、首包 / 首字 / 生成速度分析")
+        md.append(f"## {headings['first']}")
         md.append("")
         if not stream_mode:
             md.append("非流式模式，TTFT/TPOT/ITL 数据不可用。")
@@ -3930,7 +4483,7 @@ class LLMBenchmarkApp:
         md.append("")
 
         # ── 六、稳定性分析 ──
-        md.append("## 六、稳定性分析")
+        md.append(f"## {headings['stability']}")
         md.append("")
         md.append("| 并发 | Success Rate (%) | Fail | RPS (req/s) | Throughput Efficiency |")
         md.append("|------|------------------|------|-------------|----------------------|")
@@ -3962,14 +4515,14 @@ class LLMBenchmarkApp:
         md.append("")
 
         # ── 七、专家简评 ──
-        md.append("## 七、专家简评")
+        md.append(f"## {headings['expert']}")
         md.append("")
         commentary = self._generate_expert_commentary(cases, analysis_summary)
         md.append(commentary)
         md.append("")
 
         # ── 八、下一步建议 ──
-        md.append("## 八、下一步建议")
+        md.append(f"## {headings['next']}")
         md.append("")
         next_steps = self._generate_next_steps(cases, analysis_summary)
         for i, step in enumerate(next_steps, 1):
@@ -3981,17 +4534,17 @@ class LLMBenchmarkApp:
     def _start_sweep(self):
         """Validate inputs and start sweep in a background thread."""
         if self._sweep_running or self._benchmark_running:
-            messagebox.showwarning("提示", "已有测试正在进行，请等待完成。")
+            messagebox.showwarning(self.tr("msg.warning"), self.tr("msg.running"))
             return
 
         api_url = self.url_var.get().strip()
         if not api_url:
-            messagebox.showerror("错误", "请在「参数设置」中填写 API 地址")
+            messagebox.showerror(self.tr("msg.error"), self.tr("msg.api_required_settings"))
             return
 
         user_prompt = self.prompt_var.get().strip()
         if not user_prompt:
-            messagebox.showerror("错误", "请在「参数设置」中填写用户提示词")
+            messagebox.showerror(self.tr("msg.error"), self.tr("msg.prompt_required_settings"))
             return
 
         # Parse concurrency levels
@@ -3999,12 +4552,12 @@ class LLMBenchmarkApp:
             concurrency_levels = self._parse_concurrency_levels(
                 self.sweep_conc_var.get())
         except ValueError as e:
-            messagebox.showerror("输入错误", str(e))
+            messagebox.showerror(self.tr("msg.input_error"), str(e))
             return
 
         multiplier = self.sweep_mult_var.get()
         if multiplier < 1:
-            messagebox.showerror("输入错误", "请求倍数必须大于 0")
+            messagebox.showerror(self.tr("msg.input_error"), self.tr("msg.multiplier_positive"))
             return
 
         api_key = self.key_var.get().strip()
@@ -4026,9 +4579,11 @@ class LLMBenchmarkApp:
 
         # Update UI
         self._sweep_running = True
-        self._start_icon_pulse(mode="并发扫测", mark_benchmark=False)
+        first_label = f"C={concurrency_levels[0]}" if concurrency_levels else ""
+        self._start_status_animation(phase="sweep", total=len(concurrency_levels),
+                                     current_label=first_label)
         self._sweep_status_card.expand()
-        self.sweep_start_btn.config(state=tk.DISABLED, text="扫测中...")
+        self.sweep_start_btn.config(state=tk.DISABLED, text=self.tr("button.sweeping"))
         self.sweep_status_text.config(state=tk.NORMAL)
         self.sweep_status_text.delete("1.0", tk.END)
         self.sweep_status_text.insert(tk.END, "准备开始扫测...\n")
@@ -4079,9 +4634,14 @@ class LLMBenchmarkApp:
         total_levels = len(concurrency_levels)
         baseline_output_tps = 0.0
         baseline_concurrency = concurrency_levels[0] if concurrency_levels else 1
+        sweep_fail_count = 0
 
         for idx, c in enumerate(concurrency_levels):
             num_requests = c * multiplier
+            self.root.after(0, lambda i=idx, total=total_levels, cc=c, fail=sweep_fail_count:
+                            self._update_status_animation(
+                                completed=i, total=total, fail=fail,
+                                phase="sweep", current_label=f"C={cc}"))
             self._append_sweep_status(
                 f"[{idx + 1}/{total_levels}] 并发={c}, 请求数={num_requests}... ")
 
@@ -4119,11 +4679,21 @@ class LLMBenchmarkApp:
                     "analysis_metrics": analysis_metrics,
                 }
                 cases.append(case)
+                sweep_fail_count += summary.get("fail", 0) or 0
+                self.root.after(0, lambda i=idx + 1, total=total_levels, cc=c, fail=sweep_fail_count:
+                                self._update_status_animation(
+                                    completed=i, total=total, fail=fail,
+                                    phase="sweep", current_label=f"C={cc}"))
                 self._append_sweep_status(
                     f"✓ success={summary['success']} fail={summary['fail']} "
                     f"E2E_avg={summary['e2e_latency_avg']:.3f}s "
                     f"Output_TPS={summary['system_output_tps']:.1f} tok/s\n")
             else:
+                sweep_fail_count += 1
+                self.root.after(0, lambda i=idx + 1, total=total_levels, cc=c, fail=sweep_fail_count:
+                                self._update_status_animation(
+                                    completed=i, total=total, fail=fail,
+                                    phase="sweep", current_label=f"C={cc}"))
                 self._append_sweep_status(f"✕ 未返回结果\n")
 
         finished_at = datetime.now().isoformat()
@@ -4191,20 +4761,24 @@ class LLMBenchmarkApp:
                     md_path=None):
         """Called on main thread when sweep completes or fails."""
         self._sweep_running = False
-        self.sweep_start_btn.config(state=tk.NORMAL, text="开始扫测")
+        self.sweep_start_btn.config(state=tk.NORMAL, text=self.tr("button.start_sweep"))
 
         if error:
-            self._stop_icon_pulse(mark_benchmark=False, status_text="扫测失败")
+            self._stop_status_animation(success=False, fail=max(self._run_fail, 1),
+                                        message=self.tr("status.failed"))
             self._do_append_sweep_status(f"\n✕ 扫测失败: {error}\n")
             return
 
         if not sweep_result or not sweep_result.get("cases"):
-            self._stop_icon_pulse(mark_benchmark=False, status_text="扫测完成")
+            self._stop_status_animation(success=False, fail=max(self._run_fail, 1),
+                                        message=self.tr("status.failed"))
             self._do_append_sweep_status("\n✕ 扫测未产生结果\n")
             return
 
         cases = sweep_result["cases"]
-        self._stop_icon_pulse(mark_benchmark=False, status_text="扫测完成")
+        self._stop_status_animation(success=True, completed=len(cases),
+                                    total=len(sweep_result.get("concurrency_levels", cases)),
+                                    fail=self._run_fail, message=self.tr("status.completed"))
         self._do_append_sweep_status(
             f"\n✓ 扫测完成 — {len(cases)} 个并发级别\n")
 
@@ -4213,7 +4787,7 @@ class LLMBenchmarkApp:
         self.sweep_result_text.delete("1.0", tk.END)
         r = []
         r.append("=" * 60)
-        r.append("  推理性能并发扫测分析报告")
+        r.append(f"  {self.tr('chart.sweep_title')}")
         r.append("=" * 60)
         r.append(f"  Sweep ID: {sweep_result['sweep_id']}")
         r.append(f"  API URL:  {sweep_result['api_url']}")
@@ -4382,7 +4956,7 @@ class LLMBenchmarkApp:
         s = [c["benchmark_summary"] for c in cases]
 
         fig, axes = plt.subplots(2, 2, figsize=(10, 7.5))
-        fig.suptitle("推理性能并发扫测分析报告", fontsize=13, fontweight="bold")
+        fig.suptitle(self.tr("chart.sweep_title"), fontsize=13, fontweight="bold")
 
         # Subplot 1: E2E latency trend
         ax1 = axes[0, 0]
@@ -4394,9 +4968,9 @@ class LLMBenchmarkApp:
         ax1.plot(conc, e2e_p50, "s--", color="#10B981", linewidth=1.5, label="E2E P50")
         ax1.plot(conc, e2e_p95, "D--", color="#F59E0B", linewidth=1.5, label="E2E P95")
         ax1.plot(conc, e2e_p99, "^:", color="#EF4444", linewidth=1.5, label="E2E P99")
-        ax1.set_xlabel("总并发数")
-        ax1.set_ylabel("延迟 (s)")
-        ax1.set_title("延迟随并发变化趋势")
+        ax1.set_xlabel(self.tr("chart.concurrency_axis"))
+        ax1.set_ylabel(self.tr("chart.latency_axis"))
+        ax1.set_title(self.tr("chart.latency_vs_concurrency"))
         ax1.legend(fontsize=7)
         ax1.grid(True, alpha=0.3)
 
@@ -4406,9 +4980,9 @@ class LLMBenchmarkApp:
         total_tps = [cs.get("system_total_tps", 0) or None for cs in s]
         ax2.plot(conc, out_tps, "o-", color="#533AFD", linewidth=2, label="Output TPS")
         ax2.plot(conc, total_tps, "s--", color="#10B981", linewidth=1.5, label="Total TPS")
-        ax2.set_xlabel("总并发数")
-        ax2.set_ylabel("吞吐 (tok/s)")
-        ax2.set_title("Token 吞吐随并发变化")
+        ax2.set_xlabel(self.tr("chart.concurrency_axis"))
+        ax2.set_ylabel(self.tr("chart.throughput_axis"))
+        ax2.set_title(self.tr("chart.throughput_vs_concurrency"))
         ax2.legend(fontsize=7)
         ax2.grid(True, alpha=0.3)
 
@@ -4434,9 +5008,9 @@ class LLMBenchmarkApp:
         if any(v is not None and v > 0 for v in itl_avg):
             ax3.plot(conc, itl_avg, "v--", color="#8B5CF6", linewidth=1.5,
                      label="ITL")
-        ax3.set_xlabel("总并发数")
-        ax3.set_ylabel("时间 (s)")
-        ax3.set_title("首包 / 首字 / 生成速度趋势")
+        ax3.set_xlabel(self.tr("chart.concurrency_axis"))
+        ax3.set_ylabel(self.tr("chart.time_axis"))
+        ax3.set_title(self.tr("chart.first_generation"))
         ax3.legend(fontsize=6)
         ax3.grid(True, alpha=0.3)
 
@@ -4463,12 +5037,12 @@ class LLMBenchmarkApp:
         if any(v is not None for v in eff_vals):
             ax4.plot(conc, eff_vals, "D:", color="#EF4444", linewidth=1.5,
                      label="效率")
-        ax4.set_xlabel("总并发数")
+        ax4.set_xlabel(self.tr("chart.concurrency_axis"))
         ax4.set_ylabel("RPS / Per-req TPS", color="#533AFD")
         ax4_twin.plot(conc, success_rates, "v--", color="#F59E0B", linewidth=2,
                       label="成功率 (%)")
-        ax4_twin.set_ylabel("成功率 (%)", color="#F59E0B")
-        ax4.set_title("并发效率与稳定性分析")
+        ax4_twin.set_ylabel(self.tr("chart.success_rate_axis"), color="#F59E0B")
+        ax4.set_title(self.tr("chart.efficiency_stability"))
         lines1, labels1 = ax4.get_legend_handles_labels()
         lines2, labels2 = ax4_twin.get_legend_handles_labels()
         ax4.legend(lines1 + lines2, labels1 + labels2, fontsize=6, loc="upper left")
@@ -4593,10 +5167,17 @@ class LLMBenchmarkApp:
     def _refresh_history(self):
         for item in self.hist_tree.get_children():
             self.hist_tree.delete(item)
-        for row in load_history():
+        rows = load_history()
+        selected_filter = getattr(self, "history_type_filter_var", tk.StringVar(value="All")).get()
+        visible_count = 0
+        for row in rows:
             rid = row["id"]
             created = row["created_at"]
             record_type = row["record_type"] or "single"
+            if selected_filter == "Single" and record_type != "single":
+                continue
+            if selected_filter == "Sweep" and record_type != "sweep":
+                continue
             model = row["model"]
             conc = row["concurrency"]
             total = row["total"]
@@ -4605,11 +5186,11 @@ class LLMBenchmarkApp:
             sys_tps = row["system_output_tps"] or 0.0
             status = row["status"] or "completed"
             if record_type == "sweep":
-                type_label = "并发扫测"
+                type_label = self.tr("history.sweep")
                 config_summary = row["config_summary"] or "-"
                 primary_metric = row["primary_metric"] or "-"
             else:
-                type_label = "单次测试"
+                type_label = self.tr("history.single")
                 config_summary = row["config_summary"] or (
                     f"C{conc} / N{total} / max_tokens=-")
                 primary_metric = row["primary_metric"] or (
@@ -4619,8 +5200,84 @@ class LLMBenchmarkApp:
                 rid, created, type_label, model, config_summary,
                 primary_metric, status,
             ))
+            visible_count += 1
+        if visible_count:
+            self.history_status_var.set(self.tr("status.history_count").format(count=visible_count))
+            self._set_history_detail_text(self.tr("status.select_history"))
+        else:
+            self.history_status_var.set(self.tr("status.no_history"))
+            self._set_history_detail_text(self.tr("status.no_history"))
+
+    def _set_history_detail_text(self, text: str):
+        if not hasattr(self, "history_detail_text"):
+            return
+        self.history_detail_text.config(state=tk.NORMAL)
+        self.history_detail_text.delete("1.0", tk.END)
+        self.history_detail_text.insert(tk.END, text)
+        self.history_detail_text.config(state=tk.DISABLED)
+
+    def _load_history_row(self, rid):
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM benchmarks WHERE id=?",
+                           (rid,)).fetchone()
+        conn.close()
+        return row
+
+    def _on_history_select(self, event=None):
+        sel = self.hist_tree.selection()
+        if not sel:
+            self._set_history_detail_text(self.tr("status.select_history"))
+            return
+        rid = self.hist_tree.item(sel[0], "values")[0]
+        row = self._load_history_row(rid)
+        if not row:
+            self._set_history_detail_text("历史记录不存在或已删除")
+            return
+        record_type = row["record_type"] or "single"
+        if record_type == "sweep":
+            try:
+                sweep_result = json.loads(row["summary_json"] or "{}")
+            except Exception:
+                sweep_result = {}
+            cases = sweep_result.get("cases", [])
+            lines = [
+                f"{self.tr('history.type')}: {self.tr('history.sweep')}",
+                f"{self.tr('history.time')}: {row['created_at']}",
+                f"{self.tr('history.model')}: {row['model']}",
+                f"{self.tr('history.config')}: {row['config_summary'] or '-'}",
+                f"{self.tr('history.key_result')}: {row['primary_metric'] or '-'}",
+                f"{self.tr('history.status')}: {row['status'] or '-'}",
+                f"{'档位数' if self.lang_code == 'zh_CN' else 'Cases'}: {len(cases)}",
+                f"JSON: {row['json_path'] or '未保存'}",
+                f"Markdown: {row['markdown_path'] or '未保存'}",
+                f"PNG: {row['png_path'] or '未保存'}",
+                "",
+                "双击该行可查看并发档位表、2x2 图形分析、专家分析和 Raw JSON。"
+                if self.lang_code == "zh_CN"
+                else "Double-click this row to view case table, 2x2 chart, expert summary, and Raw JSON.",
+            ]
+        else:
+            config_summary = row["config_summary"] or f"C{row['concurrency']} / N{row['total']}"
+            lines = [
+                f"{self.tr('history.type')}: {self.tr('history.single')}",
+                f"{self.tr('history.time')}: {row['created_at']}",
+                f"{self.tr('history.model')}: {row['model']}",
+                f"{self.tr('history.config')}: {config_summary}",
+                f"{self.tr('history.key_result')}: {row['primary_metric'] or '-'}",
+                f"{self.tr('history.status')}: {row['status'] or '-'}",
+                f"E2E Avg: {row['e2e_latency_avg']:.3f}s" if row["e2e_latency_avg"] else "E2E Avg: -",
+                f"E2E P95: {row['e2e_latency_p95']:.3f}s" if row["e2e_latency_p95"] else "E2E P95: -",
+                f"Output TPS: {row['system_output_tps']:.1f}" if row["system_output_tps"] else "Output TPS: -",
+                "",
+                "双击该行可查看完整单次测试详情和 E2E latency chart。"
+                if self.lang_code == "zh_CN"
+                else "Double-click this row to view full single benchmark details and E2E latency chart.",
+            ]
+        self._set_history_detail_text("\n".join(lines))
+
     def _clear_history(self):
-        if not messagebox.askyesno("确认", "确定要清空所有历史记录吗？"):
+        if not messagebox.askyesno(self.tr("msg.confirm"), self.tr("msg.clear_history_confirm")):
             return
         conn = sqlite3.connect(DB_PATH)
         conn.execute("DELETE FROM benchmarks")
@@ -4631,20 +5288,41 @@ class LLMBenchmarkApp:
         """Draw a latency distribution histogram on the given canvas."""
         canvas.delete("all")
         if not latencies:
-            canvas.create_text(200, 80, text="暂无延迟数据",
+            canvas.create_text(200, 80, text=self.tr("chart.hist_empty"),
                                font=C_STYLE["font_body"],
                                fill=C_STYLE["text_secondary"])
             return
         canvas.update_idletasks()
-        w = canvas.winfo_width() or 580
-        h = canvas.winfo_height() or 220
-        margin_l, margin_r, margin_t, margin_b = 55, 25, 20, 35
+        w = max(canvas.winfo_width(), 100)
+        h = max(canvas.winfo_height(), 80)
+        if w < 100 or h < 80:
+            canvas.create_text(
+                max(w // 2, 50), max(h // 2, 40),
+                text=self.tr("chart.hist_empty"),
+                font=C_STYLE["font_small"],
+                fill=C_STYLE["text_secondary"])
+            return
+
+        title = self.tr("section.e2e_distribution")
+        canvas.create_text(w / 2, 16, text=title,
+                           font=C_STYLE["font_section"],
+                           fill=C_STYLE["text_primary"])
+
+        margin_l, margin_r, margin_t, margin_b = 58, 26, 48, 48
         plot_w = w - margin_l - margin_r
         plot_h = h - margin_t - margin_b
+        if plot_w < 20 or plot_h < 20:
+            canvas.create_text(w / 2, h / 2, text=self.tr("chart.hist_empty"),
+                               font=C_STYLE["font_small"],
+                               fill=C_STYLE["text_secondary"])
+            return
+
         min_l, max_l = min(latencies), max(latencies)
         if max_l == min_l:
-            max_l = min_l + 0.001
-        bin_count = min(25, max(6, len(latencies) // 2))
+            delta = max(min_l * 0.05, 0.001)
+            min_l = max(0.0, min_l - delta)
+            max_l = max_l + delta
+        bin_count = min(25, max(1, min(8, len(latencies)) if len(latencies) < 12 else len(latencies) // 2))
         bin_w = (max_l - min_l) / bin_count
         bins = [0] * bin_count
         for lat in latencies:
@@ -4655,7 +5333,7 @@ class LLMBenchmarkApp:
         for i, count in enumerate(bins):
             x0 = margin_l + i * plot_w / bin_count
             x1 = margin_l + (i + 1) * plot_w / bin_count - 2
-            bar_h = count / max_bin * plot_h
+            bar_h = count / max_bin * max(plot_h - 8, 1)
             y0 = margin_t + plot_h - bar_h
             y1 = margin_t + plot_h
             ratio = i / max(bin_count - 1, 1)
@@ -4682,6 +5360,14 @@ class LLMBenchmarkApp:
         canvas.create_line(margin_l, margin_t, margin_l,
                            margin_t + plot_h,
                            fill=C_STYLE["border"], width=1)
+        # y-axis tick labels
+        for tick in range(0, max_bin + 1, max(1, max_bin // 3 or 1)):
+            y = margin_t + plot_h - (tick / max_bin * max(plot_h - 8, 1))
+            canvas.create_line(margin_l - 4, y, margin_l, y,
+                               fill=C_STYLE["border"], width=1)
+            canvas.create_text(margin_l - 8, y, text=str(tick),
+                               anchor="e", font=C_STYLE["font_small"],
+                               fill=C_STYLE["text_secondary"])
         # x-axis labels
         for i in range(0, bin_count + 1, max(1, bin_count // 5)):
             x = margin_l + i * plot_w / bin_count
@@ -4690,10 +5376,19 @@ class LLMBenchmarkApp:
                                text=f"{val:.2f}s",
                                font=C_STYLE["font_small"],
                                fill=C_STYLE["text_secondary"])
-        canvas.create_text(w / 2, h - 8, text="延迟 (秒)",
+        canvas.create_text(w / 2, h - 8, text=self.tr("chart.hist_latency_axis"),
                            font=C_STYLE["font_small"],
                            fill=C_STYLE["text_secondary"])
-        canvas.create_text(14, h / 2, text="请求数", angle=90,
+        canvas.create_text(14, h / 2, text=self.tr("chart.hist_count_axis"), angle=90,
+                           font=C_STYLE["font_small"],
+                           fill=C_STYLE["text_secondary"])
+        avg = statistics.mean(latencies)
+        p95 = percentile(latencies, 95)
+        p99 = percentile(latencies, 99)
+        stat_text = (
+            f"n={len(latencies)}  min={min(latencies):.3f}s  "
+            f"avg={avg:.3f}s  p95={p95:.3f}s  p99={p99:.3f}s")
+        canvas.create_text(margin_l, 32, text=stat_text, anchor="w",
                            font=C_STYLE["font_small"],
                            fill=C_STYLE["text_secondary"])
 
