@@ -113,6 +113,8 @@ I18N = {
         "status.ready_action": "就绪 — 请配置参数后开始测试",
         "status.reset_action": "已重置 — 请配置参数后开始测试",
         "status.saved_config": "配置已保存到 llm_benchmark.ini",
+        "run.busy_benchmark": "基准测试正在运行，请等待完成后再开始扫测。",
+        "run.busy_sweep": "并发扫测正在运行，请等待完成后再开始基准测试。",
         "section.api": "API 配置",
         "section.test_params": "测试参数",
         "section.generation": "生成参数",
@@ -133,7 +135,7 @@ I18N = {
         "button.start_benchmark": "开始基准测试",
         "button.benchmarking": "基准测试中...",
         "button.start_sweep": "开始扫测",
-        "button.sweeping": "扫测中...",
+        "button.sweeping": "正在进行扫测......",
         "button.save_config": "保存配置",
         "button.reset_config": "重置配置",
         "button.query": "查询",
@@ -150,6 +152,14 @@ I18N = {
         "label.system_prompt": "系统提示词",
         "label.user_prompt": "用户提示词",
         "label.max_tokens": "Max Tokens",
+        "label.output_length_mode": "输出长度模式",
+        "label.output_mode_normal": "普通模式（max_tokens 为上限）",
+        "label.output_mode_fixed": "固定输出模式（vLLM bench 兼容）",
+        "label.output_mode_normal_short": "普通模式",
+        "label.output_mode_fixed_short": "固定输出模式",
+        "label.fixed_output_tokens": "固定输出 Token",
+        "label.fixed_output_validation_passed": "固定输出长度校验通过",
+        "label.fixed_output_validation_failed": "固定输出模式已启用，但实际输出 token 明显低于目标值，可能是服务端不支持 min_tokens / ignore_eos，或上下文长度 / stop 条件限制。",
         "label.temperature": "Temperature",
         "label.stream": "流式输出",
         "label.warmup": "预热请求",
@@ -228,6 +238,8 @@ I18N = {
         "status.ready_action": "Ready — configure parameters before starting",
         "status.reset_action": "Reset complete — configure parameters before starting",
         "status.saved_config": "Config saved to llm_benchmark.ini",
+        "run.busy_benchmark": "A benchmark is already running. Please wait before starting a sweep.",
+        "run.busy_sweep": "A concurrency sweep is already running. Please wait before starting a benchmark.",
         "section.api": "API Configuration",
         "section.test_params": "Test Parameters",
         "section.generation": "Generation Parameters",
@@ -248,7 +260,7 @@ I18N = {
         "button.start_benchmark": "Start Benchmark",
         "button.benchmarking": "Benchmarking...",
         "button.start_sweep": "Start Sweep",
-        "button.sweeping": "Sweeping...",
+        "button.sweeping": "Sweeping......",
         "button.save_config": "Save Config",
         "button.reset_config": "Reset Config",
         "button.query": "Query",
@@ -265,6 +277,14 @@ I18N = {
         "label.system_prompt": "System Prompt",
         "label.user_prompt": "User Prompt",
         "label.max_tokens": "Max Tokens",
+        "label.output_length_mode": "Output Length Mode",
+        "label.output_mode_normal": "Normal Mode (max_tokens as upper bound)",
+        "label.output_mode_fixed": "Fixed Output Mode (vLLM bench compatible)",
+        "label.output_mode_normal_short": "Normal",
+        "label.output_mode_fixed_short": "Fixed",
+        "label.fixed_output_tokens": "Fixed Output Tokens",
+        "label.fixed_output_validation_passed": "Fixed output length validation passed",
+        "label.fixed_output_validation_failed": "Fixed output mode is enabled, but actual completion tokens are far below the target. The server may not support min_tokens / ignore_eos, or context/stop constraints may apply.",
         "label.temperature": "Temperature",
         "label.stream": "Stream",
         "label.warmup": "Warmup Requests",
@@ -1184,7 +1204,7 @@ def validate_metric_consistency(summary: dict) -> list[str]:
 
 def call_llm(api_url: str, api_key: str, model: str, messages: list[dict],
              max_tokens: int, temperature: float, timeout: int = 120,
-             stream: bool = True) -> dict:
+             stream: bool = True, output_length_mode: str = "normal") -> dict:
     """Send one chat-completion request.
 
     When stream=True: reads SSE chunks, records first-token time,
@@ -1199,16 +1219,9 @@ def call_llm(api_url: str, api_key: str, model: str, messages: list[dict],
       per_request_output_tps_e2e, per_request_decode_tps,
       finish_reason, stream, [error, error_type on failure]
     """
-    body_dict = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "stream": stream,
-    }
-    if stream:
-        # Some OpenAI-compatible servers require stream_options to get usage
-        body_dict["stream_options"] = {"include_usage": True}
+    body_dict = build_chat_payload(model, messages, max_tokens, temperature,
+                                   stream=stream,
+                                   output_length_mode=output_length_mode)
 
     body = json.dumps(body_dict).encode("utf-8")
     req = request.Request(api_url, data=body, method="POST")
@@ -1511,6 +1524,33 @@ def fetch_models(api_url: str, api_key: str, timeout: int = 10) -> tuple[list[st
         if DEBUG_MODE:
             logging.warning("fetch models failed: %s", e)
         return [], str(e)
+
+
+def build_chat_payload(model: str, messages: list[dict], max_tokens: int,
+                       temperature: float, stream: bool = True,
+                       output_length_mode: str = "normal") -> dict:
+    """Build an OpenAI-compatible chat/completions payload.
+
+    Normal mode preserves existing behavior. Fixed mode is vLLM-bench compatible:
+    min_tokens=max_tokens and ignore_eos=true.
+    """
+    mode = output_length_mode if output_length_mode in ("normal", "fixed") else "normal"
+    payload = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": stream,
+    }
+    if mode == "fixed":
+        payload["min_tokens"] = max_tokens
+        payload["ignore_eos"] = True
+    if stream:
+        # Some OpenAI-compatible servers require stream_options to get usage.
+        payload["stream_options"] = {"include_usage": True}
+    return payload
+
+
 def aggregate_results(results: list[dict], duration: float, config: dict) -> dict:
     """Aggregate benchmark results into a summary dict.
 
@@ -1577,6 +1617,10 @@ def aggregate_results(results: list[dict], duration: float, config: dict) -> dic
         "model": config["model"],
         "prompt": config["prompt"],
         "max_tokens": config["max_tokens"],
+        "output_length_mode": config.get("output_length_mode", "normal"),
+        "fixed_output_tokens": config["max_tokens"] if config.get("output_length_mode") == "fixed" else None,
+        "min_tokens_sent": config["max_tokens"] if config.get("output_length_mode") == "fixed" else None,
+        "ignore_eos": config.get("output_length_mode") == "fixed",
         "temperature": config["temperature"],
         "concurrency": config["concurrency"],
         "total": num_total,
@@ -1696,6 +1740,20 @@ def aggregate_results(results: list[dict], duration: float, config: dict) -> dic
 
     # ── run metric consistency validation ──
     warnings = validate_metric_consistency(summary)
+    if summary.get("output_length_mode") == "fixed":
+        avg_completion = total_output_tokens / num_ok if num_ok else 0
+        target_output_tokens = config["max_tokens"]
+        summary["fixed_output_avg_completion_tokens"] = round(avg_completion, 2)
+        summary["fixed_output_validation_passed"] = avg_completion >= target_output_tokens * 0.9
+        if not summary["fixed_output_validation_passed"]:
+            summary["fixed_output_validation_warning"] = (
+                "Fixed output mode is enabled, but actual completion tokens are far below the target. "
+                "The server may not support min_tokens / ignore_eos, or context/stop constraints may apply.")
+            warnings.append(summary["fixed_output_validation_warning"])
+    else:
+        summary["fixed_output_avg_completion_tokens"] = None
+        summary["fixed_output_validation_passed"] = None
+        summary["fixed_output_validation_warning"] = ""
     summary["metric_warnings"] = warnings
 
     return summary
@@ -1706,7 +1764,8 @@ def run_benchmark(api_url: str, api_key: str, model: str, messages: list[dict],
                   concurrency: int, num_requests: int,
                   progress_cb, done_cb,
                   stream: bool = True,
-                  preset_name: str = "") -> None:
+                  preset_name: str = "",
+                  output_length_mode: str = "normal") -> None:
     """Run benchmark in a background thread; call progress_cb(completed, total, fail)
     and done_cb(summary_dict) on the main thread."""
     if DEBUG_MODE:
@@ -1719,7 +1778,7 @@ def run_benchmark(api_url: str, api_key: str, model: str, messages: list[dict],
 
     def worker():
         r = call_llm(api_url, api_key, model, messages, max_tokens, temperature,
-                     stream=stream)
+                     stream=stream, output_length_mode=output_length_mode)
         with lock:
             results.append(r)
             completed[0] += 1
@@ -1751,6 +1810,7 @@ def run_benchmark(api_url: str, api_key: str, model: str, messages: list[dict],
         "stream_mode": stream,
         "benchmark_preset_name": preset_name,
         "benchmark_preset_type": "fixed_concurrency",
+        "output_length_mode": output_length_mode,
     }
     summary = aggregate_results(results, duration, config)
     # Also add preset info to output
@@ -1773,6 +1833,9 @@ class LLMBenchmarkApp:
         self.root.minsize(1024, 680)
         self.root.configure(bg=C_STYLE["bg_main"])
         self._benchmark_running = False
+        self._sweep_running = False
+        self._active_run_type = None
+        self._run_lock = threading.Lock()
         self._smoke_latency = 0.0
         self._run_started_at = None
         self._run_completed = 0
@@ -1896,6 +1959,7 @@ class LLMBenchmarkApp:
             self._set_history_detail_text(self.tr("status.select_history"))
         if hasattr(self, "_status_badge_lbl") and not (self._benchmark_running or getattr(self, "_sweep_running", False)):
             self._status_badge_lbl.config(text=self.tr("status.idle"))
+        self._refresh_run_buttons()
         if hasattr(self, "hist_canvas"):
             self.root.after_idle(self._redraw_e2e_histogram)
 
@@ -2186,6 +2250,32 @@ class LLMBenchmarkApp:
                      values=["是", "否"], width=10, state="readonly").grid(
             row=1, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
 
+        self.output_length_mode_var = tk.StringVar(value="normal")
+        output_mode_lbl = tk.Label(gen, text=self.tr("label.output_length_mode"),
+                                   font=C_STYLE["font_body"], width=LABEL_W,
+                                   bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"],
+                                   anchor="w")
+        output_mode_lbl.grid(row=2, column=0, sticky="w",
+                             padx=(0, C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0))
+        self._register_i18n_widget(output_mode_lbl, "label.output_length_mode")
+        output_mode_frame = tk.Frame(gen, bg=C_STYLE["bg_card"])
+        output_mode_frame.grid(row=2, column=1, columnspan=3, sticky="w",
+                               pady=(C_STYLE["gap_sm"], 0))
+        normal_radio = ttk.Radiobutton(
+            output_mode_frame,
+            text=self.tr("label.output_mode_normal"),
+            variable=self.output_length_mode_var,
+            value="normal")
+        normal_radio.pack(side=tk.LEFT)
+        self._register_i18n_widget(normal_radio, "label.output_mode_normal")
+        fixed_radio = ttk.Radiobutton(
+            output_mode_frame,
+            text=self.tr("label.output_mode_fixed"),
+            variable=self.output_length_mode_var,
+            value="fixed")
+        fixed_radio.pack(side=tk.LEFT, padx=(C_STYLE["pad_lg"], 0))
+        self._register_i18n_widget(fixed_radio, "label.output_mode_fixed")
+
         # ═══ Group 2: 负载参数 ═══
         load = ttk.LabelFrame(parent, text="负载参数", padding=C_STYLE["pad_md"])
         load.pack(fill=tk.X, pady=(0, C_STYLE["gap_md"]))
@@ -2272,7 +2362,8 @@ class LLMBenchmarkApp:
         for v in (self.url_var, self.key_var, self.model_var,
                   self.max_tokens_var, self.temp_var, self.total_var,
                   self.concurrency_var, self.save_report_var,
-                  self.stream_var, self.warmup_var, self.auto_save_var):
+                  self.stream_var, self.output_length_mode_var,
+                  self.warmup_var, self.auto_save_var):
             v.trace_add("write", lambda *a: self._auto_save_check())
     def _build_results_tab(self):
         bf = self.bench_frame
@@ -2543,6 +2634,8 @@ class LLMBenchmarkApp:
         self.system_var.set("你是一个有帮助的助手。")
         self.prompt_var.set("请用300字左右介绍机器学习。")
         self.max_tokens_var.set(512)
+        if hasattr(self, "output_length_mode_var"):
+            self.output_length_mode_var.set("normal")
         self.temp_var.set(0.0)
         self.total_var.set("80")
         self.concurrency_var.set(DEFAULT_PRESET_KEY)
@@ -2550,6 +2643,75 @@ class LLMBenchmarkApp:
         self.warmup_var.set(2)
         self._load_config()  # overlay INI values if available
         self._action_status.config(text=self.tr("status.reset_action"))
+
+    def _can_start_run(self, run_type):
+        return self._active_run_type is None
+
+    def _begin_run(self, run_type):
+        if not hasattr(self, "_run_lock"):
+            self._run_lock = threading.Lock()
+        with self._run_lock:
+            if getattr(self, "_active_run_type", None) is not None:
+                return False
+            self._active_run_type = run_type
+        self._refresh_run_buttons()
+        return True
+
+    def _end_run(self, run_type=None):
+        if not hasattr(self, "_run_lock"):
+            self._run_lock = threading.Lock()
+        with self._run_lock:
+            if run_type is None or getattr(self, "_active_run_type", None) == run_type:
+                self._active_run_type = None
+        self._refresh_run_buttons()
+
+    def _refresh_run_buttons(self):
+        active = getattr(self, "_active_run_type", None)
+        if hasattr(self, "start_btn"):
+            if active == "benchmark":
+                self.start_btn.configure(
+                    text=self.tr("button.benchmarking", "基准测试中..."),
+                    state="disabled")
+            elif active == "sweep":
+                self.start_btn.configure(
+                    text=self.tr("button.start_benchmark", "开始基准测试"),
+                    state="disabled")
+            else:
+                self.start_btn.configure(
+                    text=self.tr("button.start_benchmark", "开始基准测试"),
+                    state="normal")
+        if hasattr(self, "sweep_start_btn"):
+            if active == "benchmark":
+                self.sweep_start_btn.configure(
+                    text=self.tr("button.start_sweep", "开始扫测"),
+                    state="disabled")
+            elif active == "sweep":
+                self.sweep_start_btn.configure(
+                    text=self.tr("button.sweeping", "正在进行扫测......"),
+                    state="disabled")
+            else:
+                self.sweep_start_btn.configure(
+                    text=self.tr("button.start_sweep", "开始扫测"),
+                    state="normal")
+
+    def _show_run_busy(self, requested_run_type):
+        active = getattr(self, "_active_run_type", None)
+        if active == "benchmark":
+            msg = self.tr("run.busy_benchmark")
+        elif active == "sweep":
+            msg = self.tr("run.busy_sweep")
+        else:
+            msg = self.tr("msg.running")
+        try:
+            self.status_label.config(text=msg)
+        except Exception:
+            pass
+        messagebox.showwarning(self.tr("msg.warning"), msg)
+
+    def _set_sweep_running_state(self, is_running: bool):
+        self._sweep_running = bool(is_running)
+        self._refresh_run_buttons()
+
     def _load_config(self):
         """Load defaults from INI file. Silently skip if file missing or malformed."""
         cfg = ConfigParser()
@@ -2586,6 +2748,10 @@ class LLMBenchmarkApp:
                                      fallback=self.save_report_var.get()))
             self.stream_var.set(cfg.get("test", "stream_mode",
                                   fallback=self.stream_var.get()))
+            output_length_mode = cfg.get("test", "output_length_mode",
+                                         fallback=self.output_length_mode_var.get())
+            if output_length_mode in ("normal", "fixed"):
+                self.output_length_mode_var.set(output_length_mode)
             self.warmup_var.set(cfg.getint("test", "warmup",
                                 fallback=2))
             self.auto_save_var.set(cfg.get("test", "auto_save",
@@ -2615,6 +2781,7 @@ class LLMBenchmarkApp:
             "concurrency": self.concurrency_var.get(),
             "save_report": self.save_report_var.get(),
             "stream_mode": self.stream_var.get(),
+            "output_length_mode": self.output_length_mode_var.get(),
             "warmup": str(self.warmup_var.get()),
             "auto_save": self.auto_save_var.get(),
         }
@@ -2945,7 +3112,6 @@ class LLMBenchmarkApp:
             f"无法获取模型列表。\n\n错误：{safe_err}\n\n"
             "请手动输入模型名称后重试。")
     def _on_preflight_fail(self, step: str, payload):
-        self.start_btn.config(state=tk.NORMAL, text=self.tr("button.start_benchmark"))
         self.progress["value"] = 0
         self._stop_status_animation(success=False, completed=self._run_completed,
                                     total=self._run_total, fail=max(self._run_fail, 1),
@@ -2981,7 +3147,11 @@ class LLMBenchmarkApp:
             self.root.after(50, lambda: self._show_error_popup("基线测试失败", summary, popup_advice))
         self.result_text.config(state=tk.DISABLED)
     def _start_benchmark(self):
-        if self._benchmark_running:
+        active = getattr(self, "_active_run_type", None)
+        if active == "benchmark":
+            return
+        if active is not None:
+            self._show_run_busy("benchmark")
             return
         api_url = self.url_var.get().strip()
         api_key = self.key_var.get().strip()
@@ -2989,6 +3159,7 @@ class LLMBenchmarkApp:
         system_prompt = self.system_var.get().strip()
         user_prompt = self.prompt_var.get().strip()
         max_tokens = self.max_tokens_var.get()
+        output_length_mode = self.output_length_mode_var.get()
         temperature = self.temp_var.get()
         try:
             total = int(float(str(self.total_var.get()).strip()))
@@ -3040,7 +3211,9 @@ class LLMBenchmarkApp:
         if DEBUG_MODE:
             logging.info("benchmark requested: url=%s model=%s concurrency=%d total=%d warmup=%d preset=%s",
                          api_url, model, concurrency, total, warmup, preset_name)
-        self.start_btn.config(state=tk.DISABLED, text=self.tr("button.benchmarking"))
+        if not self._begin_run("benchmark"):
+            self._show_run_busy("benchmark")
+            return
         self._start_status_animation(phase="benchmark", total=total)
         self._action_status.config(text="准备开始...")
         self._reset_indicators()
@@ -3056,15 +3229,38 @@ class LLMBenchmarkApp:
             mi.set_value("—")
         self.notice_banner.set_text("")
         t = threading.Thread(
-            target=self._run_preflight_and_benchmark,
+            target=self._run_benchmark_thread,
             args=(api_url, api_key, model, messages, max_tokens, temperature,
-                  concurrency, total, stream, warmup, preset_name),
+                  concurrency, total, stream, warmup, preset_name,
+                  output_length_mode),
             daemon=True,
         )
         t.start()
+
+    def _run_benchmark_thread(self, api_url, api_key, model, messages,
+                              max_tokens, temperature, concurrency, total, stream,
+                              warmup=0, preset_name="",
+                              output_length_mode="normal"):
+        try:
+            self._run_preflight_and_benchmark(
+                api_url, api_key, model, messages, max_tokens, temperature,
+                concurrency, total, stream, warmup, preset_name,
+                output_length_mode)
+        except Exception as e:
+            if DEBUG_MODE:
+                logging.exception("benchmark worker failed: %s", e)
+            self.root.after(0, lambda: self._stop_status_animation(
+                success=False, fail=max(self._run_fail, 1),
+                message=self.tr("status.failed")))
+            self.root.after(0, lambda err=str(e): self.status_label.config(
+                text=f"{self.tr('status.failed')}: {err}"))
+        finally:
+            self.root.after(0, lambda: self._end_run("benchmark"))
+
     def _run_preflight_and_benchmark(self, api_url, api_key, model, messages,
                                       max_tokens, temperature, concurrency, total, stream,
-                                      warmup=0, preset_name=""):
+                                      warmup=0, preset_name="",
+                                      output_length_mode="normal"):
         if DEBUG_MODE:
             logging.info("preflight: step 1 — connectivity check")
         self.root.after(0, lambda: self._set_indicator("connectivity", "checking"))
@@ -3123,7 +3319,7 @@ class LLMBenchmarkApp:
                 text=f"预热中 ({warmup} 次请求)...", fg=C_STYLE["accent"]))
             for i in range(warmup):
                 call_llm(api_url, api_key, model, messages, max_tokens, temperature,
-                        stream=stream)
+                        stream=stream, output_length_mode=output_length_mode)
                 self.root.after(0, lambda c=i+1: self._action_status.config(
                     text=f"预热中 — {c}/{warmup}"))
 
@@ -3133,7 +3329,7 @@ class LLMBenchmarkApp:
         self.root.after(0, lambda: self.status_label.config(
             text="正在执行基线测试 (1 次请求)...", fg=C_STYLE["accent"]))
         smoke = call_llm(api_url, api_key, model, messages, max_tokens, temperature,
-                        stream=stream)
+                        stream=stream, output_length_mode=output_length_mode)
         if not smoke["ok"]:
             if DEBUG_MODE:
                 logging.warning("preflight FAIL at smoke: type=%s error=%s",
@@ -3157,7 +3353,8 @@ class LLMBenchmarkApp:
 
         run_benchmark(api_url, api_key, model, messages, max_tokens, temperature,
                       concurrency, total, self._on_progress, _done_with_warmup,
-                      stream=stream, preset_name=preset_name)
+                      stream=stream, preset_name=preset_name,
+                      output_length_mode=output_length_mode)
     def _on_progress(self, completed, total, fail=0):
         self.root.after(0, lambda: self._update_progress(completed, total, fail))
     def _update_progress(self, completed, total, fail=0):
@@ -3174,7 +3371,6 @@ class LLMBenchmarkApp:
     def _on_done(self, summary: dict):
         self.root.after(0, lambda: self._show_results(summary))
     def _show_results(self, summary: dict):
-        self.start_btn.config(state=tk.NORMAL, text=self.tr("button.start_benchmark"))
         elapsed = self._format_elapsed()
         self._action_status.config(
             text=f"已完成 — {summary['total']} 请求 · success={summary['success']} · fail={summary['fail']} · {elapsed}")
@@ -3283,6 +3479,12 @@ class LLMBenchmarkApp:
         if not stream_mode:
             tips.append("  ℹ 非流式模式：TTFT/TPOT/ITL 不可用 (vLLM bench serve 需 stream)。")
 
+        if summary.get("output_length_mode") == "fixed":
+            if summary.get("fixed_output_validation_passed"):
+                tips.append(f"  ✓ {self.tr('label.fixed_output_validation_passed')}")
+            else:
+                tips.append(f"  ⚠ {self.tr('label.fixed_output_validation_failed')}")
+
         if fail_detail:
             tips.append("  ⚠ 存在失败请求，按类型分布：")
             cats: dict[str, int] = {}
@@ -3364,6 +3566,17 @@ class LLMBenchmarkApp:
         r.append(f"  Concurrency: {summary['concurrency']}")
         r.append(f"  Total Req:   {summary['total']}")
         r.append(f"  Max Tokens:  {summary['max_tokens']}")
+        output_mode = summary.get("output_length_mode", "normal")
+        output_mode_label = (
+            self.tr("label.output_mode_fixed_short")
+            if output_mode == "fixed"
+            else self.tr("label.output_mode_normal_short")
+        )
+        r.append(f"  {self.tr('label.output_length_mode')}: {output_mode_label}")
+        if output_mode == "fixed":
+            r.append(f"  {self.tr('label.fixed_output_tokens')}: {summary.get('fixed_output_tokens', 'N/A')}")
+            r.append(f"  min_tokens_sent: {summary.get('min_tokens_sent', 'N/A')}")
+            r.append(f"  ignore_eos: {str(summary.get('ignore_eos', False)).lower()}")
         r.append(f"  Temperature: {summary['temperature']}")
         r.append(f"  Stream Mode: {'流式 (stream=True)' if stream_mode else '非流式 (stream=False)'}")
         r.append(f"  Load Mode:   fixed concurrency")
@@ -3964,6 +4177,212 @@ class LLMBenchmarkApp:
             raise ValueError("并发级别不能为空")
         return levels
 
+    @staticmethod
+    def _is_missing(value) -> bool:
+        return value is None
+
+    def _format_number(self, value, digits=3, default="N/A") -> str:
+        if self._is_missing(value):
+            return default
+        try:
+            return f"{float(value):.{digits}f}"
+        except Exception:
+            return default
+
+    def _format_seconds(self, value, digits=3, default="N/A") -> str:
+        if self._is_missing(value):
+            return default
+        try:
+            return f"{float(value):.{digits}f}s"
+        except Exception:
+            return default
+
+    def _detail_truncation_warning(self, concurrency, detail_count, success):
+        if self.lang_code == "en_US":
+            return (
+                f"Detail records truncated at C{concurrency}: "
+                f"detail_count={detail_count} / success={success}. "
+                "Summary metrics remain usable, but detail should not be treated "
+                "as complete per-request samples.")
+        return (
+            f"明细记录已截断：C{concurrency} detail_count={detail_count} / success={success}。"
+            "summary 汇总指标仍可使用，但 detail 不适合视为完整单请求样本。")
+
+    def _detect_detail_truncation_notes(self, cases: list[dict]) -> list[str]:
+        notes = []
+        for case in cases:
+            summary = case.get("benchmark_summary", {})
+            metrics = case.get("analysis_metrics", {})
+            success = summary.get("success", case.get("success"))
+            detail_count = metrics.get("detail_count", len(summary.get("detail") or []))
+            detail_truncated = metrics.get("detail_truncated")
+            if detail_truncated is None:
+                detail_truncated = success is not None and detail_count < success
+            if detail_truncated and success is not None:
+                notes.append(self._detail_truncation_warning(
+                    case.get("concurrency"), detail_count, success))
+        return notes
+
+    def _detect_non_monotonic_sweep_anomalies(self, cases: list[dict]) -> list[dict]:
+        anomalies = []
+        metrics = [
+            ("e2e_p95", "E2E P95"),
+            ("ttft_p95", "TTFT P95"),
+            ("e2e_p99", "E2E P99"),
+        ]
+        for i, lower in enumerate(cases):
+            lower_c = lower.get("concurrency")
+            lower_m = lower.get("analysis_metrics", {})
+            for higher in cases[i + 1:]:
+                higher_c = higher.get("concurrency")
+                higher_m = higher.get("analysis_metrics", {})
+                if higher_c is None or lower_c is None or higher_c <= lower_c:
+                    continue
+                for key, label in metrics:
+                    lower_v = lower_m.get(key)
+                    higher_v = higher_m.get(key)
+                    if lower_v is None or higher_v is None or higher_v <= 0:
+                        continue
+                    if lower_v > higher_v * 1.3:
+                        anomalies.append({
+                            "type": "non_monotonic_latency",
+                            "metric": key,
+                            "metric_label": label,
+                            "lower_concurrency": lower_c,
+                            "lower_value": lower_v,
+                            "higher_concurrency": higher_c,
+                            "higher_value": higher_v,
+                        })
+        # Keep the report concise: unique lower C / metric pairs, up to 5.
+        deduped = []
+        seen = set()
+        for item in anomalies:
+            sig = (item["lower_concurrency"], item["metric"])
+            if sig in seen:
+                continue
+            seen.add(sig)
+            deduped.append(item)
+            if len(deduped) >= 5:
+                break
+        return deduped
+
+    def _format_non_monotonic_anomaly(self, anomaly: dict) -> str:
+        label = anomaly["metric_label"]
+        low_c = anomaly["lower_concurrency"]
+        high_c = anomaly["higher_concurrency"]
+        low_v = anomaly["lower_value"]
+        high_v = anomaly["higher_value"]
+        if self.lang_code == "en_US":
+            return (
+                f"Non-monotonic tail latency detected: C{low_c} {label} "
+                f"({low_v:.3f}s) is higher than C{high_c} ({high_v:.3f}s). "
+                f"Retest C{low_c} before including it in recommendations.")
+        return (
+            f"检测到非单调长尾：C{low_c} 的 {label} ({low_v:.3f}s) "
+            f"高于更高并发 C{high_c} ({high_v:.3f}s)，建议复测该档位。")
+
+    def _recommend_sweep_concurrency_range(self, cases: list[dict]) -> dict:
+        if not cases:
+            return {
+                "interactive_range": None,
+                "balanced_candidate": None,
+                "throughput_stress_point": None,
+                "notes": ["需要更多数据或降低并发重新测试"],
+            }
+
+        anomalies = self._detect_non_monotonic_sweep_anomalies(cases)
+        anomaly_concs = {a["lower_concurrency"] for a in anomalies}
+        candidates = []
+        for case in cases:
+            c = case.get("concurrency")
+            m = case.get("analysis_metrics", {})
+            success_rate = m.get("success_rate")
+            e2e_p95 = m.get("e2e_p95")
+            ttft_p95 = m.get("ttft_p95")
+            eff = m.get("throughput_efficiency")
+            if success_rate is None or e2e_p95 is None or eff is None:
+                continue
+            ttft_ok = True if ttft_p95 is None else ttft_p95 <= 2.0
+            if (success_rate >= 99 and e2e_p95 <= 15.0 and ttft_ok
+                    and eff >= 0.25 and c not in anomaly_concs):
+                candidates.append(case)
+
+        balanced = None
+        if candidates:
+            balanced = max(candidates, key=lambda case: (
+                case.get("analysis_metrics", {}).get("output_tps") or 0))
+            balanced_tps = balanced.get("analysis_metrics", {}).get("output_tps") or 0
+            if balanced_tps > 0:
+                candidates = [
+                    case for case in candidates
+                    if (case.get("analysis_metrics", {}).get("output_tps") or 0) >= balanced_tps * 0.5
+                ] or [balanced]
+
+        max_tps_case = max(cases, key=lambda case: (
+            case.get("analysis_metrics", {}).get("output_tps") or 0))
+        max_m = max_tps_case.get("analysis_metrics", {})
+        stress_only = (
+            (max_m.get("e2e_p95") is not None and max_m.get("e2e_p95") > 20.0)
+            or (max_m.get("ttft_p95") is not None and max_m.get("ttft_p95") > 5.0)
+        )
+
+        notes = []
+        if candidates:
+            concs = [c["concurrency"] for c in candidates]
+            if self.lang_code == "en_US":
+                if len(concs) == 1:
+                    notes.append(f"C{concs[0]} is a better interactive serving candidate.")
+                else:
+                    notes.append(f"C{min(concs)}-C{max(concs)} is a better interactive serving candidate range.")
+                notes.append(
+                    f"C{balanced['concurrency']} is the balanced candidate with higher output TPS inside the interactive thresholds.")
+            else:
+                if len(concs) == 1:
+                    notes.append(f"C{concs[0]} 更适合作为交互服务候选并发。")
+                else:
+                    notes.append(f"C{min(concs)}-C{max(concs)} 更适合作为交互服务候选区间。")
+                notes.append(
+                    f"平衡候选并发为 C{balanced['concurrency']}，在交互阈值内输出吞吐相对更高。")
+        else:
+            notes.append(
+                "No interactive candidate satisfies success rate, E2E P95, TTFT P95, and throughput efficiency thresholds."
+                if self.lang_code == "en_US"
+                else "未找到同时满足成功率、E2E P95、TTFT P95 与吞吐效率阈值的交互候选。")
+
+        if stress_only:
+            if self.lang_code == "en_US":
+                notes.append(
+                    f"C{max_tps_case['concurrency']} is the current maximum throughput point, "
+                    "but E2E/TTFT tail latency is high. Treat it as a throughput stress or batch point, "
+                    "not the default interactive concurrency.")
+            else:
+                notes.append(
+                    f"C{max_tps_case['concurrency']} 为当前最大吞吐点，但 E2E/TTFT 长尾较高，"
+                    "更适合吞吐压榨或批处理，不建议作为交互默认并发。")
+        else:
+            notes.append(
+                f"C{max_tps_case['concurrency']} is the current maximum throughput point."
+                if self.lang_code == "en_US"
+                else f"C{max_tps_case['concurrency']} 为当前最大吞吐点。")
+
+        if anomaly_concs:
+            conc_text = ", ".join(f"C{c}" for c in sorted(anomaly_concs))
+            notes.append(
+                f"{conc_text} has non-monotonic tail latency. Retest before including it in recommendations."
+                if self.lang_code == "en_US"
+                else "、".join(f"C{c}" for c in sorted(anomaly_concs))
+                + " 出现非单调长尾，建议复测后再纳入推荐范围。")
+
+        return {
+            "interactive_range": [min(c["concurrency"] for c in candidates),
+                                  max(c["concurrency"] for c in candidates)] if candidates else None,
+            "balanced_candidate": balanced["concurrency"] if balanced else None,
+            "throughput_stress_point": max_tps_case["concurrency"] if stress_only else None,
+            "max_tps_concurrency": max_tps_case["concurrency"],
+            "notes": notes,
+            "non_monotonic_anomalies": anomalies,
+        }
+
     def _compute_analysis_metrics(self, summary: dict, baseline_output_tps: float,
                                    baseline_concurrency: int) -> dict:
         """Compute extracted analysis metrics from a benchmark summary.
@@ -3973,8 +4392,12 @@ class LLMBenchmarkApp:
         e2e_p95 = summary.get("e2e_latency_p95", 0) or None
         e2e_p99 = summary.get("e2e_latency_p99", 0) or None
         ttft_avg = summary.get("ttft_avg", None)
+        ttft_p95 = summary.get("ttft_p95", None)
         first_visible_token_avg = summary.get("first_visible_token_avg", None)
         first_visible_gap_avg = summary.get("first_visible_gap_avg", None)
+        first_visible_gap_p50 = summary.get("first_visible_gap_p50", None)
+        first_visible_gap_p95 = summary.get("first_visible_gap_p95", None)
+        first_visible_gap_p99 = summary.get("first_visible_gap_p99", None)
         tpot_avg = summary.get("tpot_avg", None)
         itl_avg = summary.get("itl_avg", None)
         output_tps = summary.get("system_output_tps", 0) or None
@@ -3989,6 +4412,9 @@ class LLMBenchmarkApp:
             throughput_efficiency = output_tps / (baseline_output_tps * concurrency) if output_tps else None
         else:
             throughput_efficiency = None
+        detail_count = len(summary.get("detail") or [])
+        success = summary.get("success")
+        detail_truncated = success is not None and detail_count < success
 
         return {
             "e2e_avg": e2e_avg,
@@ -3996,8 +4422,12 @@ class LLMBenchmarkApp:
             "e2e_p95": e2e_p95,
             "e2e_p99": e2e_p99,
             "ttft_avg": ttft_avg,
+            "ttft_p95": ttft_p95,
             "first_visible_token_avg": first_visible_token_avg,
             "first_visible_gap_avg": first_visible_gap_avg,
+            "first_visible_gap_p50": first_visible_gap_p50,
+            "first_visible_gap_p95": first_visible_gap_p95,
+            "first_visible_gap_p99": first_visible_gap_p99,
             "tpot_avg": tpot_avg,
             "itl_avg": itl_avg,
             "output_tps": output_tps,
@@ -4006,6 +4436,10 @@ class LLMBenchmarkApp:
             "success_rate": success_rate,
             "per_request_output_tps": per_request_output_tps,
             "throughput_efficiency": throughput_efficiency,
+            "detail_count": detail_count,
+            "detail_truncated": detail_truncated,
+            "detail_truncation_note": self._detail_truncation_warning(
+                concurrency, detail_count, success) if detail_truncated else "",
         }
 
     def _generate_analysis_summary(self, cases: list[dict]) -> list[str]:
@@ -4096,23 +4530,14 @@ class LLMBenchmarkApp:
                 f"首包到首字间隔 (First Visible Gap) 最大 {max_gap:.3f}s (>0.5s)，"
                 f"服务端已较早开始流式响应，但首个可见输出较晚。")
 
-        # 6. Recommend practical concurrency range
-        # Find the range where success_rate stays > 95% and throughput_efficiency > 0.5
-        good_range = []
-        for i, cs in enumerate(s):
-            sr = cs.get("success_rate", 100)
-            tp = cs.get("system_output_tps", 0)
-            if sr > 95:
-                good_range.append(conc[i])
-        if good_range:
-            if len(good_range) == len(conc):
-                lines.append(
-                    f"所有并发级别成功率均 >95%，建议实际使用范围: "
-                    f"并发 {min(good_range)}–{max(good_range)}。")
-            else:
-                lines.append(
-                    f"成功率 >95% 的并发范围: {good_range}。"
-                    f"建议在此范围内选择实际部署并发数。")
+        # 6. Detail truncation, non-monotonic anomalies, and recommendation.
+        for note in self._detect_detail_truncation_notes(cases):
+            lines.append(note)
+
+        recommendation = self._recommend_sweep_concurrency_range(cases)
+        for anomaly in recommendation.get("non_monotonic_anomalies", []):
+            lines.append(self._format_non_monotonic_anomaly(anomaly))
+        lines.extend(recommendation.get("notes", []))
 
         if not lines:
             lines.append("数据点不足，无法判断吞吐拐点。")
@@ -4194,13 +4619,10 @@ class LLMBenchmarkApp:
                 "First Visible Gap 在高并发下扩大，"
                 "用户首字体验可能先于总吞吐成为体验瓶颈。")
 
-        # Recommendation
-        good_concs = [conc[i] for i, cs in enumerate(s)
-                      if cs.get("success_rate", 0) > 95]
-        if good_concs:
-            parts.append(
-                f"建议后续重点观察 C{min(good_concs)}-C{max(good_concs)} 区间，"
-                "并结合实际业务可接受的 P95 延迟设定生产并发上限。")
+        recommendation = self._recommend_sweep_concurrency_range(cases)
+        notes = recommendation.get("notes", [])
+        if notes:
+            parts.append("".join(notes[:3]))
 
         commentary = "".join(parts)
         # Truncate to ~300 chars
@@ -4282,19 +4704,22 @@ class LLMBenchmarkApp:
         conc = [c["concurrency"] for c in cases]
         stream_mode = s[0].get("stream_mode", False) if s else False
 
-        # Helper: safe format
+        # Helper: safe format. 0.0 is a valid measurement and must not become N/A.
         def _f(v, fmt=".2f", default="N/A"):
-            if v is None or v == 0:
+            if v is None:
                 return default
             try:
                 return f"{v:{fmt}}"
             except Exception:
                 return default
 
+        def _fs(v, digits=3, default="N/A"):
+            return self._format_seconds(v, digits=digits, default=default)
+
         def _fmt_list(vals, fmt=".2f", default="N/A"):
             formatted = []
             for v in vals:
-                if v is None or v == 0:
+                if v is None:
                     formatted.append(default)
                 else:
                     try:
@@ -4326,6 +4751,20 @@ class LLMBenchmarkApp:
         md.append(f"- **并发档位**: {concurrency_levels}")
         md.append(f"- **每档请求规则**: 总请求数 = 并发数 × {sweep_result.get('requests_multiplier', 10)}")
         md.append(f"- **Max Tokens**: {s[0].get('max_tokens', 'N/A')}")
+        output_mode = sweep_result.get("output_length_mode", s[0].get("output_length_mode", "normal"))
+        output_mode_label = (
+            self.tr("label.output_mode_fixed_short")
+            if output_mode == "fixed"
+            else self.tr("label.output_mode_normal_short")
+        )
+        md.append(f"- **{self.tr('label.output_length_mode')}**: {output_mode_label}")
+        if output_mode == "fixed":
+            fixed_tokens = sweep_result.get("fixed_output_tokens", s[0].get("fixed_output_tokens", "N/A"))
+            min_tokens_sent = sweep_result.get("min_tokens_sent", s[0].get("min_tokens_sent", "N/A"))
+            ignore_eos = sweep_result.get("ignore_eos", s[0].get("ignore_eos", False))
+            md.append(f"- **{self.tr('label.fixed_output_tokens')}**: {fixed_tokens}")
+            md.append(f"- **min_tokens_sent**: {min_tokens_sent}")
+            md.append(f"- **ignore_eos**: {str(ignore_eos).lower()}")
         md.append(f"- **Temperature**: {s[0].get('temperature', 'N/A')}")
         md.append(f"- **Stream Mode**: {'是 (stream=True)' if stream_mode else '否 (stream=False)'}")
         md.append(f"- **测试开始**: {sweep_result.get('started_at', 'N/A')}")
@@ -4339,6 +4778,15 @@ class LLMBenchmarkApp:
         if len(cases) < 2:
             md.append("")
             md.append("> ⚠ **注意**: 仅测试了单一并发档位，数据点不足，无法进行趋势判断。")
+        detail_notes = self._detect_detail_truncation_notes(cases)
+        for note in detail_notes:
+            md.append("")
+            md.append(f"> ⚠ **Detail Truncation**: {note}")
+        if output_mode == "fixed" and any(
+            cs.get("fixed_output_validation_passed") is False for cs in s
+        ):
+            md.append("")
+            md.append(f"> ⚠ **Fixed Output**: {self.tr('label.fixed_output_validation_failed')}")
         md.append("")
 
         # ── 二、核心结论 ──
@@ -4358,10 +4806,10 @@ class LLMBenchmarkApp:
             md.append("| 并发 | E2E Avg (s) | E2E P50 (s) | E2E P95 (s) | E2E P99 (s) |")
             md.append("|------|-------------|-------------|-------------|-------------|")
             for i, c_val in enumerate(conc):
-                e2e_avg = _f(s[i].get("e2e_latency_avg"))
-                e2e_p50 = _f(s[i].get("e2e_latency_p50"))
-                e2e_p95 = _f(s[i].get("e2e_latency_p95"))
-                e2e_p99 = _f(s[i].get("e2e_latency_p99"))
+                e2e_avg = _fs(s[i].get("e2e_latency_avg"), 3)
+                e2e_p50 = _fs(s[i].get("e2e_latency_p50"), 3)
+                e2e_p95 = _fs(s[i].get("e2e_latency_p95"), 3)
+                e2e_p99 = _fs(s[i].get("e2e_latency_p99"), 3)
                 md.append(f"| {c_val} | {e2e_avg} | {e2e_p50} | {e2e_p95} | {e2e_p99} |")
             md.append("")
 
@@ -4436,15 +4884,18 @@ class LLMBenchmarkApp:
         if not stream_mode:
             md.append("非流式模式，TTFT/TPOT/ITL 数据不可用。")
         else:
-            md.append("| 并发 | TTFT (s) | FVT (s) | FVG (s) | TPOT (s) | ITL (s) |")
-            md.append("|------|----------|---------|---------|----------|---------|")
+            md.append("| 并发 | TTFT (s) | FVT (s) | FVG Avg (s) | FVG P50 (s) | FVG P95 (s) | FVG P99 (s) | TPOT (s) | ITL (s) |")
+            md.append("|------|----------|---------|-------------|-------------|-------------|-------------|----------|---------|")
             for i, c_val in enumerate(conc):
-                ttft = _f(s[i].get("ttft_avg"), ".3f")
-                fvt = _f(s[i].get("first_visible_token_avg"), ".3f")
-                fvg = _f(s[i].get("first_visible_gap_avg"), ".3f")
-                tpot = _f(s[i].get("tpot_avg"), ".3f")
-                itl = _f(s[i].get("itl_avg"), ".3f")
-                md.append(f"| {c_val} | {ttft} | {fvt} | {fvg} | {tpot} | {itl} |")
+                ttft = _fs(s[i].get("ttft_avg"), 3)
+                fvt = _fs(s[i].get("first_visible_token_avg"), 3)
+                fvg = _fs(s[i].get("first_visible_gap_avg"), 3)
+                fvg_p50 = _fs(s[i].get("first_visible_gap_p50"), 3)
+                fvg_p95 = _fs(s[i].get("first_visible_gap_p95"), 3)
+                fvg_p99 = _fs(s[i].get("first_visible_gap_p99"), 3)
+                tpot = _fs(s[i].get("tpot_avg"), 3)
+                itl = _fs(s[i].get("itl_avg"), 3)
+                md.append(f"| {c_val} | {ttft} | {fvt} | {fvg} | {fvg_p50} | {fvg_p95} | {fvg_p99} | {tpot} | {itl} |")
             md.append("")
 
             # TTFT stability
@@ -4533,8 +4984,11 @@ class LLMBenchmarkApp:
 
     def _start_sweep(self):
         """Validate inputs and start sweep in a background thread."""
-        if self._sweep_running or self._benchmark_running:
-            messagebox.showwarning(self.tr("msg.warning"), self.tr("msg.running"))
+        active = getattr(self, "_active_run_type", None)
+        if active == "sweep":
+            return
+        if active is not None:
+            self._show_run_busy("sweep")
             return
 
         api_url = self.url_var.get().strip()
@@ -4564,6 +5018,7 @@ class LLMBenchmarkApp:
         model = self.model_var.get().strip()
         system_prompt = self.system_var.get().strip()
         max_tokens = self.max_tokens_var.get()
+        output_length_mode = self.output_length_mode_var.get()
         temperature = self.temp_var.get()
         stream = self.stream_var.get() == "是"
         try:
@@ -4578,12 +5033,14 @@ class LLMBenchmarkApp:
         ]
 
         # Update UI
-        self._sweep_running = True
+        if not self._begin_run("sweep"):
+            self._show_run_busy("sweep")
+            return
+        self._set_sweep_running_state(True)
         first_label = f"C={concurrency_levels[0]}" if concurrency_levels else ""
         self._start_status_animation(phase="sweep", total=len(concurrency_levels),
                                      current_label=first_label)
         self._sweep_status_card.expand()
-        self.sweep_start_btn.config(state=tk.DISABLED, text=self.tr("button.sweeping"))
         self.sweep_status_text.config(state=tk.NORMAL)
         self.sweep_status_text.delete("1.0", tk.END)
         self.sweep_status_text.insert(tk.END, "准备开始扫测...\n")
@@ -4594,16 +5051,33 @@ class LLMBenchmarkApp:
         self.sweep_result_text.config(state=tk.DISABLED)
 
         t = threading.Thread(
-            target=self._run_sweep,
+            target=self._run_sweep_thread,
             args=(api_url, api_key, model, messages, max_tokens, temperature,
-                  concurrency_levels, multiplier, stream, warmup),
+                  concurrency_levels, multiplier, stream, warmup,
+                  output_length_mode),
             daemon=True,
         )
         t.start()
 
+    def _run_sweep_thread(self, api_url, api_key, model, messages,
+                          max_tokens, temperature,
+                          concurrency_levels, multiplier, stream, warmup,
+                          output_length_mode="normal"):
+        try:
+            self._run_sweep(api_url, api_key, model, messages, max_tokens,
+                            temperature, concurrency_levels, multiplier, stream,
+                            warmup, output_length_mode)
+        except Exception as e:
+            self._append_sweep_status(f"\n✕ 扫测异常: {e}\n")
+            self.root.after(0, lambda err=str(e): self._sweep_done(None, err))
+        finally:
+            self.root.after(0, lambda: self._set_sweep_running_state(False))
+            self.root.after(0, lambda: self._end_run("sweep"))
+
     def _run_sweep(self, api_url, api_key, model, messages,
                    max_tokens, temperature,
-                   concurrency_levels, multiplier, stream, warmup):
+                   concurrency_levels, multiplier, stream, warmup,
+                   output_length_mode="normal"):
         """Run a concurrency sweep in the current (background) thread."""
         sweep_id = datetime.now().strftime("sweep_%Y%m%d_%H%M%S")
         started_at = datetime.now().isoformat()
@@ -4627,7 +5101,8 @@ class LLMBenchmarkApp:
             self._append_sweep_status(f"预热: 发送 {warmup} 次请求...\n")
             for i in range(warmup):
                 call_llm(api_url, api_key, model, messages, max_tokens,
-                        temperature, stream=stream)
+                        temperature, stream=stream,
+                        output_length_mode=output_length_mode)
             self._append_sweep_status("✓ 预热完成\n\n")
 
         cases = []
@@ -4660,7 +5135,8 @@ class LLMBenchmarkApp:
                          temperature, c, num_requests,
                          _progress, _done,
                          stream=stream,
-                         preset_name=f"sweep_C{c}")
+                         preset_name=f"sweep_C{c}",
+                         output_length_mode=output_length_mode)
 
             done_event.wait(timeout=600)
 
@@ -4677,6 +5153,9 @@ class LLMBenchmarkApp:
                     "total_requests": num_requests,
                     "benchmark_summary": summary,
                     "analysis_metrics": analysis_metrics,
+                    "detail_count": analysis_metrics.get("detail_count"),
+                    "detail_truncated": analysis_metrics.get("detail_truncated"),
+                    "detail_truncation_note": analysis_metrics.get("detail_truncation_note", ""),
                 }
                 cases.append(case)
                 sweep_fail_count += summary.get("fail", 0) or 0
@@ -4698,6 +5177,11 @@ class LLMBenchmarkApp:
 
         finished_at = datetime.now().isoformat()
         analysis_summary = self._generate_analysis_summary(cases)
+        sweep_diagnostics = {
+            "detail_truncation_notes": self._detect_detail_truncation_notes(cases),
+            "non_monotonic_anomalies": self._detect_non_monotonic_sweep_anomalies(cases),
+            "recommendation": self._recommend_sweep_concurrency_range(cases),
+        }
         sweep_result = {
             "sweep_id": sweep_id,
             "started_at": started_at,
@@ -4706,8 +5190,13 @@ class LLMBenchmarkApp:
             "model": model,
             "concurrency_levels": concurrency_levels,
             "requests_multiplier": multiplier,
+            "output_length_mode": output_length_mode,
+            "fixed_output_tokens": max_tokens if output_length_mode == "fixed" else None,
+            "min_tokens_sent": max_tokens if output_length_mode == "fixed" else None,
+            "ignore_eos": output_length_mode == "fixed",
             "cases": cases,
             "analysis_summary": analysis_summary,
+            "sweep_diagnostics": sweep_diagnostics,
         }
         self._sweep_result = sweep_result
 
@@ -4760,8 +5249,7 @@ class LLMBenchmarkApp:
     def _sweep_done(self, sweep_result, error=None, json_path=None, png_path=None,
                     md_path=None):
         """Called on main thread when sweep completes or fails."""
-        self._sweep_running = False
-        self.sweep_start_btn.config(state=tk.NORMAL, text=self.tr("button.start_sweep"))
+        self._set_sweep_running_state(False)
 
         if error:
             self._stop_status_animation(success=False, fail=max(self._run_fail, 1),
