@@ -11,6 +11,10 @@ Metrics aligned with vLLM bench serve (TTFT / TPOT / ITL / E2EL) and NVIDIA GenA
 - **中英文界面切换**：默认简体中文，可切换 English；语言偏好保存到 `llm_benchmark.ini`。
 - **单次基准测试**：连通性检测、模型列表获取、基线请求、并发压力测试。
 - **并发扫测**：按并发档位批量测试，输出吞吐、延迟、成功率和专家分析简评。
+- **模型无关流式解析器**：集中式 `_parse_stream_chunk` 统一处理 `delta.content` / `delta.reasoning_content` / `delta.reasoning`（Qwen3）/ `choices[].text` / tool delta；未知字段收入 `unknown_delta_keys` 诊断，不影响主流程。
+- **Stream Parser Profile**：每次 benchmark 自动生成 `parser_profile`，记录 `parser_mode`（content_only / reasoning_only / reasoning_and_content 等）、`observed_delta_keys`、`generated_fields`、`usage_source` 等能力档案，写入 JSON 报告。
+- **细粒度流式时序指标**：在 TTFT / TPOT / ITL / E2E 基础上增加 First Generated Token、First Answer Token、First Reasoning Token、First Generated Gap、Generated ITL、Answer ITL、Reasoning ITL、Stream Event ITL（校准参考），均严格区分 None（不可用）与 0.0（真实零值）。
+- **stream_debug 诊断**：捕获 `observed_delta_keys`、`unknown_delta_keys`、`generated_field_counts` 及前 5 个 delta 样本（截断至 200 字符），自动警告未捕获到生成字段、仅有 reasoning 无 content 等情况。
 - **轻量状态动画**：右上角文本 spinner 显示 phase、进度、fail 数和耗时，不重绘图表，不影响测试性能。
 - **历史记录**：SQLite 保存 single / sweep 两类记录，列表直接显示，双击查看详情和图表。
 - **E2E 延迟直方图**：Benchmark tab 内置 Tk Canvas 直方图，支持折叠区展开后的自动重绘。
@@ -127,17 +131,34 @@ History tab 直接显示历史表，不使用折叠区包裹。
 
 ## 核心指标
 
+### Benchmark 主指标（与 vLLM bench serve 对齐）
+
 | GUI 显示 | 报告全称 | 口径 |
 |---------|---------|------|
 | 首包延迟 TTFT | Time To First Token / First Stream Chunk | 请求发出到首个流式 JSON chunk |
-| 首字延迟 FVT | First Visible Token Latency | 请求发出到首个非空可见输出 |
-| 首字间隔 FVG | First Visible Gap | 首包到首个可见输出之间的间隔 |
 | E2E / E2EL | End-to-End Latency | 请求发出到完整响应结束 |
 | 输出吞吐 TPS | Output Token Throughput | total_output_tokens / duration_sec |
 | 请求吞吐 RPS | Request Throughput | success / duration_sec |
 | 单 Token 耗时 TPOT | Time Per Output Token | (E2E - TTFT) / max(output_tokens - 1, 1) |
-| Token 间隔 ITL | Inter-Token Latency | 相邻流式 chunk 间隔 |
+| Token 间隔 ITL | Inter-Token Latency | generated_itl（相邻生成内容 chunk 间隔） |
 | 成功率 | Success Rate | success / total_requests |
+
+### 细粒度流式时序指标（诊断 / 用户体验）
+
+| 指标 | 说明 |
+|------|------|
+| First Generated Token | 请求发出 → 首个非空 delta（content / reasoning / choices.text） |
+| First Answer Token | 请求发出 → 首个非空 delta.content（仅回答正文） |
+| First Reasoning Token | 请求发出 → 首个非空 delta.reasoning_content 或 delta.reasoning |
+| First Generated Gap | First Generated Token − First JSON Chunk |
+| First Answer Gap | First Answer Token − First JSON Chunk |
+| Generated ITL | 相邻生成内容 chunk 间隔（主 ITL 来源） |
+| Answer ITL | 相邻 delta.content chunk 间隔 |
+| Reasoning ITL | 相邻 reasoning 字段 chunk 间隔 |
+| Stream Event ITL | 相邻 choices chunk 间隔（包含 role-only，校准参考） |
+| Visible TPOT | (E2E − First Generated Token) / (tokens − 1)，仅诊断用 |
+
+> 所有细粒度指标在无数据时显示 **N/A**，不伪造 0.000s。
 
 > 指标标准：JISUMAN LLM Benchmark Standard v1  
 > 参考：vLLM bench serve · NVIDIA GenAI-Perf · NIM Benchmark
@@ -218,12 +239,14 @@ PNG 二进制不会写入 SQLite，只保存文件路径。
 
 所有兼容 OpenAI Chat Completions 的接口：
 
-- vLLM
-- 通义千问 / Qwen
-- DeepSeek
-- GLM
-- OpenAI / GPT
-- 其他 OpenAI-compatible 服务
+| 服务 / 模型系列 | 流式字段 | 备注 |
+|----------------|---------|------|
+| vLLM | `delta.content` | 标准格式 |
+| 通义千问 / Qwen3 | `delta.reasoning` + `delta.content` | reasoning 字段已原生支持 |
+| DeepSeek-R1 | `delta.reasoning_content` + `delta.content` | reasoning_content 字段支持 |
+| GLM | `delta.content` | 标准格式 |
+| OpenAI / GPT | `delta.content` | 标准格式 |
+| 其他 OpenAI-compatible 服务 | 自动检测 | 未知字段记录到 stream_debug |
 
 ## 系统要求
 
@@ -256,8 +279,10 @@ llm-benchmark/
 ## 开发验证
 
 ```bash
+# 语法检查
 python3 -m py_compile llm_benchmark.py
 
+# 导入检查
 python3 - <<'PY'
 import importlib.util
 from pathlib import Path
@@ -266,6 +291,30 @@ m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 assert hasattr(m, "LLMBenchmarkApp")
 print("IMPORT_CHECK_PASS")
+PY
+
+# 流式解析器源码标记检查
+python3 - <<'PY'
+from pathlib import Path
+s = Path("llm_benchmark.py").read_text(encoding="utf-8")
+required = ["ParsedStreamChunk","_parse_stream_chunk","parser_profile",
+            "reasoning_content","reasoning","first_generated_token",
+            "first_answer_token","first_reasoning_token","stream_debug"]
+for item in required:
+    assert item in s, f"MISSING: {item}"
+    print(item, "FOUND")
+print("SOURCE_CHECK_PASS")
+PY
+
+# 流式解析器 golden fixture 测试（11 个测试用例）
+python3 - <<'PY'
+import importlib.util
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("llm_benchmark", Path("llm_benchmark.py"))
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+m._test_stream_parser_fixtures()
+print("FIXTURE_TESTS_PASS")
 PY
 ```
 
