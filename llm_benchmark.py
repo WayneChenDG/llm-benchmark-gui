@@ -19,6 +19,7 @@ import time
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from configparser import ConfigParser
+from dataclasses import dataclass, field as dc_field
 from datetime import datetime
 from tkinter import messagebox, ttk
 from typing import Optional
@@ -215,6 +216,19 @@ I18N = {
         "msg.prompt_required": "请输入用户提示词",
         "msg.prompt_required_settings": "请在「参数设置」中填写用户提示词",
         "msg.multiplier_positive": "请求倍数必须大于 0",
+        "stream.parser_profile": "流式解析能力档案",
+        "stream.first_generated_token": "首个生成内容延迟",
+        "stream.first_answer_token": "首个回答正文延迟",
+        "stream.first_reasoning_token": "首个推理内容延迟",
+        "stream.first_generated_gap": "首包到首个生成内容间隔",
+        "stream.first_answer_gap": "首包到首个回答内容间隔",
+        "stream.generated_itl": "生成内容 ITL",
+        "stream.stream_event_itl": "流式事件 ITL（校准参考）",
+        "stream.answer_itl": "回答内容 ITL",
+        "stream.reasoning_itl": "推理内容 ITL",
+        "stream.warn_no_generated_field": "服务端返回了 completion_tokens，但工具没有捕获到任何生成内容字段。请检查流式 chunk 字段格式。",
+        "stream.warn_reasoning_only": "该模型本次流式输出包含 reasoning 字段，但未捕获到回答正文 content。若前端隐藏 reasoning，用户首字体验应参考 First Answer Token。",
+        "stream.warn_unknown_delta": "检测到未识别的流式 delta 字段。已保存 stream_debug 供兼容性分析。",
     },
     "en_US": {
         "app.title": "JISUMAN LLM Benchmark GUI",
@@ -340,6 +354,19 @@ I18N = {
         "msg.prompt_required": "Enter a user prompt.",
         "msg.prompt_required_settings": "Enter a user prompt in Settings.",
         "msg.multiplier_positive": "Request multiplier must be greater than 0.",
+        "stream.parser_profile": "Stream Parser Profile",
+        "stream.first_generated_token": "First Generated Token Latency",
+        "stream.first_answer_token": "First Answer Token Latency",
+        "stream.first_reasoning_token": "First Reasoning Token Latency",
+        "stream.first_generated_gap": "First Generated Gap",
+        "stream.first_answer_gap": "First Answer Gap",
+        "stream.generated_itl": "Generated ITL",
+        "stream.stream_event_itl": "Stream Event ITL (calibration)",
+        "stream.answer_itl": "Answer ITL",
+        "stream.reasoning_itl": "Reasoning ITL",
+        "stream.warn_no_generated_field": "The server returned completion_tokens, but no generated streaming text field was captured. Check the streaming chunk format.",
+        "stream.warn_reasoning_only": "This stream contains reasoning fields but no answer content was captured. If the frontend hides reasoning, user-visible latency should use First Answer Token.",
+        "stream.warn_unknown_delta": "Unknown streaming delta fields detected. stream_debug has been saved for compatibility analysis.",
     },
 }
 
@@ -1202,6 +1229,339 @@ def validate_metric_consistency(summary: dict) -> list[str]:
     return warnings
 
 
+# ── Centralized SSE stream chunk parser ─────────────────────────────────────
+# TASK-LLM-BENCHMARK-STREAM-PARSER-ROOT-FIX-002: model-agnostic parser
+# Supports: delta.content / delta.reasoning_content / delta.reasoning /
+#           choices[].text / tool_calls / function_call / unknown-key diagnostics
+
+_KNOWN_DELTA_KEYS = frozenset({
+    "role", "content", "reasoning_content", "reasoning",
+    "tool_calls", "function_call", "refusal", "audio",
+})
+
+
+@dataclass
+class ParsedStreamChunk:
+    """Structured result of parsing one SSE JSON chunk from any OpenAI-compatible stream."""
+    is_json_chunk: bool = False
+    is_done: bool = False
+    is_usage_chunk: bool = False
+    has_choices: bool = False
+    has_stream_event: bool = False
+    generated_text: Optional[str] = None       # first non-empty from any supported field
+    generated_field: Optional[str] = None      # which field produced generated_text
+    answer_text: Optional[str] = None          # delta.content only
+    reasoning_text: Optional[str] = None       # delta.reasoning_content or delta.reasoning
+    tool_text: Optional[str] = None            # tool_calls[].function.arguments / function_call
+    finish_reason: Optional[str] = None
+    raw_delta_keys: list = dc_field(default_factory=list)
+    unknown_delta_keys: list = dc_field(default_factory=list)
+
+
+def _parse_stream_chunk(obj: dict) -> ParsedStreamChunk:
+    """Parse one SSE JSON object (already json.loads'd) into a ParsedStreamChunk.
+
+    Empty strings / None / [] / {} are never treated as generated text.
+    Unknown delta keys are collected for diagnostics without being used as content.
+    """
+    chunk = ParsedStreamChunk(is_json_chunk=True)
+    if not isinstance(obj, dict):
+        return chunk
+
+    choices = obj.get("choices") or []
+    usage = obj.get("usage")
+
+    if usage and isinstance(usage, dict):
+        chunk.is_usage_chunk = True
+
+    if choices:
+        chunk.has_choices = True
+        first = choices[0]
+        delta = first.get("delta") or {}
+        chunk.has_stream_event = True
+        chunk.raw_delta_keys = list(delta.keys())
+        chunk.unknown_delta_keys = [k for k in delta.keys() if k not in _KNOWN_DELTA_KEYS]
+
+        # Finish reason
+        fr = first.get("finish_reason") or ""
+        if fr:
+            chunk.finish_reason = fr
+
+        # choices[].text (completions-style endpoint)
+        choice_text = first.get("text") or ""
+
+        # --- Answer content: delta.content ---
+        content = delta.get("content")
+        if content:  # truthy: non-empty string only; "" and None are excluded
+            chunk.answer_text = content
+
+        # --- Reasoning: delta.reasoning_content (DeepSeek, etc.) or delta.reasoning (Qwen3) ---
+        rc = delta.get("reasoning_content") or delta.get("reasoning")
+        if rc:
+            chunk.reasoning_text = rc
+            # track which field was used for generated_field labeling
+            _rc_field = "reasoning_content" if delta.get("reasoning_content") else "reasoning"
+
+        # --- Tool/function deltas (conservative debug) ---
+        _tool_text = None
+        tc = delta.get("tool_calls")
+        if tc and isinstance(tc, list):
+            for call in tc:
+                if isinstance(call, dict):
+                    fn = call.get("function") or {}
+                    args = fn.get("arguments") or fn.get("name") or ""
+                    if args:
+                        _tool_text = str(args)
+                        break
+        if not _tool_text:
+            fc = delta.get("function_call") or {}
+            fc_args = (fc.get("arguments") or "") if isinstance(fc, dict) else ""
+            if fc_args:
+                _tool_text = str(fc_args)
+        if _tool_text:
+            chunk.tool_text = _tool_text
+
+        # --- Determine generated_text (priority: content > reasoning > choices.text > tool) ---
+        if chunk.answer_text:
+            chunk.generated_text = chunk.answer_text
+            chunk.generated_field = "content"
+        elif chunk.reasoning_text:
+            chunk.generated_text = chunk.reasoning_text
+            chunk.generated_field = _rc_field if rc else "reasoning"
+        elif choice_text:
+            chunk.generated_text = choice_text
+            chunk.generated_field = "text"
+        elif chunk.tool_text:
+            # tool text used as fallback generated_text only when no content/reasoning
+            chunk.generated_text = chunk.tool_text
+            chunk.generated_field = "tool_calls"
+
+    elif not choices:
+        # No choices — mark as stream event only if there's a usage chunk
+        if chunk.is_usage_chunk:
+            chunk.has_stream_event = False  # usage-only chunk is not a stream event
+
+    return chunk
+
+
+def run_stream_parser_tests() -> list[dict]:
+    """Synthetic tests for _parse_stream_chunk (TASK-LLM-BENCHMARK-STREAM-PARSER-ROOT-FIX-002).
+
+    Returns list of {name, passed, details} dicts.
+    """
+    results = []
+
+    def _t(name, obj, checks):
+        chunk = _parse_stream_chunk(obj)
+        passed = True
+        failures = []
+        for attr, expected in checks.items():
+            actual = getattr(chunk, attr)
+            if actual != expected:
+                passed = False
+                failures.append(f"{attr}: expected={expected!r} actual={actual!r}")
+        results.append({"name": name, "passed": passed, "failures": failures})
+
+    # Test 1: role-only empty chunk
+    _t("T1_role_only_empty", {"choices": [{"delta": {"role": "assistant", "content": ""}}]}, {
+        "has_stream_event": True, "generated_text": None, "answer_text": None, "reasoning_text": None,
+    })
+
+    # Test 2: standard answer content (delta.content)
+    _t("T2_content", {"choices": [{"delta": {"content": "hello"}}]}, {
+        "generated_text": "hello", "generated_field": "content", "answer_text": "hello",
+    })
+
+    # Test 3: delta.reasoning_content
+    _t("T3_reasoning_content", {"choices": [{"delta": {"reasoning_content": "think"}}]}, {
+        "generated_text": "think", "generated_field": "reasoning_content", "reasoning_text": "think",
+    })
+
+    # Test 4: delta.reasoning (Qwen3 format)
+    _t("T4_reasoning", {"choices": [{"delta": {"reasoning": "Here"}}]}, {
+        "generated_text": "Here", "generated_field": "reasoning", "reasoning_text": "Here",
+    })
+
+    # Test 5: choices[].text
+    _t("T5_choices_text", {"choices": [{"text": "hello"}]}, {
+        "generated_text": "hello", "generated_field": "text",
+    })
+
+    # Test 6: usage-only chunk
+    _t("T6_usage_only", {"choices": [], "usage": {"completion_tokens": 512}}, {
+        "is_usage_chunk": True, "generated_text": None, "has_stream_event": False,
+    })
+
+    # Test 7: tool/function delta
+    obj7 = {"choices": [{"delta": {"tool_calls": [{"function": {"arguments": '{"x":1}'}}]}}]}
+    chunk7 = _parse_stream_chunk(obj7)
+    passed7 = (chunk7.tool_text is not None and chunk7.answer_text is None)
+    results.append({"name": "T7_tool_delta", "passed": passed7,
+                    "failures": [] if passed7 else ["tool_text should be set, answer_text should be None"]})
+
+    # Test 8: qwen3.6 synthetic stream sequence
+    seq = [
+        {"choices": [{"delta": {"role": "assistant", "content": ""}}]},
+        {"choices": [{"delta": {"reasoning": "Here"}}]},
+        {"choices": [{"delta": {"reasoning": "'s"}}]},
+    ]
+    _timestamps = [0.05, 0.06, 0.07]
+    _first_gen = None
+    _first_reason = None
+    _first_answer = None
+    _gen_ts = []
+    for obj, ts in zip(seq, _timestamps):
+        c = _parse_stream_chunk(obj)
+        if c.has_stream_event and _first_gen is None and c.generated_text:
+            _first_gen = ts
+        if c.reasoning_text and _first_reason is None:
+            _first_reason = ts
+        if c.answer_text and _first_answer is None:
+            _first_answer = ts
+        if c.generated_text:
+            _gen_ts.append(ts)
+    p8 = (_first_gen is not None and _first_reason is not None and
+          _first_answer is None and len(_gen_ts) >= 2)
+    results.append({"name": "T8_qwen36_stream", "passed": p8,
+                    "failures": [] if p8 else [
+                        f"first_gen={_first_gen} first_reason={_first_reason} "
+                        f"first_answer={_first_answer} gen_ts={_gen_ts}"]})
+
+    # Test 9: missing generated field — no fake 0.000s
+    chunk9 = _parse_stream_chunk({"choices": [{"delta": {"role": "assistant"}}]})
+    p9 = (chunk9.generated_text is None and chunk9.answer_text is None and chunk9.reasoning_text is None)
+    results.append({"name": "T9_missing_generated_none", "passed": p9,
+                    "failures": [] if p9 else ["all content fields must be None when no content present"]})
+
+    # Test 10: real zero gap — 0.0 must display as 0.000s not N/A
+    _gap = round(0.06 - 0.06, 6)  # == 0.0 exactly
+    p10 = (_gap == 0.0 and _gap is not None)
+    results.append({"name": "T10_real_zero_gap", "passed": p10,
+                    "failures": [] if p10 else [f"gap={_gap!r} should be 0.0 not None"]})
+
+    # Test 11: unknown delta key diagnostic
+    chunk11 = _parse_stream_chunk({"choices": [{"delta": {"thinking": "abc"}}]})
+    p11 = ("thinking" in chunk11.unknown_delta_keys and chunk11.generated_text is None)
+    results.append({"name": "T11_unknown_delta_key", "passed": p11,
+                    "failures": [] if p11 else [
+                        f"unknown_delta_keys={chunk11.unknown_delta_keys} generated_text={chunk11.generated_text!r}"]})
+
+    return results
+
+
+def _build_parser_profile(ok_results: list, config: dict) -> dict:
+    """Build a stream parser_profile from aggregated per-request results.
+
+    Summarises which delta fields were observed, what parser_mode was used,
+    and any stream compatibility warnings.
+    """
+    stream_results = [r for r in ok_results if r.get("stream")]
+    if not stream_results:
+        return {
+            "stream_supported": False,
+            "usage_supported": None,
+            "generated_fields": [],
+            "answer_field_observed": False,
+            "reasoning_field_observed": False,
+            "text_field_observed": False,
+            "tool_delta_observed": False,
+            "unknown_delta_keys": [],
+            "observed_delta_keys": [],
+            "first_chunk_type": None,
+            "parser_mode": "non_stream",
+            "usage_source": "response_body",
+            "fixed_output_supported": config.get("output_length_mode") == "fixed",
+            "warning_messages": [],
+        }
+
+    all_observed: set = set()
+    all_unknown: set = set()
+    all_gen_fields: dict = {}
+    all_warnings: list = []
+
+    for r in stream_results:
+        for k in (r.get("observed_delta_keys") or []):
+            all_observed.add(k)
+        for k in (r.get("unknown_delta_keys") or []):
+            all_unknown.add(k)
+        for field, count in (r.get("generated_field_counts") or {}).items():
+            all_gen_fields[field] = all_gen_fields.get(field, 0) + count
+        for w in (r.get("stream_warnings") or []):
+            if w not in all_warnings:
+                all_warnings.append(w)
+
+    has_usage = any(r.get("completion_tokens", 0) > 0 for r in stream_results)
+    answer_field = "content" in all_gen_fields
+    reasoning_field = ("reasoning_content" in all_gen_fields or "reasoning" in all_gen_fields)
+    text_field = "text" in all_gen_fields
+    tool_field = ("tool_calls" in all_gen_fields or "function_call" in all_gen_fields)
+    generated_fields = sorted(all_gen_fields.keys())
+
+    if reasoning_field and not answer_field:
+        parser_mode = "reasoning_only"
+    elif reasoning_field and answer_field:
+        parser_mode = "reasoning_and_content"
+    elif answer_field:
+        parser_mode = "content_only"
+    elif text_field:
+        parser_mode = "choices_text"
+    elif tool_field:
+        parser_mode = "tool_only"
+    else:
+        parser_mode = "unknown"
+
+    first_chunk_type = None
+    for r in stream_results:
+        sd = r.get("stream_debug") or {}
+        samples = sd.get("first_delta_samples") or []
+        if samples:
+            keys = samples[0].get("keys", [])
+            if "reasoning" in keys:
+                first_chunk_type = "reasoning"
+            elif "reasoning_content" in keys:
+                first_chunk_type = "reasoning_content"
+            elif "content" in keys:
+                first_chunk_type = "content"
+            elif "role" in keys:
+                first_chunk_type = "role_only"
+            else:
+                first_chunk_type = str(keys[:3])
+            break
+
+    return {
+        "stream_supported": True,
+        "usage_supported": has_usage,
+        "generated_fields": generated_fields,
+        "answer_field_observed": answer_field,
+        "reasoning_field_observed": reasoning_field,
+        "text_field_observed": text_field,
+        "tool_delta_observed": tool_field,
+        "unknown_delta_keys": sorted(all_unknown),
+        "observed_delta_keys": sorted(all_observed),
+        "first_chunk_type": first_chunk_type,
+        "parser_mode": parser_mode,
+        "usage_source": "stream_usage_chunk" if has_usage else "missing",
+        "fixed_output_supported": config.get("output_length_mode") == "fixed",
+        "warning_messages": all_warnings,
+    }
+
+
+def _test_stream_parser_fixtures():
+    """Golden fixture tests for _parse_stream_chunk.
+
+    Wraps run_stream_parser_tests() and raises AssertionError on any failure.
+    Called directly by CI validation scripts.
+    """
+    results = run_stream_parser_tests()
+    failures = [r for r in results if not r["passed"]]
+    if failures:
+        details = "; ".join(
+            f"{r['name']}: {r['failures']}" for r in failures
+        )
+        raise AssertionError(f"Stream parser fixture failures ({len(failures)}/{len(results)}): {details}")
+    print(f"STREAM_FIXTURE_TESTS_PASS ({len(results)}/{len(results)} passed)")
+
+
 def call_llm(api_url: str, api_key: str, model: str, messages: list[dict],
              max_tokens: int, temperature: float, timeout: int = 120,
              stream: bool = True, output_length_mode: str = "normal") -> dict:
@@ -1322,16 +1682,32 @@ def call_llm(api_url: str, api_key: str, model: str, messages: list[dict],
             else:
                 raise
 
+        # ── streaming timing variables ──────────────────────────────────
         first_data_line_time = None
         first_json_chunk_time = None
-        first_non_empty_time = None
-        token_timestamps = []
+        # transport / stream-event level
+        first_stream_event_time = None
+        stream_event_timestamps = []
+        # generated content (any field: content / reasoning / text / tool)
+        first_generated_token_time = None
+        generated_token_timestamps = []
+        # answer content (delta.content only)
+        first_answer_token_time = None
+        answer_token_timestamps = []
+        # reasoning content (delta.reasoning_content / delta.reasoning)
+        first_reasoning_token_time = None
+        reasoning_token_timestamps = []
+        # counters / token totals
         completion_tokens = 0
         prompt_tokens = 0
         total_tokens = 0
         finish_reason = "unknown"
-        content_pieces = 0
         raw_data_lines = 0
+        # diagnostics
+        _obs_delta_keys: set = set()
+        _unk_delta_keys: set = set()
+        _gen_field_counts: dict = {}
+        _stream_debug: dict = {"first_delta_samples": [], "first_generated_samples": []}
 
         # Read SSE line by line for accurate per-event timing
         with resp:
@@ -1365,21 +1741,57 @@ def call_llm(api_url: str, api_key: str, model: str, messages: list[dict],
                 if first_json_chunk_time is None:
                     first_json_chunk_time = now
 
-                choices = obj.get("choices") or []
-                if choices:
-                    delta = choices[0].get("delta") or {}
-                    text_piece = delta.get("content") or delta.get("reasoning_content") or ""
-                    if text_piece:
-                        content_pieces += 1
-                        token_timestamps.append(now)
-                        if first_non_empty_time is None:
-                            first_non_empty_time = now
-                    fr = choices[0].get("finish_reason") or ""
-                    if fr:
-                        finish_reason = fr
+                # ── centralized parser ──
+                _chunk = _parse_stream_chunk(obj)
 
-                usage_chunk = obj.get("usage") or {}
-                if usage_chunk:
+                # transport: stream event (any choices chunk, including role-only)
+                if _chunk.has_stream_event:
+                    stream_event_timestamps.append(now)
+                    if first_stream_event_time is None:
+                        first_stream_event_time = now
+
+                # diagnostics
+                _obs_delta_keys.update(_chunk.raw_delta_keys)
+                _unk_delta_keys.update(_chunk.unknown_delta_keys)
+                if len(_stream_debug["first_delta_samples"]) < 5 and _chunk.raw_delta_keys:
+                    _stream_debug["first_delta_samples"].append({
+                        "keys": list(_chunk.raw_delta_keys[:10]),
+                        "generated": (_chunk.generated_text or "")[:200] if _chunk.generated_text else None,
+                    })
+
+                # generated content (any non-empty supported field)
+                if _chunk.generated_text:
+                    generated_token_timestamps.append(now)
+                    if _chunk.generated_field:
+                        _gen_field_counts[_chunk.generated_field] = (
+                            _gen_field_counts.get(_chunk.generated_field, 0) + 1)
+                    if first_generated_token_time is None:
+                        first_generated_token_time = now
+                        if len(_stream_debug["first_generated_samples"]) < 3:
+                            _stream_debug["first_generated_samples"].append({
+                                "field": _chunk.generated_field,
+                                "text": _chunk.generated_text[:200],
+                            })
+
+                # answer content (delta.content only)
+                if _chunk.answer_text:
+                    answer_token_timestamps.append(now)
+                    if first_answer_token_time is None:
+                        first_answer_token_time = now
+
+                # reasoning content
+                if _chunk.reasoning_text:
+                    reasoning_token_timestamps.append(now)
+                    if first_reasoning_token_time is None:
+                        first_reasoning_token_time = now
+
+                # finish reason
+                if _chunk.finish_reason:
+                    finish_reason = _chunk.finish_reason
+
+                # usage
+                if _chunk.is_usage_chunk:
+                    usage_chunk = obj.get("usage") or {}
                     prompt_tokens = usage_chunk.get("prompt_tokens", prompt_tokens)
                     completion_tokens = usage_chunk.get("completion_tokens", completion_tokens)
                     total_tokens = usage_chunk.get("total_tokens", prompt_tokens + completion_tokens)
@@ -1387,57 +1799,150 @@ def call_llm(api_url: str, api_key: str, model: str, messages: list[dict],
         request_end = time.perf_counter()
         e2e_latency = request_end - request_start
 
-        # If server didn't return usage, we don't have real token counts
+        content_pieces = len(generated_token_timestamps)
         token_source = "usage" if completion_tokens > 0 else "missing_usage"
         if completion_tokens == 0 and DEBUG_MODE:
             logging.debug("stream: no usage in response, token_source=%s content_pieces=%d",
                           token_source, content_pieces)
 
-        # ── split TTFT: benchmark-aligned (first stream chunk) vs user-visible (first non-empty) ──
-        first_data_line_s  = round(first_data_line_time  - request_start, 6) if first_data_line_time  else None
-        first_json_chunk_s = round(first_json_chunk_time - request_start, 6) if first_json_chunk_time else None
-        first_non_empty_s  = round(first_non_empty_time  - request_start, 6) if first_non_empty_time  else None
+        # ── transport / benchmark-aligned timing ──
+        first_data_line_s    = round(first_data_line_time    - request_start, 6) if first_data_line_time    else None
+        first_json_chunk_s   = round(first_json_chunk_time   - request_start, 6) if first_json_chunk_time   else None
+        first_stream_event_s = round(first_stream_event_time - request_start, 6) if first_stream_event_time else None
 
-        # vLLM-compatible TTFT = first JSON chunk (or first data line as fallback)
+        # ── generated content timing ──
+        first_generated_token_s = round(first_generated_token_time - request_start, 6) if first_generated_token_time else None
+        first_answer_token_s    = round(first_answer_token_time    - request_start, 6) if first_answer_token_time    else None
+        first_reasoning_token_s = round(first_reasoning_token_time - request_start, 6) if first_reasoning_token_time else None
+
+        # ── gaps (first_json_chunk → first generated/answer) ──
+        first_generated_gap_s = None
+        if first_json_chunk_s is not None and first_generated_token_s is not None:
+            first_generated_gap_s = round(first_generated_token_s - first_json_chunk_s, 6)
+        first_answer_gap_s = None
+        if first_json_chunk_s is not None and first_answer_token_s is not None:
+            first_answer_gap_s = round(first_answer_token_s - first_json_chunk_s, 6)
+
+        # ── backward compat aliases ──
+        first_non_empty_s   = first_generated_token_s      # was: first chunk with content/reasoning_content
+        first_visible_gap_s = first_generated_gap_s        # old name
+
+        # ── TTFT: benchmark-aligned = first JSON chunk ──
         ttft = first_json_chunk_s if first_json_chunk_s is not None else first_data_line_s
-        # user-visible TTFT = first non-empty content
-        visible_ttft = first_non_empty_s
+        # visible TTFT backward compat = first generated token
+        visible_ttft = first_generated_token_s
 
-        first_visible_gap_s = None
-        if first_data_line_s is not None and first_non_empty_s is not None:
-            first_visible_gap_s = round(first_non_empty_s - first_data_line_s, 6)
-
-        # Compute TPOT using benchmark-aligned TTFT
+        # ── TPOT (benchmark-aligned, formula unchanged) ──
         tpot = None
         if ttft is not None and completion_tokens >= 2 and (e2e_latency - ttft) > 0:
             tpot = (e2e_latency - ttft) / max(completion_tokens - 1, 1)
 
-        # Visible TPOT (debug only — uses first visible token)
+        # ── Visible TPOT (debug only, uses first_generated_token_s) ──
         visible_tpot = None
-        if visible_ttft is not None and completion_tokens >= 2 and (e2e_latency - visible_ttft) > 0:
-            visible_tpot = (e2e_latency - visible_ttft) / max(completion_tokens - 1, 1)
+        if first_generated_token_s is not None and completion_tokens >= 2 and (e2e_latency - first_generated_token_s) > 0:
+            visible_tpot = (e2e_latency - first_generated_token_s) / max(completion_tokens - 1, 1)
 
-        # Compute ITL
-        itl_values = []
-        itl_avg = None
-        if len(token_timestamps) >= 2:
-            itl_values = [
-                token_timestamps[i] - token_timestamps[i - 1]
-                for i in range(1, len(token_timestamps))
-            ]
-            itl_avg = statistics.mean(itl_values)
+        # ── ITL: generated_itl is primary; stream_event_itl is debug fallback ──
+        generated_itl_values = []
+        generated_itl_avg = None
+        if len(generated_token_timestamps) >= 2:
+            generated_itl_values = [generated_token_timestamps[i] - generated_token_timestamps[i - 1]
+                                    for i in range(1, len(generated_token_timestamps))]
+            generated_itl_avg = statistics.mean(generated_itl_values)
+
+        answer_itl_values = []
+        answer_itl_avg = None
+        if len(answer_token_timestamps) >= 2:
+            answer_itl_values = [answer_token_timestamps[i] - answer_token_timestamps[i - 1]
+                                 for i in range(1, len(answer_token_timestamps))]
+            answer_itl_avg = statistics.mean(answer_itl_values)
+
+        reasoning_itl_values = []
+        reasoning_itl_avg = None
+        if len(reasoning_token_timestamps) >= 2:
+            reasoning_itl_values = [reasoning_token_timestamps[i] - reasoning_token_timestamps[i - 1]
+                                    for i in range(1, len(reasoning_token_timestamps))]
+            reasoning_itl_avg = statistics.mean(reasoning_itl_values)
+
+        stream_event_itl_values = []
+        stream_event_itl_avg = None
+        if len(stream_event_timestamps) >= 2:
+            stream_event_itl_values = [stream_event_timestamps[i] - stream_event_timestamps[i - 1]
+                                       for i in range(1, len(stream_event_timestamps))]
+            stream_event_itl_avg = statistics.mean(stream_event_itl_values)
+
+        # Primary ITL: generated ITL preferred; stream_event ITL as calibration fallback
+        if generated_itl_values:
+            itl_values = generated_itl_values
+            itl_avg = generated_itl_avg
+        elif stream_event_itl_values:
+            itl_values = stream_event_itl_values
+            itl_avg = stream_event_itl_avg
+        else:
+            itl_values = []
+            itl_avg = None
+
+        # ── diagnostic warnings ──
+        _stream_warnings = []
+        if completion_tokens > 0 and not generated_token_timestamps:
+            _stream_warnings.append(
+                "服务端返回了 completion_tokens，但工具没有捕获到任何生成内容字段。"
+                f"请检查流式 chunk 字段格式。observed_delta_keys={sorted(_obs_delta_keys)}"
+            )
+        if first_answer_token_s is None and first_reasoning_token_s is not None:
+            _stream_warnings.append(
+                "该模型本次流式输出包含 reasoning 字段，但未捕获到回答正文 content。"
+                "若前端隐藏 reasoning，用户首字体验应参考 First Answer Token。"
+            )
+        if _unk_delta_keys:
+            _stream_warnings.append(
+                f"检测到未识别的流式 delta 字段：{sorted(_unk_delta_keys)}。"
+                "已保存 stream_debug 供兼容性分析。"
+            )
+        if _gen_field_counts and not _gen_field_counts.get("content") and (
+                _gen_field_counts.get("reasoning") or _gen_field_counts.get("reasoning_content")):
+            _stream_warnings.append(
+                "本次输出主要来自 reasoning 字段，最终回答正文 content 可能未流式输出或被服务端隐藏。"
+            )
 
         if DEBUG_MODE:
-            logging.debug("OK (stream) e2e=%.3fs ttft=%.3fs visible_ttft=%.3fs tpot=%.3fs tokens=%d content_pieces=%d finish=%s",
-                          e2e_latency, ttft or -1, visible_ttft or -1, tpot or -1, total_tokens, content_pieces, finish_reason)
+            logging.debug(
+                "OK (stream) e2e=%.3fs ttft=%.3fs gen=%.3fs answer=%.3fs reason=%.3fs tpot=%.3fs"
+                " tokens=%d pieces=%d finish=%s",
+                e2e_latency, ttft or -1, first_generated_token_s or -1,
+                first_answer_token_s or -1, first_reasoning_token_s or -1,
+                tpot or -1, total_tokens, content_pieces, finish_reason,
+            )
+            for _w in _stream_warnings:
+                logging.warning("stream_diag: %s", _w)
 
         debug_fields = {
-            "first_data_line_s": first_data_line_s,
-            "first_json_chunk_s": first_json_chunk_s,
-            "first_non_empty_s": first_non_empty_s,
-            "first_visible_gap_s": first_visible_gap_s,
-            "content_pieces": content_pieces,
-            "raw_data_lines": raw_data_lines,
+            # transport timing
+            "first_data_line_s":    first_data_line_s,
+            "first_json_chunk_s":   first_json_chunk_s,
+            "first_stream_event_s": first_stream_event_s,
+            # generated content timing
+            "first_generated_token":  first_generated_token_s,
+            "first_answer_token":     first_answer_token_s,
+            "first_reasoning_token":  first_reasoning_token_s,
+            "first_generated_gap":    first_generated_gap_s,
+            "first_answer_gap":       first_answer_gap_s,
+            # backward compat
+            "first_non_empty_s":    first_non_empty_s,
+            "first_visible_gap_s":  first_visible_gap_s,
+            "content_pieces":       content_pieces,
+            "raw_data_lines":       raw_data_lines,
+            # ITL debug
+            "generated_itl_avg":    generated_itl_avg,
+            "answer_itl_avg":       answer_itl_avg,
+            "reasoning_itl_avg":    reasoning_itl_avg,
+            "stream_event_itl_avg": stream_event_itl_avg,
+            # diagnostics
+            "observed_delta_keys":    sorted(_obs_delta_keys),
+            "unknown_delta_keys":     sorted(_unk_delta_keys),
+            "generated_field_counts": dict(_gen_field_counts),
+            "stream_debug":           _stream_debug,
+            "stream_warnings":        _stream_warnings,
         }
         return _success_result(e2e_latency, ttft, tpot, itl_avg, itl_values,
                                prompt_tokens, completion_tokens, total_tokens,
@@ -1589,6 +2094,20 @@ def aggregate_results(results: list[dict], duration: float, config: dict) -> dic
     visible_tpots       = [r.get("visible_tpot")       for r in ok_results if isinstance(r.get("visible_tpot"),       (int, float))]
     first_visible_gaps  = [r.get("first_visible_gap_s") for r in ok_results if isinstance(r.get("first_visible_gap_s"), (int, float))]
 
+    # ── new: generated/answer/reasoning timing aggregates ──
+    def _clean(key):
+        return [r.get(key) for r in ok_results if isinstance(r.get(key), (int, float))]
+
+    first_generated_tokens   = _clean("first_generated_token")
+    first_answer_tokens      = _clean("first_answer_token")
+    first_reasoning_tokens   = _clean("first_reasoning_token")
+    first_generated_gaps     = _clean("first_generated_gap")
+    first_answer_gaps        = _clean("first_answer_gap")
+    generated_itl_avgs       = _clean("generated_itl_avg")
+    answer_itl_avgs          = _clean("answer_itl_avg")
+    reasoning_itl_avgs       = _clean("reasoning_itl_avg")
+    stream_event_itl_avgs    = _clean("stream_event_itl_avg")
+
     # ── tokens ──
     total_input_tokens = sum(r.get("prompt_tokens", 0) for r in ok_results)
     total_output_tokens = sum(r.get("completion_tokens", 0) for r in ok_results)
@@ -1691,27 +2210,59 @@ def aggregate_results(results: list[dict], duration: float, config: dict) -> dic
         "first_json_chunk_p99": _p(first_json_chunks, 99),
 
         # ── split TTFT: first visible token (user-perceived) ──
-        "first_visible_token_avg": round(statistics.mean(first_visible_tokens), 3) if first_visible_tokens else 0,
-        "first_visible_token_p50": _p(first_visible_tokens, 50),
-        "first_visible_token_p95": _p(first_visible_tokens, 95),
-        "first_visible_token_p99": _p(first_visible_tokens, 99),
+        "first_visible_token_avg": round(statistics.mean(first_visible_tokens), 3) if first_visible_tokens else None,
+        "first_visible_token_p50": _p(first_visible_tokens, 50) if first_visible_tokens else None,
+        "first_visible_token_p95": _p(first_visible_tokens, 95) if first_visible_tokens else None,
+        "first_visible_token_p99": _p(first_visible_tokens, 99) if first_visible_tokens else None,
 
-        "visible_ttft_avg": round(statistics.mean(visible_ttfts), 3) if visible_ttfts else 0,
-        "visible_ttft_p50": _p(visible_ttfts, 50),
-        "visible_ttft_p95": _p(visible_ttfts, 95),
-        "visible_ttft_p99": _p(visible_ttfts, 99),
+        "visible_ttft_avg": round(statistics.mean(visible_ttfts), 3) if visible_ttfts else None,
+        "visible_ttft_p50": _p(visible_ttfts, 50) if visible_ttfts else None,
+        "visible_ttft_p95": _p(visible_ttfts, 95) if visible_ttfts else None,
+        "visible_ttft_p99": _p(visible_ttfts, 99) if visible_ttfts else None,
 
         # ── first visible gap ──
-        "first_visible_gap_avg": round(statistics.mean(first_visible_gaps), 3) if first_visible_gaps else 0,
-        "first_visible_gap_p50": _p(first_visible_gaps, 50),
-        "first_visible_gap_p95": _p(first_visible_gaps, 95),
-        "first_visible_gap_p99": _p(first_visible_gaps, 99),
+        "first_visible_gap_avg": round(statistics.mean(first_visible_gaps), 3) if first_visible_gaps else None,
+        "first_visible_gap_p50": _p(first_visible_gaps, 50) if first_visible_gaps else None,
+        "first_visible_gap_p95": _p(first_visible_gaps, 95) if first_visible_gaps else None,
+        "first_visible_gap_p99": _p(first_visible_gaps, 99) if first_visible_gaps else None,
 
         # ── visible TPOT (debug only) ──
-        "visible_tpot_avg": round(statistics.mean(visible_tpots), 3) if visible_tpots else 0,
-        "visible_tpot_p50": _p(visible_tpots, 50),
-        "visible_tpot_p95": _p(visible_tpots, 95),
-        "visible_tpot_p99": _p(visible_tpots, 99),
+        "visible_tpot_avg": round(statistics.mean(visible_tpots), 3) if visible_tpots else None,
+        "visible_tpot_p50": _p(visible_tpots, 50) if visible_tpots else None,
+        "visible_tpot_p95": _p(visible_tpots, 95) if visible_tpots else None,
+        "visible_tpot_p99": _p(visible_tpots, 99) if visible_tpots else None,
+
+        # ── new: generated / answer / reasoning timing ──
+        # None when no samples (never faked as 0)
+        "first_generated_token_avg": round(statistics.mean(first_generated_tokens), 3) if first_generated_tokens else None,
+        "first_generated_token_p50": _p(first_generated_tokens, 50) if first_generated_tokens else None,
+        "first_generated_token_p95": _p(first_generated_tokens, 95) if first_generated_tokens else None,
+        "first_generated_token_p99": _p(first_generated_tokens, 99) if first_generated_tokens else None,
+
+        "first_answer_token_avg": round(statistics.mean(first_answer_tokens), 3) if first_answer_tokens else None,
+        "first_answer_token_p50": _p(first_answer_tokens, 50) if first_answer_tokens else None,
+        "first_answer_token_p95": _p(first_answer_tokens, 95) if first_answer_tokens else None,
+        "first_answer_token_p99": _p(first_answer_tokens, 99) if first_answer_tokens else None,
+
+        "first_reasoning_token_avg": round(statistics.mean(first_reasoning_tokens), 3) if first_reasoning_tokens else None,
+        "first_reasoning_token_p50": _p(first_reasoning_tokens, 50) if first_reasoning_tokens else None,
+        "first_reasoning_token_p95": _p(first_reasoning_tokens, 95) if first_reasoning_tokens else None,
+        "first_reasoning_token_p99": _p(first_reasoning_tokens, 99) if first_reasoning_tokens else None,
+
+        "first_generated_gap_avg": round(statistics.mean(first_generated_gaps), 3) if first_generated_gaps else None,
+        "first_generated_gap_p50": _p(first_generated_gaps, 50) if first_generated_gaps else None,
+        "first_generated_gap_p95": _p(first_generated_gaps, 95) if first_generated_gaps else None,
+        "first_generated_gap_p99": _p(first_generated_gaps, 99) if first_generated_gaps else None,
+
+        "first_answer_gap_avg": round(statistics.mean(first_answer_gaps), 3) if first_answer_gaps else None,
+        "first_answer_gap_p50": _p(first_answer_gaps, 50) if first_answer_gaps else None,
+        "first_answer_gap_p95": _p(first_answer_gaps, 95) if first_answer_gaps else None,
+        "first_answer_gap_p99": _p(first_answer_gaps, 99) if first_answer_gaps else None,
+
+        "generated_itl_avg_agg": round(statistics.mean(generated_itl_avgs), 3) if generated_itl_avgs else None,
+        "answer_itl_avg_agg":    round(statistics.mean(answer_itl_avgs),    3) if answer_itl_avgs    else None,
+        "reasoning_itl_avg_agg": round(statistics.mean(reasoning_itl_avgs), 3) if reasoning_itl_avgs else None,
+        "stream_event_itl_avg_agg": round(statistics.mean(stream_event_itl_avgs), 3) if stream_event_itl_avgs else None,
 
         # tokens
         "total_input_tokens": total_input_tokens,
@@ -1755,6 +2306,9 @@ def aggregate_results(results: list[dict], duration: float, config: dict) -> dic
         summary["fixed_output_validation_passed"] = None
         summary["fixed_output_validation_warning"] = ""
     summary["metric_warnings"] = warnings
+
+    # ── parser_profile: stream capability profile from per-request results ──
+    summary["parser_profile"] = _build_parser_profile(ok_results, config)
 
     return summary
 
@@ -3408,9 +3962,9 @@ class LLMBenchmarkApp:
         # Row 0
         self.metrics["ttft"].set_value(
             f"{summary['ttft_avg']:.3f}s" if summary.get("stream_mode") and summary.get("ttft_avg", 0) > 0 else "N/A")
-        vt = summary.get("visible_ttft_avg", 0)
+        vt = summary.get("visible_ttft_avg")
         self.metrics["visible_ttft"].set_value(
-            f"{vt:.3f}s" if summary.get("stream_mode") and vt > 0 else "N/A")
+            f"{vt:.3f}s" if summary.get("stream_mode") and vt is not None and vt > 0 else "N/A")
         self.metrics["system_output_tps"].set_value(
             f"{summary['system_output_tps']:.1f} tok/s")
         self.metrics["rps"].set_value(f"{summary['request_throughput_rps']:.2f} req/s")
@@ -3522,8 +4076,8 @@ class LLMBenchmarkApp:
                 tips.append("    建议: 检查 vLLM --max-num-seqs 或 GPU 利用率。")
 
         # ── TTFT split diagnostics ──
-        gap_avg = summary.get("first_visible_gap_avg", 0)
-        gap_p95 = summary.get("first_visible_gap_p95", 0)
+        gap_avg = summary.get("first_visible_gap_avg") or 0
+        gap_p95 = summary.get("first_visible_gap_p95") or 0
         if gap_avg > 0.5:
             tips.append(f"  ℹ 首包到首字间隔 (first_visible_gap_avg={gap_avg:.3f}s) > 0.5s，"
                         f"服务端已较早开始流式响应，但首个可见输出较晚出现。请关注 First Visible Token Latency。")
@@ -3536,7 +4090,7 @@ class LLMBenchmarkApp:
             tips.append(f"  ⚠ TPOT ({tpot_avg:.4f}s) 与 ITL ({itl_avg:.4f}s) 差异较大，"
                         f"请检查 chunk/token 口径、completion_tokens 和 TTFT 口径。")
 
-        visible_tpot_avg = summary.get("visible_tpot_avg", 0)
+        visible_tpot_avg = summary.get("visible_tpot_avg") or 0
         if visible_tpot_avg > 0 and itl_avg > 0 and abs(visible_tpot_avg - itl_avg) / max(itl_avg, 1e-9) > 0.5:
             tips.append(f"  ℹ Visible TPOT ({visible_tpot_avg:.4f}s) 受首字延迟影响，仅供诊断，不作为主 TPOT。")
         if summary["fail"] == 0 and len(tips) <= (1 if not stream_mode else 0):
@@ -3618,29 +4172,81 @@ class LLMBenchmarkApp:
             r.append(f"    请求发出 → 首个 SSE data JSON chunk / 首个流式响应 chunk。")
             r.append(f"    不一定等于用户看到第一个可见文字的时间。")
             r.append(f"    avg: {summary['ttft_avg']:.3f}s  p50: {summary.get('ttft_p50', 0):.3f}s  p95: {summary.get('ttft_p95', 0):.3f}s  p99: {summary.get('ttft_p99', 0):.3f}s")
-            # ── First Visible Token Latency（首字延迟）──
-            r.append(f"  First Visible Token Latency（首字延迟）:")
-            r.append(f"    请求发出 → 首个非空 delta.content / delta.reasoning_content。")
-            r.append(f"    用于衡量用户首字体验。")
-            r.append(f"    avg: {summary.get('visible_ttft_avg', 0):.3f}s  p50: {summary.get('visible_ttft_p50', 0):.3f}s  p95: {summary.get('visible_ttft_p95', 0):.3f}s  p99: {summary.get('visible_ttft_p99', 0):.3f}s")
-            # ── First Visible Gap（首包到首字间隔）──
-            r.append(f"  First Visible Gap（首包到首字间隔）:")
-            r.append(f"    First Visible Token − First Stream Chunk。")
-            r.append(f"    用于观察服务端已开始流式响应但可见内容延迟出现的情况。")
-            r.append(f"    avg: {summary.get('first_visible_gap_avg', 0):.3f}s  p50: {summary.get('first_visible_gap_p50', 0):.3f}s  p95: {summary.get('first_visible_gap_p95', 0):.3f}s  p99: {summary.get('first_visible_gap_p99', 0):.3f}s")
+            # ── First Generated Token Latency（首个生成内容延迟）──
+            _fgt = summary.get("first_generated_token_avg")
+            _fgt_s = f"{_fgt:.3f}s" if _fgt is not None else "N/A"
+            _fgt_p50 = summary.get("first_generated_token_p50")
+            _fgt_p95 = summary.get("first_generated_token_p95")
+            _fgt_p99 = summary.get("first_generated_token_p99")
+            r.append(f"  First Generated Token / First Visible Token（首个生成内容延迟）:")
+            r.append(f"    请求发出 → 首个非空 delta.content / delta.reasoning_content / delta.reasoning / choices[].text。")
+            r.append(f"    avg: {_fgt_s}  "
+                     f"p50: {f'{_fgt_p50:.3f}s' if _fgt_p50 is not None else 'N/A'}  "
+                     f"p95: {f'{_fgt_p95:.3f}s' if _fgt_p95 is not None else 'N/A'}  "
+                     f"p99: {f'{_fgt_p99:.3f}s' if _fgt_p99 is not None else 'N/A'}")
+            # ── First Answer Token Latency（首个回答正文延迟）──
+            _fat = summary.get("first_answer_token_avg")
+            _fat_s = f"{_fat:.3f}s" if _fat is not None else "N/A"
+            _fat_p50 = summary.get("first_answer_token_p50")
+            _fat_p95 = summary.get("first_answer_token_p95")
+            _fat_p99 = summary.get("first_answer_token_p99")
+            r.append(f"  First Answer Token Latency（首个回答正文延迟）:")
+            r.append(f"    请求发出 → 首个非空 delta.content。若模型只输出 reasoning，可能为 N/A。")
+            r.append(f"    avg: {_fat_s}  "
+                     f"p50: {f'{_fat_p50:.3f}s' if _fat_p50 is not None else 'N/A'}  "
+                     f"p95: {f'{_fat_p95:.3f}s' if _fat_p95 is not None else 'N/A'}  "
+                     f"p99: {f'{_fat_p99:.3f}s' if _fat_p99 is not None else 'N/A'}")
+            # ── First Reasoning Token Latency（首个推理内容延迟）──
+            _frt = summary.get("first_reasoning_token_avg")
+            _frt_s = f"{_frt:.3f}s" if _frt is not None else "N/A"
+            _frt_p50 = summary.get("first_reasoning_token_p50")
+            _frt_p95 = summary.get("first_reasoning_token_p95")
+            _frt_p99 = summary.get("first_reasoning_token_p99")
+            r.append(f"  First Reasoning Token Latency（首个推理内容延迟）:")
+            r.append(f"    请求发出 → 首个非空 delta.reasoning_content / delta.reasoning。")
+            r.append(f"    avg: {_frt_s}  "
+                     f"p50: {f'{_frt_p50:.3f}s' if _frt_p50 is not None else 'N/A'}  "
+                     f"p95: {f'{_frt_p95:.3f}s' if _frt_p95 is not None else 'N/A'}  "
+                     f"p99: {f'{_frt_p99:.3f}s' if _frt_p99 is not None else 'N/A'}")
+            # ── First Generated Gap（首包到首个生成内容间隔）──
+            _fgg = summary.get("first_generated_gap_avg")
+            _fgg_s = f"{_fgg:.3f}s" if _fgg is not None else "N/A"
+            _fgg_p50 = summary.get("first_generated_gap_p50")
+            _fgg_p95 = summary.get("first_generated_gap_p95")
+            r.append(f"  First Generated Gap（首包到首个生成内容间隔）:")
+            r.append(f"    First Generated Token − First JSON Chunk / First Stream Chunk。")
+            r.append(f"    avg: {_fgg_s}  "
+                     f"p50: {f'{_fgg_p50:.3f}s' if _fgg_p50 is not None else 'N/A'}  "
+                     f"p95: {f'{_fgg_p95:.3f}s' if _fgg_p95 is not None else 'N/A'}")
             # ── TPOT / Time Per Output Token（单 Token 耗时）──
             r.append(f"  TPOT / Time Per Output Token（单 Token 耗时）:")
             r.append(f"    (E2E − TTFT) / (completion_tokens − 1)，使用 First Stream Chunk 作为 TTFT。")
             r.append(f"    avg: {summary.get('tpot_avg', 0):.3f}s  p50: {summary.get('tpot_p50', 0):.3f}s  p95: {summary.get('tpot_p95', 0):.3f}s  p99: {summary.get('tpot_p99', 0):.3f}s")
             # ── Visible TPOT（仅供诊断）──
+            _vt = summary.get("visible_tpot_avg")
+            _vt_s = f"{_vt:.3f}s" if _vt is not None else "N/A"
+            _vt_p50 = summary.get("visible_tpot_p50")
+            _vt_p95 = summary.get("visible_tpot_p95")
+            _vt_p99 = summary.get("visible_tpot_p99")
             r.append(f"  Visible TPOT（仅供诊断）:")
-            r.append(f"    (E2E − First Visible Token) / (completion_tokens − 1)。")
+            r.append(f"    (E2E − First Generated Token) / (completion_tokens − 1)。")
             r.append(f"    受首字延迟影响，不作为主 benchmark TPOT。")
-            r.append(f"    avg: {summary.get('visible_tpot_avg', 0):.3f}s  p50: {summary.get('visible_tpot_p50', 0):.3f}s  p95: {summary.get('visible_tpot_p95', 0):.3f}s  p99: {summary.get('visible_tpot_p99', 0):.3f}s")
-            # ── ITL / Inter-Token Latency（Token 间隔）──
-            r.append(f"  ITL / Inter-Token Latency（Token 间隔）:")
-            r.append(f"    相邻流式响应 chunk 的时间间隔。")
+            r.append(f"    avg: {_vt_s}  "
+                     f"p50: {f'{_vt_p50:.3f}s' if _vt_p50 is not None else 'N/A'}  "
+                     f"p95: {f'{_vt_p95:.3f}s' if _vt_p95 is not None else 'N/A'}  "
+                     f"p99: {f'{_vt_p99:.3f}s' if _vt_p99 is not None else 'N/A'}")
+            # ── Generated ITL / ITL（生成内容间隔）──
+            r.append(f"  Generated ITL（生成内容间隔 / Inter-Token Latency）:")
+            r.append(f"    相邻生成内容 chunk 的时间间隔（content/reasoning/text 统一计算）。")
             r.append(f"    avg: {summary.get('itl_avg', 0):.3f}s  p50: {summary.get('itl_p50', 0):.3f}s  p95: {summary.get('itl_p95', 0):.3f}s  p99: {summary.get('itl_p99', 0):.3f}s")
+            _gen_itl = summary.get("generated_itl_avg_agg")
+            _ans_itl = summary.get("answer_itl_avg_agg")
+            _rsn_itl = summary.get("reasoning_itl_avg_agg")
+            _se_itl  = summary.get("stream_event_itl_avg_agg")
+            if _ans_itl is not None or _rsn_itl is not None or _se_itl is not None:
+                r.append(f"    Answer ITL: {f'{_ans_itl:.3f}s' if _ans_itl is not None else 'N/A'}  "
+                         f"Reasoning ITL: {f'{_rsn_itl:.3f}s' if _rsn_itl is not None else 'N/A'}  "
+                         f"Stream Event ITL: {f'{_se_itl:.3f}s' if _se_itl is not None else 'N/A'}")
         else:
             r.append("  TTFT / TPOT / ITL: N/A（非流式模式无法真实测量）")
 
@@ -3648,11 +4254,42 @@ class LLMBenchmarkApp:
         ok_count_rpt = summary.get("success", 0)
         if stream_mode and ok_count_rpt > 0:
             r.append("")
-            r.append("  TTFT Debug (校准参考):")
-            r.append(f"    first_data_line  avg: {summary.get('first_data_line_avg', 0):.4f}s  p50: {summary.get('first_data_line_p50', 0):.4f}s")
-            r.append(f"    first_json_chunk avg: {summary.get('first_json_chunk_avg', 0):.4f}s  p50: {summary.get('first_json_chunk_p50', 0):.4f}s")
-            r.append(f"    first_visible_token avg: {summary.get('first_visible_token_avg', 0):.4f}s  p50: {summary.get('first_visible_token_p50', 0):.4f}s")
-            r.append(f"    first_visible_gap avg: {summary.get('first_visible_gap_avg', 0):.4f}s")
+            r.append("  TTFT Debug / Stream Timing (校准参考):")
+            r.append(f"    first_data_line      avg: {summary.get('first_data_line_avg', 0):.4f}s  p50: {summary.get('first_data_line_p50', 0):.4f}s")
+            r.append(f"    first_json_chunk     avg: {summary.get('first_json_chunk_avg', 0):.4f}s  p50: {summary.get('first_json_chunk_p50', 0):.4f}s")
+            _fvt = summary.get("first_generated_token_avg")
+            _fvt_p50 = summary.get("first_generated_token_p50")
+            _fvt_s4 = f"{_fvt:.4f}s" if _fvt is not None else "N/A"
+            _fvt_p50_s4 = f"{_fvt_p50:.4f}s" if _fvt_p50 is not None else "N/A"
+            r.append(f"    first_generated_token avg: {_fvt_s4}  p50: {_fvt_p50_s4}")
+            _fat2 = summary.get("first_answer_token_avg")
+            _fat2_s4 = f"{_fat2:.4f}s" if _fat2 is not None else "N/A"
+            r.append(f"    first_answer_token    avg: {_fat2_s4}")
+            _frsn = summary.get("first_reasoning_token_avg")
+            _frsn_s4 = f"{_frsn:.4f}s" if _frsn is not None else "N/A"
+            r.append(f"    first_reasoning_token avg: {_frsn_s4}")
+            _fgg2 = summary.get("first_generated_gap_avg")
+            _fgg2_s4 = f"{_fgg2:.4f}s" if _fgg2 is not None else "N/A"
+            r.append(f"    first_generated_gap   avg: {_fgg2_s4}")
+
+        # ── Stream Parser Profile ──
+        _pp = summary.get("parser_profile")
+        if _pp and _pp.get("stream_supported"):
+            r.append("")
+            r.append("  Stream Parser Profile（流式解析能力档案）:")
+            r.append(f"    parser_mode:             {_pp.get('parser_mode', 'unknown')}")
+            r.append(f"    generated_fields:        {_pp.get('generated_fields', [])}")
+            r.append(f"    observed_delta_keys:     {_pp.get('observed_delta_keys', [])}")
+            r.append(f"    answer_field_observed:   {_pp.get('answer_field_observed')}")
+            r.append(f"    reasoning_field_observed:{_pp.get('reasoning_field_observed')}")
+            r.append(f"    usage_supported:         {_pp.get('usage_supported')}")
+            r.append(f"    usage_source:            {_pp.get('usage_source')}")
+            if _pp.get("unknown_delta_keys"):
+                r.append(f"    unknown_delta_keys:      {_pp['unknown_delta_keys']}")
+            if _pp.get("warning_messages"):
+                r.append("    stream_warnings:")
+                for _sw in _pp["warning_messages"][:4]:
+                    r.append(f"      - {_sw[:120]}")
 
         # ── 四、Token 统计 (Token Counts) ──
         r.append("")
@@ -3687,9 +4324,21 @@ class LLMBenchmarkApp:
         r.append("    • vLLM bench serve (ttft, tpot, itl, e2el)")
         r.append("    • NVIDIA GenAI-Perf / NIM Benchmark (ttft, itl, output_token_throughput, request_throughput)")
         r.append("")
-        r.append("  TTFT (Time to First Token):")
-        r.append("    请求发出 → 首个非空输出 chunk (delta.content / delta.reasoning_content)")
+        r.append("  TTFT / First Stream Chunk (Time to First Token):")
+        r.append("    请求发出 → 首个 SSE JSON data chunk 到达。")
         r.append("    对应 vLLM bench serve --percentile-metrics ttft")
+        r.append("")
+        r.append("  First Generated Token Latency（首个生成内容延迟）:")
+        r.append("    请求发出 → 首个非空 delta.content / delta.reasoning_content / delta.reasoning / choices[].text。")
+        r.append("")
+        r.append("  First Answer Token Latency（首个回答正文延迟）:")
+        r.append("    请求发出 → 首个非空 delta.content。若模型只输出 reasoning，可能为 N/A。")
+        r.append("")
+        r.append("  First Reasoning Token Latency（首个推理内容延迟）:")
+        r.append("    请求发出 → 首个非空 delta.reasoning_content / delta.reasoning。")
+        r.append("")
+        r.append("  First Generated Gap（首包到首个生成内容间隔）:")
+        r.append("    First Generated Token − First JSON Chunk。")
         r.append("")
         r.append("  E2E Latency (End-to-End, vLLM: e2el):")
         r.append("    请求发出 → 完整响应结束 (最后一个 chunk 到达)")
