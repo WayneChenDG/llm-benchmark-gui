@@ -32,6 +32,13 @@ DB_PATH = os.path.join(_SCRIPT_DIR, "llm_benchmark_history.db")
 INI_PATH = os.path.join(_SCRIPT_DIR, "llm_benchmark.ini")
 LOG_PATH = os.path.join(_SCRIPT_DIR, "llm_benchmark.log")
 CRASH_LOG = os.path.join(_SCRIPT_DIR, "llm_benchmark_crash.log")
+RESULT_DB_PATH = os.path.join(_SCRIPT_DIR, "data", "benchmark_results.db")
+RESULTS_ROOT = os.path.join(_SCRIPT_DIR, "results")
+# Built-in default profile names (used as stable identity keys)
+_DEFAULT_ENV_NAME  = "Default - Dual RTX 5090 vLLM qwen3.6-27b-fp8"
+_DEFAULT_HW_NAME   = "Dual RTX 5090 Workstation"
+_DEFAULT_SW_NAME   = "vLLM OpenAI Server - Dual RTX 5090"
+_DEFAULT_MODEL_NAME = "qwen3.6-27b-fp8"
 DEBUG_MODE = False
 def setup_logging():
     logging.basicConfig(
@@ -229,6 +236,66 @@ I18N = {
         "stream.warn_no_generated_field": "服务端返回了 completion_tokens，但工具没有捕获到任何生成内容字段。请检查流式 chunk 字段格式。",
         "stream.warn_reasoning_only": "该模型本次流式输出包含 reasoning 字段，但未捕获到回答正文 content。若前端隐藏 reasoning，用户首字体验应参考 First Answer Token。",
         "stream.warn_unknown_delta": "检测到未识别的流式 delta 字段。已保存 stream_debug 供兼容性分析。",
+        "progress.benchmarking": "正在进行基准测试...",
+        "progress.sweeping": "正在进行扫测...",
+        "progress.preparing": "正在准备...",
+        "progress.finishing": "正在收尾...",
+        "progress.elapsed": "已运行",
+        "tab.env_profiles": "环境档案",
+        "tab.hw_profiles": "硬件环境",
+        "tab.sw_profiles": "软件栈",
+        "tab.model_profiles": "模型部署",
+        "tab.db_settings": "数据库设置",
+        "env.selector_label": "被测环境",
+        "env.manage_btn": "管理环境",
+        "env.no_env": "未指定环境 / Unspecified",
+        "env.unspecified_warning": "未绑定环境档案，本次结果不建议用于长期横向对比。",
+        "env.profile_name": "档案名称",
+        "env.hostname": "主机名",
+        "env.ip_address": "IP 地址",
+        "env.gpu_model": "GPU 型号",
+        "env.gpu_count": "GPU 数量",
+        "env.network_type": "互联 / 网络",
+        "env.storage_type": "存储类型",
+        "env.cpu_model": "CPU 型号",
+        "env.memory_gb": "内存 (GB)",
+        "env.notes": "备注",
+        "env.backend": "推理后端",
+        "env.backend_version": "后端版本",
+        "env.api_type": "API 类型",
+        "env.deployment_type": "部署方式",
+        "env.reasoning_parser": "Reasoning Parser",
+        "env.container_image": "容器镜像",
+        "env.startup_args": "启动参数",
+        "env.model_family": "模型系列",
+        "env.model_size": "模型参数量",
+        "env.quantization": "精度 / 量化",
+        "env.model_type": "模型类型",
+        "env.context_length": "上下文长度",
+        "env.tensor_parallel": "Tensor Parallel",
+        "env.hardware_profile": "硬件档案",
+        "env.software_profile": "软件栈档案",
+        "env.model_profile": "模型档案",
+        "env.environment_name": "环境名称",
+        "env.new": "新建",
+        "env.duplicate": "复制",
+        "env.save": "保存",
+        "env.delete": "删除",
+        "env.saved_ok": "档案已保存",
+        "env.deleted_ok": "档案已删除",
+        "env.select_first": "请先选择档案",
+        "env.confirm_delete": "确认删除此档案？",
+        "env.custom_input": "自定义值",
+        "env.other": "其它",
+        "db.path_label": "数据库路径",
+        "db.results_root": "Results Root Directory",
+        "db.init_btn": "初始化 / 修复数据库",
+        "db.test_btn": "测试写入",
+        "db.init_ok": "数据库初始化成功",
+        "db.test_ok": "写入测试成功",
+        "db.test_fail": "写入测试失败",
+        "report.env_summary": "被测环境",
+        "report.env_unspecified": "未指定",
     },
     "en_US": {
         "app.title": "JISUMAN LLM Benchmark GUI",
@@ -367,6 +434,66 @@ I18N = {
         "stream.warn_no_generated_field": "The server returned completion_tokens, but no generated streaming text field was captured. Check the streaming chunk format.",
         "stream.warn_reasoning_only": "This stream contains reasoning fields but no answer content was captured. If the frontend hides reasoning, user-visible latency should use First Answer Token.",
         "stream.warn_unknown_delta": "Unknown streaming delta fields detected. stream_debug has been saved for compatibility analysis.",
+        "progress.benchmarking": "Benchmarking...",
+        "progress.sweeping": "Sweeping...",
+        "progress.preparing": "Preparing...",
+        "progress.finishing": "Finishing...",
+        "progress.elapsed": "Elapsed",
+        "tab.env_profiles": "Environment Profiles",
+        "tab.hw_profiles": "Hardware",
+        "tab.sw_profiles": "Software Stack",
+        "tab.model_profiles": "Model Deployment",
+        "tab.db_settings": "Database Settings",
+        "env.selector_label": "Test Environment",
+        "env.manage_btn": "Manage Profiles",
+        "env.no_env": "Unspecified Environment",
+        "env.unspecified_warning": "No environment profile linked. Results are not recommended for long-term comparison.",
+        "env.profile_name": "Profile Name",
+        "env.hostname": "Hostname",
+        "env.ip_address": "IP Address",
+        "env.gpu_model": "GPU Model",
+        "env.gpu_count": "GPU Count",
+        "env.network_type": "Network / Interconnect",
+        "env.storage_type": "Storage Type",
+        "env.cpu_model": "CPU Model",
+        "env.memory_gb": "Memory (GB)",
+        "env.notes": "Notes",
+        "env.backend": "Inference Backend",
+        "env.backend_version": "Backend Version",
+        "env.api_type": "API Type",
+        "env.deployment_type": "Deployment Type",
+        "env.reasoning_parser": "Reasoning Parser",
+        "env.container_image": "Container Image",
+        "env.startup_args": "Startup Args",
+        "env.model_family": "Model Family",
+        "env.model_size": "Model Size",
+        "env.quantization": "Precision / Quantization",
+        "env.model_type": "Model Type",
+        "env.context_length": "Context Length",
+        "env.tensor_parallel": "Tensor Parallel",
+        "env.hardware_profile": "Hardware Profile",
+        "env.software_profile": "Software Stack Profile",
+        "env.model_profile": "Model Profile",
+        "env.environment_name": "Environment Name",
+        "env.new": "New",
+        "env.duplicate": "Duplicate",
+        "env.save": "Save",
+        "env.delete": "Delete",
+        "env.saved_ok": "Profile saved",
+        "env.deleted_ok": "Profile deleted",
+        "env.select_first": "Please select a profile first",
+        "env.confirm_delete": "Delete this profile?",
+        "env.custom_input": "Custom value",
+        "env.other": "Other",
+        "db.path_label": "Database Path",
+        "db.results_root": "Results Root Directory",
+        "db.init_btn": "Initialize / Repair Database",
+        "db.test_btn": "Test Write",
+        "db.init_ok": "Database initialized successfully",
+        "db.test_ok": "Write test passed",
+        "db.test_fail": "Write test failed",
+        "report.env_summary": "Test Environment",
+        "report.env_unspecified": "Unspecified",
     },
 }
 
@@ -2372,6 +2499,605 @@ def run_benchmark(api_url: str, api_key: str, model: str, messages: list[dict],
     summary["benchmark_preset_type"] = "fixed_concurrency"
     done_cb(summary)
 # ============================================================
+# Result Database — JISUMAN LLM Benchmark Result DB v1
+# ============================================================
+def _ensure_result_db_snapshot_cols(conn):
+    """Add snapshot columns to benchmark_runs if missing (forward migration)."""
+    try:
+        existing = {row[1] for row in
+                    conn.execute("PRAGMA table_info(benchmark_runs)").fetchall()}
+    except Exception:
+        return
+    snapshot_cols = [
+        ("environment_profile_name_snapshot", "TEXT"),
+        ("hardware_profile_name_snapshot",    "TEXT"),
+        ("software_stack_profile_name_snapshot", "TEXT"),
+        ("model_profile_name_snapshot",       "TEXT"),
+        ("gpu_model_snapshot",                "TEXT"),
+        ("gpu_count_snapshot",                "TEXT"),
+        ("backend_snapshot",                  "TEXT"),
+        ("backend_version_snapshot",          "TEXT"),
+        ("api_type_snapshot",                 "TEXT"),
+        ("deployment_type_snapshot",          "TEXT"),
+        ("reasoning_parser_snapshot",         "TEXT"),
+        ("model_family_snapshot",             "TEXT"),
+        ("model_size_snapshot",               "TEXT"),
+        ("quantization_snapshot",             "TEXT"),
+        ("model_type_snapshot",               "TEXT"),
+    ]
+    for col, typ in snapshot_cols:
+        if col not in existing:
+            try:
+                conn.execute(f"ALTER TABLE benchmark_runs ADD COLUMN {col} {typ}")
+            except Exception:
+                pass
+    try:
+        conn.commit()
+    except Exception:
+        pass
+
+def _init_result_db(db_path: str | None = None) -> bool:
+    """Initialize the result database. Returns True on success."""
+    if db_path is None:
+        db_path = RESULT_DB_PATH
+    try:
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        _create_result_db_schema(conn)
+        _ensure_result_db_snapshot_cols(conn)
+        conn.commit()
+        conn.close()
+        _seed_default_profiles(db_path)
+        return True
+    except Exception as e:
+        logging.warning("result DB init failed: %s", e)
+        return False
+
+def _create_result_db_schema(conn):
+    """Create all result DB tables if they don't exist."""
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS hardware_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_name TEXT NOT NULL,
+            hostname TEXT,
+            ip_address TEXT,
+            gpu_model TEXT,
+            gpu_model_custom TEXT,
+            gpu_count TEXT,
+            gpu_count_custom TEXT,
+            network_type TEXT,
+            network_type_custom TEXT,
+            storage_type TEXT,
+            storage_type_custom TEXT,
+            cpu_model TEXT,
+            memory_gb TEXT,
+            notes TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS software_stack_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_name TEXT NOT NULL,
+            backend TEXT,
+            backend_custom TEXT,
+            backend_version TEXT,
+            api_type TEXT,
+            api_type_custom TEXT,
+            deployment_type TEXT,
+            deployment_type_custom TEXT,
+            reasoning_parser TEXT,
+            reasoning_parser_custom TEXT,
+            api_url TEXT,
+            container_image TEXT,
+            python_version TEXT,
+            startup_args TEXT,
+            notes TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS model_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_name TEXT NOT NULL,
+            display_name TEXT,
+            api_model_name TEXT,
+            model_path TEXT,
+            model_family TEXT,
+            model_family_custom TEXT,
+            model_size TEXT,
+            model_size_custom TEXT,
+            quantization TEXT,
+            quantization_custom TEXT,
+            model_type TEXT,
+            model_type_custom TEXT,
+            context_length TEXT,
+            tensor_parallel TEXT,
+            pipeline_parallel TEXT,
+            data_parallel TEXT,
+            notes TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS environment_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            environment_name TEXT NOT NULL,
+            hardware_profile_id INTEGER,
+            software_stack_profile_id INTEGER,
+            model_profile_id INTEGER,
+            notes TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS benchmark_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT,
+            run_type TEXT,
+            created_at TEXT,
+            tool_version TEXT,
+            git_commit TEXT,
+            api_url TEXT,
+            model_name TEXT,
+            environment_profile_id INTEGER,
+            hardware_profile_id INTEGER,
+            software_stack_profile_id INTEGER,
+            model_profile_id INTEGER,
+            preset TEXT,
+            concurrency INTEGER,
+            total_requests INTEGER,
+            max_tokens INTEGER,
+            temperature REAL,
+            stream_mode INTEGER,
+            output_length_mode TEXT,
+            fixed_output_tokens INTEGER,
+            ignore_eos INTEGER,
+            success INTEGER,
+            fail INTEGER,
+            success_rate REAL,
+            status TEXT,
+            duration_sec REAL,
+            report_dir TEXT,
+            environment_profile_name_snapshot TEXT,
+            hardware_profile_name_snapshot TEXT,
+            software_stack_profile_name_snapshot TEXT,
+            model_profile_name_snapshot TEXT,
+            gpu_model_snapshot TEXT,
+            gpu_count_snapshot TEXT,
+            backend_snapshot TEXT,
+            backend_version_snapshot TEXT,
+            api_type_snapshot TEXT,
+            deployment_type_snapshot TEXT,
+            reasoning_parser_snapshot TEXT,
+            model_family_snapshot TEXT,
+            model_size_snapshot TEXT,
+            quantization_snapshot TEXT,
+            model_type_snapshot TEXT
+        );
+        CREATE TABLE IF NOT EXISTS benchmark_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT,
+            request_throughput REAL,
+            output_token_throughput REAL,
+            total_token_throughput REAL,
+            per_request_output_tps_avg REAL,
+            ttft_avg REAL, ttft_p50 REAL, ttft_p95 REAL, ttft_p99 REAL,
+            first_generated_avg REAL, first_generated_p50 REAL,
+            first_generated_p95 REAL, first_generated_p99 REAL,
+            first_answer_avg REAL, first_answer_p50 REAL,
+            first_answer_p95 REAL, first_answer_p99 REAL,
+            first_reasoning_avg REAL, first_reasoning_p50 REAL,
+            first_reasoning_p95 REAL, first_reasoning_p99 REAL,
+            tpot_avg REAL, tpot_p50 REAL, tpot_p95 REAL, tpot_p99 REAL,
+            itl_avg REAL, itl_p50 REAL, itl_p95 REAL, itl_p99 REAL,
+            e2el_avg REAL, e2el_p50 REAL, e2el_p95 REAL, e2el_p99 REAL,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            total_tokens INTEGER,
+            token_source TEXT
+        );
+        CREATE TABLE IF NOT EXISTS parser_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT,
+            parser_mode TEXT,
+            generated_fields_json TEXT,
+            observed_delta_keys_json TEXT,
+            unknown_delta_keys_json TEXT,
+            answer_field_observed INTEGER,
+            reasoning_field_observed INTEGER,
+            usage_supported INTEGER,
+            usage_source TEXT,
+            stream_warnings_json TEXT
+        );
+        CREATE TABLE IF NOT EXISTS benchmark_artifacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT,
+            artifact_type TEXT,
+            path TEXT,
+            created_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS sweep_cases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT,
+            case_index INTEGER,
+            concurrency INTEGER,
+            total_requests INTEGER,
+            success INTEGER,
+            fail INTEGER,
+            duration_sec REAL,
+            output_token_throughput REAL,
+            request_throughput REAL,
+            e2el_avg REAL,
+            e2el_p95 REAL,
+            ttft_avg REAL,
+            ttft_p95 REAL,
+            tpot_avg REAL,
+            itl_avg REAL,
+            throughput_efficiency REAL,
+            artifact_dir TEXT
+        );
+    """)
+
+def _test_result_db_schema():
+    """Validate result DB schema by creating a temp DB and checking all tables."""
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        tmp_path = f.name
+    try:
+        conn = sqlite3.connect(tmp_path)
+        _create_result_db_schema(conn)
+        conn.commit()
+        required_tables = [
+            "hardware_profiles", "software_stack_profiles", "model_profiles",
+            "environment_profiles", "benchmark_runs", "benchmark_metrics",
+            "parser_profiles", "benchmark_artifacts", "sweep_cases",
+        ]
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        for t in required_tables:
+            assert t in tables, f"Table missing: {t}"
+        conn.close()
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+def _make_slug(s: str, maxlen: int = 80) -> str:
+    """Convert a string to a filesystem-safe slug."""
+    if not s:
+        return "unknown"
+    import re
+    s = str(s).lower().strip()
+    s = re.sub(r'[/\\:*?"<>|]', '-', s)
+    s = re.sub(r'\s+', '-', s)
+    s = re.sub(r'-+', '-', s)
+    s = s.strip('-')
+    return s[:maxlen] if s else "unknown"
+
+def _make_run_dir(results_root: str, run_type: str, model_slug: str,
+                  backend_slug: str, gpu_slug: str, gpu_count: str,
+                  params_slug: str) -> str:
+    """Create and return a structured artifact directory for a run."""
+    date_str = datetime.now().strftime("%Y%m%d")
+    ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    gpu_str = f"{gpu_slug}x{gpu_count}" if gpu_count and gpu_count != "unknown" else gpu_slug
+    dirname = f"{model_slug}__{backend_slug}__{gpu_str}__{params_slug}__{ts_str}"
+    # Truncate if too long
+    if len(dirname) > 200:
+        dirname = dirname[:196] + "_trunc"
+    path = os.path.join(results_root, run_type, date_str, dirname)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+def _result_db_save_benchmark_run(db_path: str, summary: dict,
+                                  env_profile_id: int | None,
+                                  hw_id: int | None, sw_id: int | None,
+                                  model_id: int | None, report_dir: str = "",
+                                  snapshots: dict | None = None) -> str | None:
+    """Save a single benchmark result to the result DB. Returns run_id or None."""
+    if snapshots is None:
+        snapshots = {}
+    try:
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        _create_result_db_schema(conn)
+        _ensure_result_db_snapshot_cols(conn)
+        run_id = datetime.now().strftime("run_%Y%m%d_%H%M%S_%f")
+        created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute("""INSERT INTO benchmark_runs
+            (run_id, run_type, created_at, api_url, model_name,
+             environment_profile_id, hardware_profile_id, software_stack_profile_id,
+             model_profile_id, concurrency, total_requests, max_tokens, temperature,
+             stream_mode, output_length_mode, fixed_output_tokens, ignore_eos,
+             success, fail, success_rate, status, duration_sec, report_dir,
+             environment_profile_name_snapshot, hardware_profile_name_snapshot,
+             software_stack_profile_name_snapshot, model_profile_name_snapshot,
+             gpu_model_snapshot, gpu_count_snapshot,
+             backend_snapshot, backend_version_snapshot,
+             api_type_snapshot, deployment_type_snapshot, reasoning_parser_snapshot,
+             model_family_snapshot, model_size_snapshot,
+             quantization_snapshot, model_type_snapshot)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (run_id, "single", created_at,
+             summary.get("api_url", ""), summary.get("model", ""),
+             env_profile_id, hw_id, sw_id, model_id,
+             summary.get("concurrency", 0), summary.get("total", 0),
+             summary.get("max_tokens", 0), summary.get("temperature", 0),
+             int(summary.get("stream_mode", False)),
+             summary.get("output_length_mode", "normal"),
+             summary.get("fixed_output_tokens"),
+             int(summary.get("output_length_mode", "") == "fixed"),
+             summary.get("success", 0), summary.get("fail", 0),
+             summary.get("success_rate", 0),
+             "completed" if summary.get("fail", 0) == 0 else "completed_with_failures",
+             summary.get("duration_sec", 0), report_dir,
+             snapshots.get("env_name", ""), snapshots.get("hw_name", ""),
+             snapshots.get("sw_name", ""), snapshots.get("model_name", ""),
+             snapshots.get("gpu_model", ""), snapshots.get("gpu_count", ""),
+             snapshots.get("backend", ""), snapshots.get("backend_version", ""),
+             snapshots.get("api_type", ""), snapshots.get("deployment_type", ""),
+             snapshots.get("reasoning_parser", ""),
+             snapshots.get("model_family", ""), snapshots.get("model_size", ""),
+             snapshots.get("quantization", ""), snapshots.get("model_type", "")))
+        conn.execute("""INSERT INTO benchmark_metrics
+            (run_id, request_throughput, output_token_throughput,
+             per_request_output_tps_avg,
+             ttft_avg, ttft_p50, ttft_p95, ttft_p99,
+             tpot_avg, tpot_p50, tpot_p95, tpot_p99,
+             itl_avg, itl_p50, itl_p95, itl_p99,
+             e2el_avg, e2el_p50, e2el_p95, e2el_p99,
+             input_tokens, output_tokens, total_tokens)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (run_id,
+             summary.get("request_throughput_rps", 0),
+             summary.get("system_output_tps", 0),
+             summary.get("per_request_output_tps_avg", 0),
+             summary.get("ttft_avg", 0), summary.get("ttft_p50", 0),
+             summary.get("ttft_p95", 0), summary.get("ttft_p99", 0),
+             summary.get("tpot_avg", 0), summary.get("tpot_p50", 0),
+             summary.get("tpot_p95", 0), summary.get("tpot_p99", 0),
+             summary.get("itl_avg", 0), summary.get("itl_p50", 0),
+             summary.get("itl_p95", 0), summary.get("itl_p99", 0),
+             summary.get("e2el_avg", 0), summary.get("e2el_p50", 0),
+             summary.get("e2el_p95", 0), summary.get("e2el_p99", 0),
+             summary.get("total_input_tokens", 0),
+             summary.get("total_output_tokens", 0),
+             summary.get("total_tokens", 0)))
+        conn.commit()
+        conn.close()
+        return run_id
+    except Exception as e:
+        logging.warning("result DB save failed: %s", e)
+        return None
+
+def _result_db_save_sweep_run(db_path: str, sweep_result: dict,
+                               env_profile_id: int | None,
+                               hw_id: int | None, sw_id: int | None,
+                               model_id: int | None, report_dir: str = "",
+                               snapshots: dict | None = None) -> str | None:
+    """Save a sweep result to the result DB. Returns run_id or None."""
+    if snapshots is None:
+        snapshots = {}
+    try:
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        _create_result_db_schema(conn)
+        _ensure_result_db_snapshot_cols(conn)
+        run_id = sweep_result.get("sweep_id") or datetime.now().strftime("sweep_%Y%m%d_%H%M%S")
+        created_at = sweep_result.get("finished_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cases = sweep_result.get("cases", [])
+        levels = sweep_result.get("concurrency_levels", [])
+        conn.execute("""INSERT INTO benchmark_runs
+            (run_id, run_type, created_at, api_url, model_name,
+             environment_profile_id, hardware_profile_id, software_stack_profile_id,
+             model_profile_id, concurrency, total_requests, max_tokens, temperature,
+             stream_mode, output_length_mode, success, fail, success_rate, status,
+             report_dir,
+             environment_profile_name_snapshot, hardware_profile_name_snapshot,
+             software_stack_profile_name_snapshot, model_profile_name_snapshot,
+             gpu_model_snapshot, gpu_count_snapshot,
+             backend_snapshot, backend_version_snapshot,
+             api_type_snapshot, deployment_type_snapshot, reasoning_parser_snapshot,
+             model_family_snapshot, model_size_snapshot,
+             quantization_snapshot, model_type_snapshot)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (run_id, "sweep", created_at,
+             sweep_result.get("api_url", ""), sweep_result.get("model", ""),
+             env_profile_id, hw_id, sw_id, model_id,
+             len(levels), sum(c.get("total_requests", 0) for c in cases),
+             sweep_result.get("fixed_output_tokens") or 0, 0,
+             1, sweep_result.get("output_length_mode", "normal"),
+             sum(c.get("benchmark_summary", {}).get("success", 0) for c in cases),
+             sum(c.get("benchmark_summary", {}).get("fail", 0) for c in cases),
+             0, "completed", report_dir,
+             snapshots.get("env_name", ""), snapshots.get("hw_name", ""),
+             snapshots.get("sw_name", ""), snapshots.get("model_name", ""),
+             snapshots.get("gpu_model", ""), snapshots.get("gpu_count", ""),
+             snapshots.get("backend", ""), snapshots.get("backend_version", ""),
+             snapshots.get("api_type", ""), snapshots.get("deployment_type", ""),
+             snapshots.get("reasoning_parser", ""),
+             snapshots.get("model_family", ""), snapshots.get("model_size", ""),
+             snapshots.get("quantization", ""), snapshots.get("model_type", "")))
+        for idx, case in enumerate(cases):
+            s = case.get("benchmark_summary", {})
+            am = case.get("analysis_metrics", {})
+            conn.execute("""INSERT INTO sweep_cases
+                (run_id, case_index, concurrency, total_requests,
+                 success, fail, duration_sec,
+                 output_token_throughput, request_throughput,
+                 e2el_avg, e2el_p95, ttft_avg, ttft_p95,
+                 tpot_avg, itl_avg, throughput_efficiency)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (run_id, idx, case.get("concurrency", 0),
+                 case.get("total_requests", 0),
+                 s.get("success", 0), s.get("fail", 0),
+                 s.get("duration_sec", 0),
+                 s.get("system_output_tps", 0),
+                 s.get("request_throughput_rps", 0),
+                 s.get("e2el_avg", 0), s.get("e2el_p95", 0),
+                 s.get("ttft_avg", 0), s.get("ttft_p95", 0),
+                 s.get("tpot_avg", 0), s.get("itl_avg", 0),
+                 am.get("throughput_efficiency", 0)))
+        conn.commit()
+        conn.close()
+        return run_id
+    except Exception as e:
+        logging.warning("result DB sweep save failed: %s", e)
+        return None
+
+def _seed_default_profiles(db_path: str) -> None:
+    """Insert built-in default profiles if they don't already exist (idempotent).
+    Uses stable profile_name / environment_name as identity keys — safe to call
+    multiple times; will never create duplicates."""
+    try:
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        _create_result_db_schema(conn)
+        _ensure_result_db_snapshot_cols(conn)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # ── Hardware profile ──
+        hw_row = conn.execute(
+            "SELECT id FROM hardware_profiles WHERE profile_name=?",
+            (_DEFAULT_HW_NAME,)).fetchone()
+        if hw_row:
+            hw_id = hw_row[0]
+        else:
+            cur = conn.execute(
+                """INSERT INTO hardware_profiles
+                   (profile_name, hostname, ip_address,
+                    gpu_model, gpu_count,
+                    network_type, storage_type, notes,
+                    created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (_DEFAULT_HW_NAME,
+                 "ai-srv-5090x2", "192.168.1.250",
+                 "RTX 5090", "2",
+                 "PCIe Single Node", "NVMe SSD",
+                 "Default built-in profile for JISUMAN dual RTX 5090 benchmark environment.",
+                 now, now))
+            hw_id = cur.lastrowid
+
+        # ── Software stack profile ──
+        sw_row = conn.execute(
+            "SELECT id FROM software_stack_profiles WHERE profile_name=?",
+            (_DEFAULT_SW_NAME,)).fetchone()
+        if sw_row:
+            sw_id = sw_row[0]
+        else:
+            cur = conn.execute(
+                """INSERT INTO software_stack_profiles
+                   (profile_name, backend, api_type,
+                    deployment_type, reasoning_parser,
+                    api_url, notes, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (_DEFAULT_SW_NAME,
+                 "vLLM",
+                 "OpenAI-compatible Chat Completions",
+                 "Docker", "qwen3",
+                 "http://192.168.1.250:8000/v1/chat/completions",
+                 "Default vLLM OpenAI-compatible endpoint for dual RTX 5090 testing.",
+                 now, now))
+            sw_id = cur.lastrowid
+
+        # ── Model profile ──
+        model_row = conn.execute(
+            "SELECT id FROM model_profiles WHERE profile_name=?",
+            (_DEFAULT_MODEL_NAME,)).fetchone()
+        if model_row:
+            model_id = model_row[0]
+        else:
+            cur = conn.execute(
+                """INSERT INTO model_profiles
+                   (profile_name, display_name, api_model_name, model_path,
+                    model_family, model_size,
+                    quantization, model_type,
+                    tensor_parallel, notes,
+                    created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (_DEFAULT_MODEL_NAME,
+                 "Qwen3.6-27B-FP8", "qwen3.6-27b-fp8",
+                 "/data/models/Qwen3.6-27B-FP8",
+                 "Qwen", "27B", "FP8", "Reasoning", "2",
+                 "Default model profile used for qwen3.6-27b-fp8 dual RTX 5090 baseline.",
+                 now, now))
+            model_id = cur.lastrowid
+
+        # ── Environment profile ──
+        env_row = conn.execute(
+            "SELECT id FROM environment_profiles WHERE environment_name=?",
+            (_DEFAULT_ENV_NAME,)).fetchone()
+        if not env_row:
+            conn.execute(
+                """INSERT INTO environment_profiles
+                   (environment_name,
+                    hardware_profile_id, software_stack_profile_id, model_profile_id,
+                    notes, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (_DEFAULT_ENV_NAME, hw_id, sw_id, model_id,
+                 "Built-in default profile. Duplicate and edit for your own environment.",
+                 now, now))
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.warning("seed default profiles failed: %s", e)
+
+def _result_db_get_all_profiles(db_path: str, table: str) -> list:
+    """Load all rows from a profile table. Returns list of dicts."""
+    try:
+        if not os.path.exists(db_path):
+            return []
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(f"SELECT * FROM {table} ORDER BY id").fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+def _result_db_save_profile(db_path: str, table: str, data: dict) -> int | None:
+    """Upsert a profile row. Returns the row id or None on error."""
+    try:
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        _create_result_db_schema(conn)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        pid = data.get("id")
+        if pid:
+            data = dict(data)
+            data["updated_at"] = now
+            data.pop("id", None)
+            cols = ", ".join(f"{k}=?" for k in data)
+            conn.execute(f"UPDATE {table} SET {cols} WHERE id=?",
+                         [*data.values(), pid])
+        else:
+            data = dict(data)
+            data["created_at"] = now
+            data["updated_at"] = now
+            data.pop("id", None)
+            cols = ", ".join(data.keys())
+            placeholders = ", ".join("?" * len(data))
+            cur = conn.execute(f"INSERT INTO {table} ({cols}) VALUES ({placeholders})",
+                               list(data.values()))
+            pid = cur.lastrowid
+        conn.commit()
+        conn.close()
+        return pid
+    except Exception as e:
+        logging.warning("profile save failed (%s): %s", table, e)
+        return None
+
+def _result_db_delete_profile(db_path: str, table: str, pid: int) -> bool:
+    """Delete a profile row. Returns True on success."""
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute(f"DELETE FROM {table} WHERE id=?", (pid,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+# ============================================================
 # GUI
 # ============================================================
 class LLMBenchmarkApp:
@@ -2402,6 +3128,14 @@ class LLMBenchmarkApp:
         self._icon_pulse_id = None
         self._latest_e2e_latencies = []
         self._hist_redraw_after_id = None
+        # ── progress overlay ──
+        self.progress_overlay = None
+        self.progress_overlay_canvas = None  # holds the ttk.Progressbar widget
+        self.progress_overlay_label = None
+        self.progress_overlay_detail_var = tk.StringVar()
+        self.progress_overlay_anim_index = 0
+        self.progress_overlay_after_id = None
+        self.progress_overlay_running = False
         self.lang_code = self._load_language_config()
         self.language_var = tk.StringVar(
             value=I18N[self.lang_code]["language.en"]
@@ -2409,6 +3143,11 @@ class LLMBenchmarkApp:
         self._i18n_widgets = []
         self._i18n_callbacks = []
         init_db()
+        # Initialize result DB and seed default profiles (non-blocking, best-effort)
+        try:
+            _init_result_db(RESULT_DB_PATH)
+        except Exception:
+            pass
         self._setup_styles()
         self._build_header()
         self._build_body()
@@ -2678,10 +3417,13 @@ class LLMBenchmarkApp:
         self.nb.add(self.bench_frame, text="  基准测试  ")
         self.nb.add(self.sweep_frame, text="  并发扫测  ")
         self.nb.add(self.history_frame, text="  历史记录  ")
+        self.env_profiles_frame = tk.Frame(self.nb, bg=C_STYLE["bg_main"])
+        self.nb.add(self.env_profiles_frame, text="  环境档案  ")
         self._build_settings_tab()
         self._build_results_tab()
         self._build_sweep_tab()
         self._build_history_tab()
+        self._build_env_profiles_tab()
     def _build_settings_tab(self):
         sf = self.settings_frame
         sf.grid_columnconfigure(0, weight=1)
@@ -2710,6 +3452,26 @@ class LLMBenchmarkApp:
 
         col = tk.Frame(inner, bg=C_STYLE["bg_main"])
         col.pack(fill=tk.X, padx=C_STYLE["pad_lg"], pady=C_STYLE["pad_lg"])
+
+        # ── Environment selector (top of settings) ──
+        env_card = tk.Frame(col, bg=C_STYLE["bg_card"],
+                            highlightbackground=C_STYLE["border"],
+                            highlightthickness=1, bd=0)
+        env_card.pack(fill=tk.X, pady=(0, C_STYLE["gap_lg"]))
+        env_inner = tk.Frame(env_card, bg=C_STYLE["bg_card"])
+        env_inner.pack(fill=tk.X, padx=C_STYLE["pad_lg"], pady=C_STYLE["pad_md"])
+        tk.Label(env_inner, text=self.tr("env.selector_label"),
+                 font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["text_primary"]).pack(side=tk.LEFT,
+                 padx=(0, C_STYLE["pad_sm"]))
+        self.env_profile_var = tk.StringVar(value="")
+        self._env_profile_cb = ttk.Combobox(env_inner, textvariable=self.env_profile_var,
+                                             values=[], width=30, state="readonly")
+        self._env_profile_cb.pack(side=tk.LEFT)
+        ttk.Button(env_inner, text=self.tr("env.manage_btn"),
+                   style="Secondary.TButton",
+                   command=lambda: self.nb.select(self.env_profiles_frame)
+                   ).pack(side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
 
         card_a = SectionCard(col, "API 配置", collapsible=True, expanded=True)
         card_a.pack(fill=tk.X, pady=(0, C_STYLE["gap_lg"]))
@@ -3174,6 +3936,127 @@ class LLMBenchmarkApp:
         msg = self.tr("status.idle") if status_text == "空闲" else status_text
         self._stop_status_animation(success=True, message=msg)
     # ── end lightweight status animation ──
+
+    # ── progress overlay ──────────────────────────────────────────────────────
+    def _show_progress_overlay(self, run_type: str):
+        """Create and display the non-modal progress overlay.
+        Must only be called on the main (Tk) thread."""
+        # Destroy any lingering overlay first
+        if self.progress_overlay is not None:
+            try:
+                self.progress_overlay.destroy()
+            except Exception:
+                pass
+            self.progress_overlay = None
+
+        title_key = (
+            "progress.benchmarking" if run_type == "benchmark"
+            else "progress.sweeping"
+        )
+        title_text = self.tr(title_key)
+
+        ov = tk.Toplevel(self.root)
+        ov.title("JISUMAN LLM Benchmark")
+        ov.transient(self.root)          # child of main window
+        ov.resizable(False, False)
+        ov.configure(bg=C_STYLE["bg_card"],
+                     highlightbackground=C_STYLE["border"],
+                     highlightthickness=1)
+        # Disable the close button so it cannot be closed mid-run
+        ov.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        # Size and center over main window
+        W, H = 460, 120
+        self.root.update_idletasks()
+        rx = self.root.winfo_x()
+        ry = self.root.winfo_y()
+        rw = self.root.winfo_width()
+        rh = self.root.winfo_height()
+        x = rx + (rw - W) // 2
+        y = ry + (rh - H) // 2
+        ov.geometry(f"{W}x{H}+{x}+{y}")
+
+        # ── content ──
+        frame = tk.Frame(ov, bg=C_STYLE["bg_card"])
+        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=12)
+
+        lbl_title = tk.Label(
+            frame,
+            text=title_text,
+            font=(FONT_FAMILY, 13, "bold"),
+            bg=C_STYLE["bg_card"],
+            fg=C_STYLE["text_primary"],
+            anchor="w",
+        )
+        lbl_title.pack(fill=tk.X)
+
+        self.progress_overlay_detail_var.set(self.tr("progress.preparing"))
+        lbl_detail = tk.Label(
+            frame,
+            textvariable=self.progress_overlay_detail_var,
+            font=(FONT_FAMILY, 11),
+            bg=C_STYLE["bg_card"],
+            fg=C_STYLE["text_secondary"],
+            anchor="w",
+        )
+        lbl_detail.pack(fill=tk.X, pady=(2, 8))
+        self.progress_overlay_label = lbl_detail
+
+        # Indeterminate progress bar — lightweight, native, no per-token redraw
+        pb = ttk.Progressbar(frame, mode="indeterminate", length=420)
+        pb.pack(fill=tk.X)
+        pb.start(150)  # step every 150 ms
+        self.progress_overlay_canvas = pb  # store reference for stop/destroy
+
+        self.progress_overlay = ov
+        self.progress_overlay_running = True
+
+    def _hide_progress_overlay(self):
+        """Close the progress overlay and release resources.
+        Must only be called on the main (Tk) thread."""
+        self.progress_overlay_running = False
+        # Cancel any pending after callbacks
+        if self.progress_overlay_after_id is not None:
+            try:
+                self.root.after_cancel(self.progress_overlay_after_id)
+            except Exception:
+                pass
+            self.progress_overlay_after_id = None
+        # Stop the indeterminate progressbar
+        if self.progress_overlay_canvas is not None:
+            try:
+                self.progress_overlay_canvas.stop()
+            except Exception:
+                pass
+            self.progress_overlay_canvas = None
+        # Destroy the Toplevel
+        if self.progress_overlay is not None:
+            try:
+                self.progress_overlay.destroy()
+            except Exception:
+                pass
+            self.progress_overlay = None
+        self.progress_overlay_label = None
+
+    def _update_progress_overlay(self, detail: str | None = None):
+        """Update the overlay detail line.  Must only be called on main thread."""
+        if not self.progress_overlay_running:
+            return
+        if detail is not None:
+            try:
+                self.progress_overlay_detail_var.set(detail)
+            except Exception:
+                pass
+
+    def _animate_progress_overlay(self):
+        """Reserved animation tick.
+        No-op: ttk.Progressbar(indeterminate) self-animates via start()."""
+        pass
+
+    def _safe_set_progress_overlay_detail(self, detail: str):
+        """Thread-safe helper: schedule a detail update on the main thread."""
+        self.root.after(0, lambda d=detail: self._update_progress_overlay(d))
+    # ── end progress overlay ──────────────────────────────────────────────────
 
     def _format_elapsed(self) -> str:
         if self._run_started_at is None:
@@ -3768,6 +4651,7 @@ class LLMBenchmarkApp:
         if not self._begin_run("benchmark"):
             self._show_run_busy("benchmark")
             return
+        self._show_progress_overlay("benchmark")
         self._start_status_animation(phase="benchmark", total=total)
         self._action_status.config(text="准备开始...")
         self._reset_indicators()
@@ -3809,6 +4693,7 @@ class LLMBenchmarkApp:
             self.root.after(0, lambda err=str(e): self.status_label.config(
                 text=f"{self.tr('status.failed')}: {err}"))
         finally:
+            self.root.after(0, self._hide_progress_overlay)
             self.root.after(0, lambda: self._end_run("benchmark"))
 
     def _run_preflight_and_benchmark(self, api_url, api_key, model, messages,
@@ -3922,6 +4807,7 @@ class LLMBenchmarkApp:
         self._action_status.config(
             text=f"测试中 — {completed}/{total} · fail={fail} · {elapsed}")
         self._set_indicator("benchmark", "checking", f"{completed}/{total}")
+        self._update_progress_overlay(f"{completed} / {total} · fail={fail} · {elapsed}")
     def _on_done(self, summary: dict):
         self.root.after(0, lambda: self._show_results(summary))
     def _show_results(self, summary: dict):
@@ -3993,6 +4879,45 @@ class LLMBenchmarkApp:
             if DEBUG_MODE:
                 logging.warning("save to db failed: %s", e)
         report = self._generate_report(summary)
+        env_info = self._get_active_env_info()
+        env_summary = self._format_env_summary(env_info)
+        report = env_summary + report
+        # Save to result DB
+        try:
+            db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+            results_root = getattr(self, "results_root_var", tk.StringVar(value=RESULTS_ROOT)).get() or RESULTS_ROOT
+            hw = env_info.get("hw", {})
+            sw = env_info.get("sw", {})
+            gpu_slug = _make_slug(hw.get("gpu_model") or hw.get("gpu_model_custom") or "unknown")
+            gpu_count = hw.get("gpu_count") or hw.get("gpu_count_custom") or "1"
+            backend_slug = _make_slug(sw.get("backend") or sw.get("backend_custom") or "unknown")
+            model_slug = _make_slug(summary.get("model", "unknown"))
+            conc = summary.get("concurrency", 0)
+            total = summary.get("total", 0)
+            mt = summary.get("max_tokens", 0)
+            mode = summary.get("output_length_mode", "normal")
+            params_slug = f"C{conc}-N{total}__out{mt}-{_make_slug(mode)}"
+            run_dir = _make_run_dir(results_root, "single", model_slug, backend_slug,
+                                    gpu_slug, str(gpu_count), params_slug)
+            _result_db_save_benchmark_run(
+                db_path, summary,
+                env_info.get("env_profile_id"),
+                env_info.get("hw_profile_id"),
+                env_info.get("sw_profile_id"),
+                env_info.get("model_profile_id"),
+                run_dir,
+                snapshots=env_info.get("snapshots", {}))
+            # Save report to run_dir
+            if self.save_report_var.get() == "是":
+                try:
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    report_path = os.path.join(run_dir, f"report_{ts}.txt")
+                    with open(report_path, "w", encoding="utf-8") as f:
+                        f.write(report)
+                except Exception:
+                    pass
+        except Exception as e:
+            logging.warning("result DB save failed: %s", e)
         fail_detail = summary.get("fail_detail", [])
         if fail_detail:
             error_summary, advice = self._analyze_failures(fail_detail)
@@ -4568,20 +5493,19 @@ class LLMBenchmarkApp:
         table_card.grid(row=1, column=0, sticky="nsew")
         table_card.grid_columnconfigure(0, weight=1)
         table_card.grid_rowconfigure(0, weight=1)
-        cols = ("id", "Time", "Type", "Model", "Config", "Key Result", "Status")
+        cols = ("id", "Time", "Type", "Model", "Environment",
+                "GPU", "Backend", "Quant", "Config", "Output TPS", "TTFT P95", "E2E P95", "Status")
         self.hist_tree = ttk.Treeview(table_card, columns=cols,
                                       show="headings", selectmode="browse",
                                       style="App.Treeview")
+        col_widths = {
+            "id": 35, "Time": 130, "Type": 65, "Model": 120,
+            "Environment": 160, "GPU": 100, "Backend": 75, "Quant": 55,
+            "Config": 120, "Output TPS": 90, "TTFT P95": 80, "E2E P95": 80, "Status": 80,
+        }
         for c in cols:
             self.hist_tree.heading(c, text=c)
-            self.hist_tree.column(c, width=80, anchor="center")
-        self.hist_tree.column("id", width=40)
-        self.hist_tree.column("Time", width=140)
-        self.hist_tree.column("Type", width=80)
-        self.hist_tree.column("Model", width=120)
-        self.hist_tree.column("Config", width=220)
-        self.hist_tree.column("Key Result", width=300)
-        self.hist_tree.column("Status", width=100)
+            self.hist_tree.column(c, width=col_widths.get(c, 80), anchor="center")
         scrollbar = ttk.Scrollbar(table_card, orient=tk.VERTICAL,
                                   command=self.hist_tree.yview)
         self.hist_tree.configure(yscrollcommand=scrollbar.set)
@@ -4631,6 +5555,841 @@ class LLMBenchmarkApp:
                 self.hist_tree.heading(col, text=self.tr(key))
             except Exception:
                 pass
+
+    def _build_env_profiles_tab(self):
+        """Build the Environment Profiles tab with 4 sub-tabs."""
+        epf = self.env_profiles_frame
+        epf.configure(bg=C_STYLE["bg_main"])
+        epf.grid_rowconfigure(0, weight=1)
+        epf.grid_columnconfigure(0, weight=1)
+
+        sub_nb = ttk.Notebook(epf)
+        sub_nb.grid(row=0, column=0, sticky="nsew",
+                    padx=C_STYLE["pad_lg"], pady=C_STYLE["pad_lg"])
+
+        self._hw_frame = tk.Frame(sub_nb, bg=C_STYLE["bg_main"])
+        self._sw_frame = tk.Frame(sub_nb, bg=C_STYLE["bg_main"])
+        self._model_frame = tk.Frame(sub_nb, bg=C_STYLE["bg_main"])
+        self._env_frame = tk.Frame(sub_nb, bg=C_STYLE["bg_main"])
+        self._db_frame = tk.Frame(sub_nb, bg=C_STYLE["bg_main"])
+
+        sub_nb.add(self._hw_frame, text="  硬件环境  ")
+        sub_nb.add(self._sw_frame, text="  软件栈  ")
+        sub_nb.add(self._model_frame, text="  模型部署  ")
+        sub_nb.add(self._env_frame, text="  环境档案  ")
+        sub_nb.add(self._db_frame, text="  数据库设置  ")
+
+        self._build_hw_profiles_sub(self._hw_frame)
+        self._build_sw_profiles_sub(self._sw_frame)
+        self._build_model_profiles_sub(self._model_frame)
+        self._build_env_sub(self._env_frame)
+        self._build_db_settings_sub(self._db_frame)
+
+    def _profile_panel(self, parent, list_var_name: str, on_new, on_duplicate,
+                       on_save, on_delete, on_select):
+        """Build a standard left-panel (list + CRUD buttons) for profile tabs.
+        Returns (list_frame, listbox, scrollbar) so caller can populate it."""
+        parent.grid_rowconfigure(0, weight=1)
+        parent.grid_columnconfigure(0, weight=0)  # left panel fixed width
+        parent.grid_columnconfigure(1, weight=1)  # right panel expands
+
+        # Left panel
+        left = tk.Frame(parent, bg=C_STYLE["bg_card"],
+                        highlightbackground=C_STYLE["border"],
+                        highlightthickness=1, bd=0, width=200)
+        left.grid(row=0, column=0, sticky="nsew",
+                  padx=(0, C_STYLE["gap_md"]), pady=0)
+        left.grid_propagate(False)
+        left.grid_rowconfigure(0, weight=1)
+        left.grid_columnconfigure(0, weight=1)
+
+        lb_frame = tk.Frame(left, bg=C_STYLE["bg_card"])
+        lb_frame.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+        lb_frame.grid_rowconfigure(0, weight=1)
+        lb_frame.grid_columnconfigure(0, weight=1)
+
+        lb = tk.Listbox(lb_frame, font=C_STYLE["font_body"],
+                        bg=C_STYLE["bg_input"], fg=C_STYLE["text_primary"],
+                        selectbackground=C_STYLE["accent"],
+                        selectforeground=C_STYLE["text_inverse"],
+                        relief=tk.FLAT, highlightthickness=0,
+                        activestyle="none")
+        lb.grid(row=0, column=0, sticky="nsew")
+        lb_scroll = ttk.Scrollbar(lb_frame, orient=tk.VERTICAL, command=lb.yview)
+        lb.configure(yscrollcommand=lb_scroll.set)
+        lb_scroll.grid(row=0, column=1, sticky="ns")
+        lb.bind("<<ListboxSelect>>", on_select)
+
+        btn_frame = tk.Frame(left, bg=C_STYLE["bg_card"])
+        btn_frame.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 4))
+        for text, cmd in [("新建", on_new), ("复制", on_duplicate),
+                          ("保存", on_save), ("删除", on_delete)]:
+            ttk.Button(btn_frame, text=text, style="Secondary.TButton",
+                       command=cmd).pack(fill=tk.X, pady=1)
+
+        return left, lb
+
+    def _preset_row(self, parent, label: str, row: int, var_name_preset: str,
+                    var_name_custom: str, values: list, result_dict: dict):
+        """Build a label + combobox + optional custom entry row.
+        Stores tk vars in result_dict[var_name_preset] and result_dict[var_name_custom]."""
+        tk.Label(parent, text=label, font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"],
+                 anchor="w", width=18).grid(row=row, column=0, sticky="w",
+                 padx=(0, C_STYLE["pad_sm"]), pady=2)
+        pv = tk.StringVar()
+        cv = tk.StringVar()
+        result_dict[var_name_preset] = pv
+        result_dict[var_name_custom] = cv
+        cb = ttk.Combobox(parent, textvariable=pv,
+                          values=values + ["其它"], width=20, state="readonly")
+        cb.grid(row=row, column=1, sticky="w", pady=2)
+        custom_entry = ttk.Entry(parent, textvariable=cv, width=20)
+
+        def _on_preset_change(e=None):
+            if pv.get() == "其它":
+                custom_entry.grid(row=row, column=2, padx=(4, 0), pady=2)
+            else:
+                custom_entry.grid_remove()
+
+        cb.bind("<<ComboboxSelected>>", _on_preset_change)
+
+    def _text_row(self, parent, label: str, row: int, var_name: str,
+                  result_dict: dict, width: int = 30):
+        """Build a label + entry row. Stores tk.StringVar in result_dict[var_name]."""
+        tk.Label(parent, text=label, font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"],
+                 anchor="w", width=18).grid(row=row, column=0, sticky="w",
+                 padx=(0, C_STYLE["pad_sm"]), pady=2)
+        v = tk.StringVar()
+        result_dict[var_name] = v
+        ttk.Entry(parent, textvariable=v, width=width).grid(
+            row=row, column=1, columnspan=2, sticky="w", pady=2)
+
+    def _build_hw_profiles_sub(self, parent):
+        """Hardware profiles sub-tab."""
+        GPU_MODELS = ["RTX 4090", "RTX 5090", "RTX PRO 6000 Blackwell",
+                      "L40S", "A100", "H100", "H200", "B200", "GB10 / DGX Spark"]
+        GPU_COUNTS = ["1", "2", "4", "8"]
+        NETWORKS = ["PCIe Single Node", "NVLink", "Ethernet 10G", "Ethernet 25G",
+                    "Ethernet 100G", "RoCE 100G", "RoCE 200G",
+                    "InfiniBand 200G", "InfiniBand 400G"]
+        STORAGES = ["SATA SSD", "NVMe SSD", "RAID NVMe", "NAS"]
+
+        self._hw_vars = {}
+        self._hw_profiles_data = []
+        self._hw_current_id = None
+
+        parent.grid_rowconfigure(0, weight=1)
+        parent.grid_columnconfigure(0, weight=0)
+        parent.grid_columnconfigure(1, weight=1)
+
+        # Left panel
+        left_panel, hw_lb = self._profile_panel(
+            parent, "_hw_lb",
+            on_new=lambda: self._hw_profile_new(),
+            on_duplicate=lambda: self._hw_profile_duplicate(),
+            on_save=lambda: self._hw_profile_save(),
+            on_delete=lambda: self._hw_profile_delete(),
+            on_select=lambda e: self._hw_profile_select(hw_lb))
+        self._hw_lb = hw_lb
+
+        # Right panel (scrollable form)
+        right = ScrollableFrame(parent, bg=C_STYLE["bg_main"])
+        right.grid(row=0, column=1, sticky="nsew")
+        form = right.content
+        form.configure(bg=C_STYLE["bg_card"],
+                       highlightbackground=C_STYLE["border"],
+                       highlightthickness=1)
+        form.columnconfigure(1, weight=1)
+        form.columnconfigure(2, weight=1)
+
+        pad = {"padx": C_STYLE["pad_lg"], "pady": C_STYLE["pad_md"]}
+        inner = tk.Frame(form, bg=C_STYLE["bg_card"])
+        inner.pack(fill=tk.BOTH, expand=True, **pad)
+        inner.columnconfigure(1, weight=1)
+        inner.columnconfigure(2, weight=1)
+
+        r = 0
+        self._text_row(inner, "档案名称 *", r, "profile_name", self._hw_vars); r += 1
+        self._text_row(inner, "主机名", r, "hostname", self._hw_vars); r += 1
+        self._text_row(inner, "IP 地址", r, "ip_address", self._hw_vars); r += 1
+        self._text_row(inner, "CPU 型号", r, "cpu_model", self._hw_vars); r += 1
+        self._text_row(inner, "内存 (GB)", r, "memory_gb", self._hw_vars, width=10); r += 1
+        self._preset_row(inner, "GPU 型号", r, "gpu_model", "gpu_model_custom",
+                         GPU_MODELS, self._hw_vars); r += 1
+        self._preset_row(inner, "GPU 数量", r, "gpu_count", "gpu_count_custom",
+                         GPU_COUNTS, self._hw_vars); r += 1
+        self._preset_row(inner, "互联 / 网络", r, "network_type", "network_type_custom",
+                         NETWORKS, self._hw_vars); r += 1
+        self._preset_row(inner, "存储类型", r, "storage_type", "storage_type_custom",
+                         STORAGES, self._hw_vars); r += 1
+        self._text_row(inner, "备注", r, "notes", self._hw_vars, width=40); r += 1
+
+        self._hw_profile_refresh()
+
+    def _hw_profile_refresh(self):
+        db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+        self._hw_profiles_data = _result_db_get_all_profiles(db_path, "hardware_profiles")
+        if hasattr(self, "_hw_lb"):
+            self._hw_lb.delete(0, tk.END)
+            for p in self._hw_profiles_data:
+                self._hw_lb.insert(tk.END, p.get("profile_name", f"#{p['id']}"))
+        self._refresh_env_dropdowns()
+
+    def _hw_profile_select(self, lb):
+        sel = lb.curselection()
+        if not sel:
+            return
+        p = self._hw_profiles_data[sel[0]]
+        self._hw_current_id = p["id"]
+        for k, v in self._hw_vars.items():
+            if isinstance(v, tk.StringVar):
+                v.set(str(p.get(k, "") or ""))
+
+    def _hw_profile_new(self):
+        self._hw_current_id = None
+        for v in self._hw_vars.values():
+            if isinstance(v, tk.StringVar):
+                v.set("")
+
+    def _hw_profile_duplicate(self):
+        sel = self._hw_lb.curselection()
+        if not sel:
+            return
+        p = dict(self._hw_profiles_data[sel[0]])
+        p.pop("id", None)
+        p["profile_name"] = p.get("profile_name", "") + " (复制)"
+        self._hw_current_id = None
+        for k, v in self._hw_vars.items():
+            if isinstance(v, tk.StringVar):
+                v.set(str(p.get(k, "") or ""))
+
+    def _hw_profile_save(self):
+        db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+        data = {k: (v.get() if isinstance(v, tk.StringVar) else "")
+                for k, v in self._hw_vars.items()}
+        data["id"] = self._hw_current_id
+        pid = _result_db_save_profile(db_path, "hardware_profiles", data)
+        if pid:
+            self._hw_current_id = pid
+        self._hw_profile_refresh()
+
+    def _hw_profile_delete(self):
+        if not self._hw_current_id:
+            return
+        if messagebox.askyesno(self.tr("msg.confirm"), self.tr("env.confirm_delete")):
+            db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+            _result_db_delete_profile(db_path, "hardware_profiles", self._hw_current_id)
+            self._hw_current_id = None
+            self._hw_profile_refresh()
+
+    def _build_sw_profiles_sub(self, parent):
+        """Software stack profiles sub-tab."""
+        BACKENDS = ["vLLM", "SGLang", "TensorRT-LLM", "llama.cpp", "Ollama", "TGI", "LMDeploy"]
+        API_TYPES = ["OpenAI-compatible Chat Completions", "OpenAI-compatible Completions",
+                     "Native API"]
+        DEPLOYMENT_TYPES = ["Docker", "Docker Compose", "Bare Metal", "Kubernetes", "systemd"]
+        PARSERS = ["none", "deepseek-r1", "qwen3", "granite"]
+
+        self._sw_vars = {}
+        self._sw_profiles_data = []
+        self._sw_current_id = None
+
+        parent.grid_rowconfigure(0, weight=1)
+        parent.grid_columnconfigure(0, weight=0)
+        parent.grid_columnconfigure(1, weight=1)
+
+        left_panel, sw_lb = self._profile_panel(
+            parent, "_sw_lb",
+            on_new=lambda: self._sw_profile_new(),
+            on_duplicate=lambda: self._sw_profile_duplicate(),
+            on_save=lambda: self._sw_profile_save(),
+            on_delete=lambda: self._sw_profile_delete(),
+            on_select=lambda e: self._sw_profile_select(sw_lb))
+        self._sw_lb = sw_lb
+
+        right = ScrollableFrame(parent, bg=C_STYLE["bg_main"])
+        right.grid(row=0, column=1, sticky="nsew")
+        inner = tk.Frame(right.content, bg=C_STYLE["bg_card"],
+                         highlightbackground=C_STYLE["border"],
+                         highlightthickness=1)
+        inner.pack(fill=tk.BOTH, expand=True,
+                   padx=C_STYLE["pad_lg"], pady=C_STYLE["pad_md"])
+        inner.columnconfigure(1, weight=1)
+        inner.columnconfigure(2, weight=1)
+
+        r = 0
+        self._text_row(inner, "档案名称 *", r, "profile_name", self._sw_vars); r += 1
+        self._preset_row(inner, "推理后端", r, "backend", "backend_custom",
+                         BACKENDS, self._sw_vars); r += 1
+        self._text_row(inner, "后端版本", r, "backend_version", self._sw_vars); r += 1
+        self._preset_row(inner, "API 类型", r, "api_type", "api_type_custom",
+                         API_TYPES, self._sw_vars); r += 1
+        self._preset_row(inner, "部署方式", r, "deployment_type", "deployment_type_custom",
+                         DEPLOYMENT_TYPES, self._sw_vars); r += 1
+        self._preset_row(inner, "Reasoning Parser", r, "reasoning_parser",
+                         "reasoning_parser_custom", PARSERS, self._sw_vars); r += 1
+        self._text_row(inner, "API URL", r, "api_url", self._sw_vars); r += 1
+        self._text_row(inner, "容器镜像", r, "container_image", self._sw_vars); r += 1
+        self._text_row(inner, "Python 版本", r, "python_version", self._sw_vars, width=15); r += 1
+        self._text_row(inner, "启动参数", r, "startup_args", self._sw_vars, width=40); r += 1
+        self._text_row(inner, "备注", r, "notes", self._sw_vars, width=40); r += 1
+
+        self._sw_profile_refresh()
+
+    def _sw_profile_refresh(self):
+        db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+        self._sw_profiles_data = _result_db_get_all_profiles(db_path, "software_stack_profiles")
+        if hasattr(self, "_sw_lb"):
+            self._sw_lb.delete(0, tk.END)
+            for p in self._sw_profiles_data:
+                self._sw_lb.insert(tk.END, p.get("profile_name", f"#{p['id']}"))
+        self._refresh_env_dropdowns()
+
+    def _sw_profile_select(self, lb):
+        sel = lb.curselection()
+        if not sel:
+            return
+        p = self._sw_profiles_data[sel[0]]
+        self._sw_current_id = p["id"]
+        for k, v in self._sw_vars.items():
+            if isinstance(v, tk.StringVar):
+                v.set(str(p.get(k, "") or ""))
+
+    def _sw_profile_new(self):
+        self._sw_current_id = None
+        for v in self._sw_vars.values():
+            if isinstance(v, tk.StringVar):
+                v.set("")
+
+    def _sw_profile_duplicate(self):
+        sel = self._sw_lb.curselection()
+        if not sel:
+            return
+        p = dict(self._sw_profiles_data[sel[0]])
+        p.pop("id", None)
+        p["profile_name"] = p.get("profile_name", "") + " (复制)"
+        self._sw_current_id = None
+        for k, v in self._sw_vars.items():
+            if isinstance(v, tk.StringVar):
+                v.set(str(p.get(k, "") or ""))
+
+    def _sw_profile_save(self):
+        db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+        data = {k: (v.get() if isinstance(v, tk.StringVar) else "")
+                for k, v in self._sw_vars.items()}
+        data["id"] = self._sw_current_id
+        pid = _result_db_save_profile(db_path, "software_stack_profiles", data)
+        if pid:
+            self._sw_current_id = pid
+        self._sw_profile_refresh()
+
+    def _sw_profile_delete(self):
+        if not self._sw_current_id:
+            return
+        if messagebox.askyesno(self.tr("msg.confirm"), self.tr("env.confirm_delete")):
+            db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+            _result_db_delete_profile(db_path, "software_stack_profiles", self._sw_current_id)
+            self._sw_current_id = None
+            self._sw_profile_refresh()
+
+    def _build_model_profiles_sub(self, parent):
+        """Model deployment profiles sub-tab."""
+        FAMILIES = ["Qwen", "DeepSeek", "Llama", "Mixtral", "Yi", "GLM",
+                    "Kimi", "InternLM"]
+        SIZES = ["7B", "14B", "27B", "32B", "70B", "72B", "122B", "671B"]
+        QUANTS = ["BF16", "FP16", "FP8", "NVFP4", "INT8", "INT4",
+                  "AWQ", "GPTQ", "GGUF"]
+        TYPES = ["Chat", "Instruct", "Reasoning", "Coder", "MoE", "Base"]
+
+        self._model_vars = {}
+        self._model_profiles_data = []
+        self._model_current_id = None
+
+        parent.grid_rowconfigure(0, weight=1)
+        parent.grid_columnconfigure(0, weight=0)
+        parent.grid_columnconfigure(1, weight=1)
+
+        left_panel, model_lb = self._profile_panel(
+            parent, "_model_lb",
+            on_new=lambda: self._model_profile_new(),
+            on_duplicate=lambda: self._model_profile_duplicate(),
+            on_save=lambda: self._model_profile_save(),
+            on_delete=lambda: self._model_profile_delete(),
+            on_select=lambda e: self._model_profile_select(model_lb))
+        self._model_lb = model_lb
+
+        right = ScrollableFrame(parent, bg=C_STYLE["bg_main"])
+        right.grid(row=0, column=1, sticky="nsew")
+        inner = tk.Frame(right.content, bg=C_STYLE["bg_card"],
+                         highlightbackground=C_STYLE["border"],
+                         highlightthickness=1)
+        inner.pack(fill=tk.BOTH, expand=True,
+                   padx=C_STYLE["pad_lg"], pady=C_STYLE["pad_md"])
+        inner.columnconfigure(1, weight=1)
+        inner.columnconfigure(2, weight=1)
+
+        r = 0
+        self._text_row(inner, "档案名称 *", r, "profile_name", self._model_vars); r += 1
+        self._text_row(inner, "显示名称", r, "display_name", self._model_vars); r += 1
+        self._text_row(inner, "API 模型名", r, "api_model_name", self._model_vars); r += 1
+        self._text_row(inner, "模型路径", r, "model_path", self._model_vars, width=40); r += 1
+        self._preset_row(inner, "模型系列", r, "model_family", "model_family_custom",
+                         FAMILIES, self._model_vars); r += 1
+        self._preset_row(inner, "参数量", r, "model_size", "model_size_custom",
+                         SIZES, self._model_vars); r += 1
+        self._preset_row(inner, "精度 / 量化", r, "quantization", "quantization_custom",
+                         QUANTS, self._model_vars); r += 1
+        self._preset_row(inner, "模型类型", r, "model_type", "model_type_custom",
+                         TYPES, self._model_vars); r += 1
+        self._text_row(inner, "上下文长度", r, "context_length", self._model_vars, width=10); r += 1
+        self._text_row(inner, "Tensor Parallel", r, "tensor_parallel", self._model_vars, width=5); r += 1
+        self._text_row(inner, "Pipeline Parallel", r, "pipeline_parallel", self._model_vars, width=5); r += 1
+        self._text_row(inner, "Data Parallel", r, "data_parallel", self._model_vars, width=5); r += 1
+        self._text_row(inner, "备注", r, "notes", self._model_vars, width=40); r += 1
+
+        self._model_profile_refresh()
+
+    def _model_profile_refresh(self):
+        db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+        self._model_profiles_data = _result_db_get_all_profiles(db_path, "model_profiles")
+        if hasattr(self, "_model_lb"):
+            self._model_lb.delete(0, tk.END)
+            for p in self._model_profiles_data:
+                self._model_lb.insert(tk.END, p.get("profile_name", f"#{p['id']}"))
+        self._refresh_env_dropdowns()
+
+    def _model_profile_select(self, lb):
+        sel = lb.curselection()
+        if not sel:
+            return
+        p = self._model_profiles_data[sel[0]]
+        self._model_current_id = p["id"]
+        for k, v in self._model_vars.items():
+            if isinstance(v, tk.StringVar):
+                v.set(str(p.get(k, "") or ""))
+
+    def _model_profile_new(self):
+        self._model_current_id = None
+        for v in self._model_vars.values():
+            if isinstance(v, tk.StringVar):
+                v.set("")
+
+    def _model_profile_duplicate(self):
+        sel = self._model_lb.curselection()
+        if not sel:
+            return
+        p = dict(self._model_profiles_data[sel[0]])
+        p.pop("id", None)
+        p["profile_name"] = p.get("profile_name", "") + " (复制)"
+        self._model_current_id = None
+        for k, v in self._model_vars.items():
+            if isinstance(v, tk.StringVar):
+                v.set(str(p.get(k, "") or ""))
+
+    def _model_profile_save(self):
+        db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+        data = {k: (v.get() if isinstance(v, tk.StringVar) else "")
+                for k, v in self._model_vars.items()}
+        data["id"] = self._model_current_id
+        pid = _result_db_save_profile(db_path, "model_profiles", data)
+        if pid:
+            self._model_current_id = pid
+        self._model_profile_refresh()
+
+    def _model_profile_delete(self):
+        if not self._model_current_id:
+            return
+        if messagebox.askyesno(self.tr("msg.confirm"), self.tr("env.confirm_delete")):
+            db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+            _result_db_delete_profile(db_path, "model_profiles", self._model_current_id)
+            self._model_current_id = None
+            self._model_profile_refresh()
+
+    def _build_env_sub(self, parent):
+        """Environment profiles (linking HW + SW + Model) sub-tab."""
+        self._env_vars = {}
+        self._env_profiles_data = []
+        self._env_current_id = None
+
+        parent.grid_rowconfigure(0, weight=1)
+        parent.grid_columnconfigure(0, weight=0)
+        parent.grid_columnconfigure(1, weight=1)
+
+        left_panel, env_lb = self._profile_panel(
+            parent, "_env_lb",
+            on_new=lambda: self._env_profile_new(),
+            on_duplicate=lambda: self._env_profile_duplicate(),
+            on_save=lambda: self._env_profile_save(),
+            on_delete=lambda: self._env_profile_delete(),
+            on_select=lambda e: self._env_profile_select(env_lb))
+        self._env_lb_widget = env_lb
+
+        right = tk.Frame(parent, bg=C_STYLE["bg_card"],
+                         highlightbackground=C_STYLE["border"],
+                         highlightthickness=1, bd=0)
+        right.grid(row=0, column=1, sticky="nsew")
+        inner = tk.Frame(right, bg=C_STYLE["bg_card"])
+        inner.pack(fill=tk.BOTH, expand=True,
+                   padx=C_STYLE["pad_lg"], pady=C_STYLE["pad_md"])
+        inner.columnconfigure(1, weight=1)
+
+        r = 0
+        self._text_row(inner, "环境名称 *", r, "environment_name", self._env_vars); r += 1
+
+        # Hardware profile selector
+        tk.Label(inner, text="硬件档案", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"],
+                 anchor="w", width=18).grid(row=r, column=0, sticky="w",
+                 padx=(0, C_STYLE["pad_sm"]), pady=2)
+        self._env_hw_var = tk.StringVar()
+        self._env_vars["hw_sel"] = self._env_hw_var
+        self._env_hw_cb = ttk.Combobox(inner, textvariable=self._env_hw_var,
+                                        values=[], width=30, state="readonly")
+        self._env_hw_cb.grid(row=r, column=1, sticky="w", pady=2); r += 1
+
+        # Software stack selector
+        tk.Label(inner, text="软件栈档案", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"],
+                 anchor="w", width=18).grid(row=r, column=0, sticky="w",
+                 padx=(0, C_STYLE["pad_sm"]), pady=2)
+        self._env_sw_var = tk.StringVar()
+        self._env_vars["sw_sel"] = self._env_sw_var
+        self._env_sw_cb = ttk.Combobox(inner, textvariable=self._env_sw_var,
+                                        values=[], width=30, state="readonly")
+        self._env_sw_cb.grid(row=r, column=1, sticky="w", pady=2); r += 1
+
+        # Model selector
+        tk.Label(inner, text="模型档案", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"],
+                 anchor="w", width=18).grid(row=r, column=0, sticky="w",
+                 padx=(0, C_STYLE["pad_sm"]), pady=2)
+        self._env_model_var = tk.StringVar()
+        self._env_vars["model_sel"] = self._env_model_var
+        self._env_model_cb = ttk.Combobox(inner, textvariable=self._env_model_var,
+                                           values=[], width=30, state="readonly")
+        self._env_model_cb.grid(row=r, column=1, sticky="w", pady=2); r += 1
+
+        self._text_row(inner, "备注", r, "notes", self._env_vars, width=40); r += 1
+
+        self._env_profile_refresh()
+
+    def _env_profile_refresh(self):
+        db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+        self._env_profiles_data = _result_db_get_all_profiles(db_path, "environment_profiles")
+        if hasattr(self, "_env_lb_widget"):
+            self._env_lb_widget.delete(0, tk.END)
+            for p in self._env_profiles_data:
+                self._env_lb_widget.insert(tk.END, p.get("environment_name", f"#{p['id']}"))
+        # Update linked dropdowns in env form
+        hw_names = [p.get("profile_name", "") for p in
+                    _result_db_get_all_profiles(db_path, "hardware_profiles")]
+        sw_names = [p.get("profile_name", "") for p in
+                    _result_db_get_all_profiles(db_path, "software_stack_profiles")]
+        model_names = [p.get("profile_name", "") for p in
+                       _result_db_get_all_profiles(db_path, "model_profiles")]
+        if hasattr(self, "_env_hw_cb"):
+            self._env_hw_cb["values"] = [""] + hw_names
+        if hasattr(self, "_env_sw_cb"):
+            self._env_sw_cb["values"] = [""] + sw_names
+        if hasattr(self, "_env_model_cb"):
+            self._env_model_cb["values"] = [""] + model_names
+        # Update main env selector in settings tab
+        self._refresh_env_selector()
+
+    def _env_profile_select(self, lb):
+        sel = lb.curselection()
+        if not sel:
+            return
+        p = self._env_profiles_data[sel[0]]
+        self._env_current_id = p["id"]
+        if "environment_name" in self._env_vars:
+            self._env_vars["environment_name"].set(p.get("environment_name", ""))
+        if "notes" in self._env_vars:
+            self._env_vars["notes"].set(p.get("notes", "") or "")
+        # Set linked profile names by ID
+        db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+        hw_id = p.get("hardware_profile_id")
+        sw_id = p.get("software_stack_profile_id")
+        model_id = p.get("model_profile_id")
+        hw_name = ""
+        sw_name = ""
+        model_name = ""
+        for hw in _result_db_get_all_profiles(db_path, "hardware_profiles"):
+            if hw["id"] == hw_id:
+                hw_name = hw.get("profile_name", "")
+        for sw in _result_db_get_all_profiles(db_path, "software_stack_profiles"):
+            if sw["id"] == sw_id:
+                sw_name = sw.get("profile_name", "")
+        for m in _result_db_get_all_profiles(db_path, "model_profiles"):
+            if m["id"] == model_id:
+                model_name = m.get("profile_name", "")
+        self._env_hw_var.set(hw_name)
+        self._env_sw_var.set(sw_name)
+        self._env_model_var.set(model_name)
+
+    def _env_profile_new(self):
+        self._env_current_id = None
+        for k, v in self._env_vars.items():
+            if isinstance(v, tk.StringVar):
+                v.set("")
+
+    def _env_profile_duplicate(self):
+        sel = self._env_lb_widget.curselection()
+        if not sel:
+            return
+        p = dict(self._env_profiles_data[sel[0]])
+        p.pop("id", None)
+        p["environment_name"] = p.get("environment_name", "") + " (复制)"
+        self._env_current_id = None
+        if "environment_name" in self._env_vars:
+            self._env_vars["environment_name"].set(p.get("environment_name", ""))
+
+    def _env_profile_save(self):
+        db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+        env_name = self._env_vars.get("environment_name", tk.StringVar()).get()
+        if not env_name:
+            messagebox.showwarning(self.tr("msg.warning"), "请填写环境名称")
+            return
+        # Resolve HW/SW/Model IDs from selected names
+        hw_name = self._env_hw_var.get()
+        sw_name = self._env_sw_var.get()
+        model_name = self._env_model_var.get()
+        hw_id = next((p["id"] for p in _result_db_get_all_profiles(db_path, "hardware_profiles")
+                      if p.get("profile_name") == hw_name), None)
+        sw_id = next((p["id"] for p in _result_db_get_all_profiles(db_path, "software_stack_profiles")
+                      if p.get("profile_name") == sw_name), None)
+        model_id = next((p["id"] for p in _result_db_get_all_profiles(db_path, "model_profiles")
+                         if p.get("profile_name") == model_name), None)
+        data = {
+            "id": self._env_current_id,
+            "environment_name": env_name,
+            "hardware_profile_id": hw_id,
+            "software_stack_profile_id": sw_id,
+            "model_profile_id": model_id,
+            "notes": self._env_vars.get("notes", tk.StringVar()).get(),
+        }
+        pid = _result_db_save_profile(db_path, "environment_profiles", data)
+        if pid:
+            self._env_current_id = pid
+        self._env_profile_refresh()
+
+    def _env_profile_delete(self):
+        if not self._env_current_id:
+            return
+        if messagebox.askyesno(self.tr("msg.confirm"), self.tr("env.confirm_delete")):
+            db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+            _result_db_delete_profile(db_path, "environment_profiles", self._env_current_id)
+            self._env_current_id = None
+            self._env_profile_refresh()
+
+    def _refresh_env_selector(self):
+        """Update the environment profile combobox in the settings tab.
+        Default is empty (未指定环境); user must explicitly select a profile."""
+        if not hasattr(self, "_env_profile_cb"):
+            return
+        db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+        # Ensure DB + defaults exist on first call
+        if not os.path.exists(db_path):
+            _init_result_db(db_path)
+        profiles = _result_db_get_all_profiles(db_path, "environment_profiles")
+        names = [p.get("environment_name", "") for p in profiles]
+        current = self.env_profile_var.get()
+        self._env_profile_cb["values"] = [""] + names
+        if current in names:
+            pass  # keep current selection
+        else:
+            self.env_profile_var.set("")  # default: unspecified (未指定环境)
+
+    def _refresh_env_dropdowns(self):
+        """Refresh all environment-related dropdowns (called when profiles change)."""
+        try:
+            self._refresh_env_selector()
+        except Exception:
+            pass
+
+    def _get_active_env_info(self) -> dict:
+        """Return info about the currently selected environment profile,
+        including a 'snapshots' dict with human-readable values for DB storage."""
+        db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+        env_name = getattr(self, "env_profile_var", tk.StringVar()).get()
+        result = {
+            "env_name": env_name or "",
+            "env_profile_id": None,
+            "hw_profile_id": None,
+            "sw_profile_id": None,
+            "model_profile_id": None,
+            "hw": {},
+            "sw": {},
+            "model": {},
+            "snapshots": {
+                "env_name": env_name or "未指定环境",
+                "hw_name": "", "sw_name": "", "model_name": "",
+                "gpu_model": "", "gpu_count": "",
+                "backend": "", "backend_version": "",
+                "api_type": "", "deployment_type": "",
+                "reasoning_parser": "",
+                "model_family": "", "model_size": "",
+                "quantization": "", "model_type": "",
+            },
+        }
+        if not env_name:
+            return result
+        profiles = _result_db_get_all_profiles(db_path, "environment_profiles")
+        env = next((p for p in profiles if p.get("environment_name") == env_name), None)
+        if not env:
+            return result
+        result["env_profile_id"] = env["id"]
+        hw_id = env.get("hardware_profile_id")
+        sw_id = env.get("software_stack_profile_id")
+        model_id = env.get("model_profile_id")
+        result["hw_profile_id"] = hw_id
+        result["sw_profile_id"] = sw_id
+        result["model_profile_id"] = model_id
+        if hw_id:
+            hw_list = _result_db_get_all_profiles(db_path, "hardware_profiles")
+            hw = next((p for p in hw_list if p["id"] == hw_id), {})
+            result["hw"] = hw
+            result["snapshots"]["hw_name"]   = hw.get("profile_name", "")
+            result["snapshots"]["gpu_model"] = (hw.get("gpu_model") or
+                                                hw.get("gpu_model_custom") or "")
+            result["snapshots"]["gpu_count"] = (hw.get("gpu_count") or
+                                                hw.get("gpu_count_custom") or "")
+        if sw_id:
+            sw_list = _result_db_get_all_profiles(db_path, "software_stack_profiles")
+            sw = next((p for p in sw_list if p["id"] == sw_id), {})
+            result["sw"] = sw
+            result["snapshots"]["sw_name"]          = sw.get("profile_name", "")
+            result["snapshots"]["backend"]           = (sw.get("backend") or
+                                                        sw.get("backend_custom") or "")
+            result["snapshots"]["backend_version"]   = sw.get("backend_version", "") or ""
+            result["snapshots"]["api_type"]          = (sw.get("api_type") or
+                                                        sw.get("api_type_custom") or "")
+            result["snapshots"]["deployment_type"]   = (sw.get("deployment_type") or
+                                                        sw.get("deployment_type_custom") or "")
+            result["snapshots"]["reasoning_parser"]  = (sw.get("reasoning_parser") or
+                                                        sw.get("reasoning_parser_custom") or "")
+        if model_id:
+            model_list = _result_db_get_all_profiles(db_path, "model_profiles")
+            model = next((p for p in model_list if p["id"] == model_id), {})
+            result["model"] = model
+            result["snapshots"]["model_name"]   = model.get("profile_name", "")
+            result["snapshots"]["model_family"] = (model.get("model_family") or
+                                                   model.get("model_family_custom") or "")
+            result["snapshots"]["model_size"]   = (model.get("model_size") or
+                                                   model.get("model_size_custom") or "")
+            result["snapshots"]["quantization"] = (model.get("quantization") or
+                                                   model.get("quantization_custom") or "")
+            result["snapshots"]["model_type"]   = (model.get("model_type") or
+                                                   model.get("model_type_custom") or "")
+        return result
+
+    def _build_db_settings_sub(self, parent):
+        """Database settings sub-tab."""
+        parent.configure(bg=C_STYLE["bg_main"])
+        card = SectionCard(parent, "数据库设置")
+        card.pack(fill=tk.X, padx=C_STYLE["pad_lg"], pady=C_STYLE["pad_lg"])
+
+        inner = card.content
+        inner.columnconfigure(1, weight=1)
+
+        self.result_db_path_var = tk.StringVar(value=RESULT_DB_PATH)
+        self.results_root_var = tk.StringVar(value=RESULTS_ROOT)
+
+        r = 0
+        tk.Label(inner, text=self.tr("db.path_label"), font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"], anchor="w"
+                 ).grid(row=r, column=0, sticky="w",
+                        padx=(0, C_STYLE["pad_sm"]), pady=C_STYLE["gap_sm"])
+        ttk.Entry(inner, textvariable=self.result_db_path_var, width=50
+                  ).grid(row=r, column=1, sticky="ew",
+                         padx=(0, C_STYLE["pad_sm"]), pady=C_STYLE["gap_sm"]); r += 1
+
+        tk.Label(inner, text=self.tr("db.results_root"), font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"], anchor="w"
+                 ).grid(row=r, column=0, sticky="w",
+                        padx=(0, C_STYLE["pad_sm"]), pady=C_STYLE["gap_sm"])
+        ttk.Entry(inner, textvariable=self.results_root_var, width=50
+                  ).grid(row=r, column=1, sticky="ew",
+                         padx=(0, C_STYLE["pad_sm"]), pady=C_STYLE["gap_sm"]); r += 1
+
+        btn_frame = tk.Frame(inner, bg=C_STYLE["bg_card"])
+        btn_frame.grid(row=r, column=0, columnspan=2, sticky="w",
+                       pady=C_STYLE["gap_md"]); r += 1
+        ttk.Button(btn_frame, text=self.tr("db.init_btn"),
+                   command=self._db_init_action).pack(side=tk.LEFT,
+                   padx=(0, C_STYLE["pad_sm"]))
+        ttk.Button(btn_frame, text=self.tr("db.test_btn"),
+                   command=self._db_test_action).pack(side=tk.LEFT)
+
+        self._db_status_lbl = tk.Label(inner, text="", font=C_STYLE["font_small"],
+                                       bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"])
+        self._db_status_lbl.grid(row=r, column=0, columnspan=2, sticky="w",
+                                 pady=C_STYLE["gap_sm"])
+
+    def _db_init_action(self):
+        db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+        ok = _init_result_db(db_path)
+        msg = self.tr("db.init_ok") if ok else "数据库初始化失败"
+        if hasattr(self, "_db_status_lbl"):
+            self._db_status_lbl.config(text=msg)
+        self._hw_profile_refresh()
+        self._sw_profile_refresh()
+        self._model_profile_refresh()
+        self._env_profile_refresh()
+
+    def _db_test_action(self):
+        db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+        try:
+            _init_result_db(db_path)
+            conn = sqlite3.connect(db_path)
+            conn.execute("SELECT 1 FROM hardware_profiles LIMIT 1")
+            conn.close()
+            msg = self.tr("db.test_ok")
+        except Exception as e:
+            msg = f"{self.tr('db.test_fail')}: {e}"
+        if hasattr(self, "_db_status_lbl"):
+            self._db_status_lbl.config(text=msg)
+
+    def _format_env_summary(self, env_info: dict) -> str:
+        """Format environment info for inclusion in text reports."""
+        lines = []
+        lines.append("  ═══════════ 被测环境 (report_dir) ═══════════")
+        env_name = env_info.get("env_name") or "未指定"
+        lines.append(f"  Environment Profile: {env_name}")
+        hw = env_info.get("hw", {})
+        sw = env_info.get("sw", {})
+        model = env_info.get("model", {})
+        if hw:
+            gpu = hw.get("gpu_model") or hw.get("gpu_model_custom") or "-"
+            gpu_count = hw.get("gpu_count") or hw.get("gpu_count_custom") or "-"
+            lines.append(f"  Hardware: {hw.get('profile_name', '-')}")
+            lines.append(f"  GPU: {gpu}  GPU Count: {gpu_count}")
+        else:
+            lines.append("  Hardware: -")
+        if sw:
+            backend = sw.get("backend") or sw.get("backend_custom") or "-"
+            backend_ver = sw.get("backend_version") or "-"
+            deployment = sw.get("deployment_type") or sw.get("deployment_type_custom") or "-"
+            reasoning_parser = sw.get("reasoning_parser") or sw.get("reasoning_parser_custom") or "-"
+            lines.append(f"  Backend: {backend} {backend_ver}  Deployment: {deployment}")
+            lines.append(f"  Reasoning Parser: {reasoning_parser}")
+        else:
+            lines.append("  Backend: -")
+        if model:
+            quant = model.get("quantization") or model.get("quantization_custom") or "-"
+            mtype = model.get("model_type") or model.get("model_type_custom") or "-"
+            lines.append(f"  Model Profile: {model.get('profile_name', '-')}")
+            lines.append(f"  Quantization: {quant}  Type: {mtype}")
+        else:
+            lines.append("  Model Profile: -")
+        if not env_info.get("env_name"):
+            lines.append(f"  ⚠ 未绑定环境档案，本次结果不建议用于长期横向对比。")
+        lines.append("  " + "─" * 55)
+        lines.append("")
+        return "\n".join(lines) + "\n"
+
     def _build_sweep_tab(self):
         """Build the 并发扫测 (concurrency sweep) tab."""
         sf = self.sweep_frame
@@ -4844,6 +6603,17 @@ class LLMBenchmarkApp:
         try:
             return f"{float(value):.{digits}f}s"
         except Exception:
+            return default
+
+    def _row_get(self, row, key, default=None):
+        """Safely read a field from either a sqlite3.Row or a dict row."""
+        if row is None:
+            return default
+        if isinstance(row, dict):
+            return row.get(key, default)
+        try:
+            return row[key]
+        except (KeyError, IndexError, TypeError):
             return default
 
     def _detail_truncation_warning(self, concurrency, detail_count, success):
@@ -5685,6 +7455,7 @@ class LLMBenchmarkApp:
         if not self._begin_run("sweep"):
             self._show_run_busy("sweep")
             return
+        self._show_progress_overlay("sweep")
         self._set_sweep_running_state(True)
         first_label = f"C={concurrency_levels[0]}" if concurrency_levels else ""
         self._start_status_animation(phase="sweep", total=len(concurrency_levels),
@@ -5720,6 +7491,7 @@ class LLMBenchmarkApp:
             self._append_sweep_status(f"\n✕ 扫测异常: {e}\n")
             self.root.after(0, lambda err=str(e): self._sweep_done(None, err))
         finally:
+            self.root.after(0, self._hide_progress_overlay)
             self.root.after(0, lambda: self._set_sweep_running_state(False))
             self.root.after(0, lambda: self._end_run("sweep"))
 
@@ -5730,6 +7502,7 @@ class LLMBenchmarkApp:
         """Run a concurrency sweep in the current (background) thread."""
         sweep_id = datetime.now().strftime("sweep_%Y%m%d_%H%M%S")
         started_at = datetime.now().isoformat()
+        self.root.after(0, lambda: setattr(self, "_current_sweep_run_dir", ""))
 
         self._append_sweep_status(f"扫测开始 — {sweep_id}\n")
         self._append_sweep_status(f"API: {api_url}\n")
@@ -5766,6 +7539,9 @@ class LLMBenchmarkApp:
                             self._update_status_animation(
                                 completed=i, total=total, fail=fail,
                                 phase="sweep", current_label=f"C={cc}"))
+            self.root.after(0, lambda i=idx, total=total_levels, cc=c, fail=sweep_fail_count:
+                            self._update_progress_overlay(
+                                f"case {i + 1} / {total} · C={cc} · fail={fail} · {self._format_elapsed()}"))
             self._append_sweep_status(
                 f"[{idx + 1}/{total_levels}] 并发={c}, 请求数={num_requests}... ")
 
@@ -5812,6 +7588,9 @@ class LLMBenchmarkApp:
                                 self._update_status_animation(
                                     completed=i, total=total, fail=fail,
                                     phase="sweep", current_label=f"C={cc}"))
+                self.root.after(0, lambda i=idx + 1, total=total_levels, cc=c, fail=sweep_fail_count:
+                                self._update_progress_overlay(
+                                    f"case {i} / {total} · C={cc} · fail={fail} · {self._format_elapsed()}"))
                 self._append_sweep_status(
                     f"✓ success={summary['success']} fail={summary['fail']} "
                     f"E2E_avg={summary['e2e_latency_avg']:.3f}s "
@@ -5822,9 +7601,13 @@ class LLMBenchmarkApp:
                                 self._update_status_animation(
                                     completed=i, total=total, fail=fail,
                                     phase="sweep", current_label=f"C={cc}"))
+                self.root.after(0, lambda i=idx + 1, total=total_levels, cc=c, fail=sweep_fail_count:
+                                self._update_progress_overlay(
+                                    f"case {i} / {total} · C={cc} · fail={fail} · {self._format_elapsed()}"))
                 self._append_sweep_status(f"✕ 未返回结果\n")
 
         finished_at = datetime.now().isoformat()
+        self._safe_set_progress_overlay_detail(self.tr("progress.finishing"))
         analysis_summary = self._generate_analysis_summary(cases)
         sweep_diagnostics = {
             "detail_truncation_notes": self._detect_detail_truncation_notes(cases),
@@ -6002,6 +7785,22 @@ class LLMBenchmarkApp:
 
         # ── Render chart in GUI ──
         self._render_sweep_chart(sweep_result)
+
+        # Save to result DB
+        try:
+            db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+            env_info = self._get_active_env_info()
+            run_dir = getattr(self, "_current_sweep_run_dir", "") or ""
+            _result_db_save_sweep_run(
+                db_path, sweep_result,
+                env_info.get("env_profile_id"),
+                env_info.get("hw_profile_id"),
+                env_info.get("sw_profile_id"),
+                env_info.get("model_profile_id"),
+                run_dir,
+                snapshots=env_info.get("snapshots", {}))
+        except Exception as e:
+            logging.warning("sweep result DB save failed: %s", e)
 
     # ── Matplotlib helpers ──
     @staticmethod
@@ -6241,10 +8040,33 @@ class LLMBenchmarkApp:
         else:
             self.sweep_chart_status_var.set("⚠ 未检测到 CJK 字体，中文图表可能显示异常。")
 
+    def _get_sweep_run_dir(self, sweep_result: dict) -> str:
+        """Get or create the structured run dir for this sweep."""
+        if hasattr(self, "_current_sweep_run_dir") and self._current_sweep_run_dir:
+            return self._current_sweep_run_dir
+        results_root = getattr(self, "results_root_var", tk.StringVar(value=RESULTS_ROOT)).get() or RESULTS_ROOT
+        env_info = self._get_active_env_info()
+        hw = env_info.get("hw", {})
+        sw = env_info.get("sw", {})
+        gpu_slug = _make_slug(hw.get("gpu_model") or hw.get("gpu_model_custom") or "unknown")
+        gpu_count = hw.get("gpu_count") or hw.get("gpu_count_custom") or "1"
+        backend_slug = _make_slug(sw.get("backend") or sw.get("backend_custom") or "unknown")
+        model_slug = _make_slug(sweep_result.get("model", "unknown"))
+        levels = sweep_result.get("concurrency_levels", [])
+        levels_slug = "-".join(f"C{c}" for c in levels) if levels else "unknown"
+        mt = sweep_result.get("fixed_output_tokens") or 0
+        mode = sweep_result.get("output_length_mode", "normal")
+        params_slug = f"sweep__out{mt}-{_make_slug(mode)}__{levels_slug}"
+        run_dir = _make_run_dir(results_root, "sweeps", model_slug, backend_slug,
+                                gpu_slug, str(gpu_count), params_slug)
+        self._current_sweep_run_dir = run_dir
+        return run_dir
+
     def _export_sweep_json(self, sweep_result: dict) -> str:
         """Export sweep result to JSON file. Returns the file path."""
+        run_dir = self._get_sweep_run_dir(sweep_result)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        json_path = os.path.join(_SCRIPT_DIR, f"sweep_result_{ts}.json")
+        json_path = os.path.join(run_dir, f"result_{ts}.json")
         try:
             with open(json_path, "w", encoding="utf-8") as f:
                 json.dump(sweep_result, f, indent=2, ensure_ascii=False,
@@ -6256,8 +8078,9 @@ class LLMBenchmarkApp:
 
     def _export_sweep_markdown(self, sweep_result: dict) -> str:
         """Export sweep analysis as Markdown report. Returns the file path."""
+        run_dir = self._get_sweep_run_dir(sweep_result)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        md_path = os.path.join(_SCRIPT_DIR, f"sweep_analysis_{ts}.md")
+        md_path = os.path.join(run_dir, f"report_{ts}.md")
         try:
             report = self._generate_sweep_markdown_report(sweep_result)
             with open(md_path, "w", encoding="utf-8") as f:
@@ -6285,8 +8108,9 @@ class LLMBenchmarkApp:
         if not getattr(LLMBenchmarkApp, "_last_cjk_font_available", True):
             self._append_sweep_status("⚠ 未检测到 CJK 字体，PNG 中文可能显示异常。\n")
 
+        run_dir = self._get_sweep_run_dir(sweep_result)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        png_path = os.path.join(_SCRIPT_DIR, f"sweep_report_{ts}.png")
+        png_path = os.path.join(run_dir, f"chart_{ts}.png")
         try:
             fig.savefig(png_path, dpi=150, bbox_inches="tight")
             import matplotlib.pyplot as plt
@@ -6301,13 +8125,82 @@ class LLMBenchmarkApp:
             self._append_sweep_status(f"✕ PNG 生成失败: {e}\n")
             return None
 
+    def _load_result_db_runs(self) -> list:
+        """Load benchmark_runs from the result DB, newest first."""
+        db_path = getattr(self, "result_db_path_var",
+                          tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+        try:
+            if not os.path.exists(db_path):
+                return []
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """SELECT br.*, bm.output_token_throughput, bm.ttft_p95, bm.e2el_p95
+                   FROM benchmark_runs br
+                   LEFT JOIN benchmark_metrics bm ON bm.run_id = br.run_id
+                   ORDER BY br.id DESC""").fetchall()
+            conn.close()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
     def _refresh_history(self):
         for item in self.hist_tree.get_children():
             self.hist_tree.delete(item)
-        rows = load_history()
-        selected_filter = getattr(self, "history_type_filter_var", tk.StringVar(value="All")).get()
+
+        selected_filter = getattr(self, "history_type_filter_var",
+                                  tk.StringVar(value="All")).get()
         visible_count = 0
-        for row in rows:
+
+        # ── New result DB rows (newest first) ──
+        result_rows = self._load_result_db_runs()
+        _seen_run_ids: set = set()
+        for row in result_rows:
+            run_type = row.get("run_type") or "single"
+            if selected_filter == "Single" and run_type != "single":
+                continue
+            if selected_filter == "Sweep" and run_type != "sweep":
+                continue
+            run_id = row.get("run_id", "")
+            _seen_run_ids.add(run_id)
+            created = row.get("created_at", "")
+            model = row.get("model_name") or row.get("model", "") or "-"
+            env_name = row.get("environment_profile_name_snapshot") or "未指定环境"
+            gpu_model = row.get("gpu_model_snapshot") or "-"
+            gpu_count = row.get("gpu_count_snapshot") or ""
+            gpu_str = f"{gpu_model} x{gpu_count}" if gpu_count else gpu_model
+            backend = row.get("backend_snapshot") or "-"
+            quant = row.get("quantization_snapshot") or "-"
+            conc = row.get("concurrency") or 0
+            total_req = row.get("total_requests") or 0
+            status = row.get("status") or "completed"
+            out_tps = row.get("output_token_throughput")
+            ttft_p95 = row.get("ttft_p95")
+            e2el_p95 = row.get("e2el_p95")
+            if run_type == "sweep":
+                type_label = self.tr("history.sweep")
+                levels = row.get("concurrency") or 0
+                config = f"sweep / {levels} levels"
+            else:
+                type_label = self.tr("history.single")
+                config = f"C{conc}/N{total_req}"
+            # tag: "result_db:<run_id>"
+            self.hist_tree.insert("", tk.END, iid=f"rdb_{run_id}",
+                                  values=(
+                                      f"R:{run_id[-6:] if len(run_id) > 6 else run_id}",
+                                      created, type_label, model,
+                                      env_name, gpu_str, backend, quant,
+                                      config,
+                                      f"{out_tps:.1f}" if out_tps is not None else "-",
+                                      f"{ttft_p95:.3f}s" if ttft_p95 is not None else "-",
+                                      f"{e2el_p95:.3f}s" if e2el_p95 is not None else "-",
+                                      status,
+                                  ), tags=("result_db",))
+            visible_count += 1
+
+        # ── Legacy history DB rows ──
+        legacy_rows = load_history()
+        for row in legacy_rows:
             rid = row["id"]
             created = row["created_at"]
             record_type = row["record_type"] or "single"
@@ -6315,31 +8208,34 @@ class LLMBenchmarkApp:
                 continue
             if selected_filter == "Sweep" and record_type != "sweep":
                 continue
-            model = row["model"]
+            model = row["model"] or "-"
             conc = row["concurrency"]
             total = row["total"]
-            success_rate = row["success_rate"] or 0.0
-            e2e_p95 = row["e2e_latency_p95"] or 0.0
-            sys_tps = row["system_output_tps"] or 0.0
-            status = row["status"] or "completed"
+            e2e_p95 = self._row_get(row, "e2e_latency_p95")
+            sys_tps = self._row_get(row, "system_output_tps")
+            status = self._row_get(row, "status") or "completed"
+            ttft_p95_val = self._row_get(row, "ttft_p95")
             if record_type == "sweep":
                 type_label = self.tr("history.sweep")
                 config_summary = row["config_summary"] or "-"
-                primary_metric = row["primary_metric"] or "-"
             else:
                 type_label = self.tr("history.single")
-                config_summary = row["config_summary"] or (
-                    f"C{conc} / N{total} / max_tokens=-")
-                primary_metric = row["primary_metric"] or (
-                    f"Output TPS {sys_tps:.1f} | E2E P95 {e2e_p95:.3f}s | "
-                    f"Success {success_rate:.0f}%")
-            self.hist_tree.insert("", tk.END, values=(
-                rid, created, type_label, model, config_summary,
-                primary_metric, status,
-            ))
+                config_summary = row["config_summary"] or f"C{conc}/N{total}"
+            self.hist_tree.insert("", tk.END, iid=f"leg_{rid}",
+                                  values=(
+                                      rid, created, type_label, model,
+                                      "未指定环境", "-", "-", "-",
+                                      config_summary,
+                                      f"{sys_tps:.1f}" if sys_tps is not None else "-",
+                                      f"{ttft_p95_val:.3f}s" if ttft_p95_val is not None else "-",
+                                      f"{e2e_p95:.3f}s" if e2e_p95 is not None else "-",
+                                      status,
+                                  ), tags=("legacy",))
             visible_count += 1
+
         if visible_count:
-            self.history_status_var.set(self.tr("status.history_count").format(count=visible_count))
+            self.history_status_var.set(
+                self.tr("status.history_count").format(count=visible_count))
             self._set_history_detail_text(self.tr("status.select_history"))
         else:
             self.history_status_var.set(self.tr("status.no_history"))
@@ -6366,7 +8262,101 @@ class LLMBenchmarkApp:
         if not sel:
             self._set_history_detail_text(self.tr("status.select_history"))
             return
-        rid = self.hist_tree.item(sel[0], "values")[0]
+        iid = sel[0]
+        tags = self.hist_tree.item(iid, "tags")
+        values = self.hist_tree.item(iid, "values")
+
+        if "result_db" in tags:
+            # ── Result DB row ──
+            run_id_display = values[0]  # "R:xxxxxx"
+            # Resolve full run from result DB
+            db_path = getattr(self, "result_db_path_var",
+                              tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+            try:
+                conn = sqlite3.connect(db_path)
+                conn.row_factory = sqlite3.Row
+                # get rid from iid "rdb_<run_id>"
+                real_run_id = iid[4:] if iid.startswith("rdb_") else ""
+                row = conn.execute(
+                    """SELECT br.*, bm.output_token_throughput, bm.ttft_p95,
+                              bm.e2el_p95, bm.e2el_avg, bm.ttft_avg
+                       FROM benchmark_runs br
+                       LEFT JOIN benchmark_metrics bm ON bm.run_id = br.run_id
+                       WHERE br.run_id=?""", (real_run_id,)).fetchone()
+                conn.close()
+                row = dict(row) if row else {}
+            except Exception:
+                row = {}
+            # Build env summary from snapshots
+            env_name = row.get("environment_profile_name_snapshot") or "未指定环境"
+            hw_name  = row.get("hardware_profile_name_snapshot") or "-"
+            sw_name  = row.get("software_stack_profile_name_snapshot") or "-"
+            mod_name = row.get("model_profile_name_snapshot") or "-"
+            gpu_model = row.get("gpu_model_snapshot") or "-"
+            gpu_count = row.get("gpu_count_snapshot") or "-"
+            backend   = row.get("backend_snapshot") or "-"
+            bk_ver    = row.get("backend_version_snapshot") or "-"
+            api_type  = row.get("api_type_snapshot") or "-"
+            deploy    = row.get("deployment_type_snapshot") or "-"
+            parser    = row.get("reasoning_parser_snapshot") or "-"
+            mfamily   = row.get("model_family_snapshot") or "-"
+            msize     = row.get("model_size_snapshot") or "-"
+            quant     = row.get("quantization_snapshot") or "-"
+            mtype     = row.get("model_type_snapshot") or "-"
+            run_type  = row.get("run_type") or "single"
+            lines = [
+                "═══ 环境档案 (Environment Summary) ═══",
+                f"  Environment Profile: {env_name}",
+                f"  Hardware Profile:    {hw_name}",
+                f"  GPU:                 {gpu_model}  x{gpu_count}",
+                f"  Software Stack:      {sw_name}",
+                f"  Backend:             {backend} {bk_ver}",
+                f"  API Type:            {api_type}",
+                f"  Deployment:          {deploy}",
+                f"  Reasoning Parser:    {parser}",
+                f"  Model Profile:       {mod_name}",
+                f"  API Model Name:      {row.get('model_name', '-')}",
+                f"  Model Family/Size:   {mfamily} {msize}",
+                f"  Quantization:        {quant}",
+                f"  Model Type:          {mtype}",
+            ]
+            if not row.get("environment_profile_name_snapshot"):
+                lines.append("  ⚠ 未绑定环境档案，本次结果不建议用于长期横向对比。")
+            lines.append("")
+            lines.append("═══ 测试结果 ═══")
+            lines.append(f"  Run ID:   {row.get('run_id', '-')}")
+            lines.append(f"  Time:     {row.get('created_at', '-')}")
+            lines.append(f"  Type:     {run_type}")
+            lines.append(f"  Model:    {row.get('model_name', '-')}")
+            lines.append(f"  API URL:  {row.get('api_url', '-')}")
+            lines.append(f"  Status:   {row.get('status', '-')}")
+            out_tps  = row.get("output_token_throughput")
+            ttft_p95 = row.get("ttft_p95")
+            e2el_p95 = row.get("e2el_p95")
+            e2el_avg = row.get("e2el_avg")
+            lines.append(f"  Output TPS: {out_tps:.1f} tok/s" if out_tps is not None else "  Output TPS: -")
+            lines.append(f"  TTFT P95:   {ttft_p95:.3f}s" if ttft_p95 is not None else "  TTFT P95: -")
+            lines.append(f"  E2E Avg:    {e2el_avg:.3f}s" if e2el_avg is not None else "  E2E Avg: -")
+            lines.append(f"  E2E P95:    {e2el_p95:.3f}s" if e2el_p95 is not None else "  E2E P95: -")
+            if run_type == "sweep":
+                lines.append(f"  Report Dir: {row.get('report_dir', '-')}")
+                lines.append("")
+                lines.append("双击该行查看完整扫测详情。" if self.lang_code == "zh_CN"
+                             else "Double-click this row to view full sweep details.")
+            else:
+                lines.append(f"  Report Dir: {row.get('report_dir', '-')}")
+                lines.append("")
+                lines.append("双击该行查看完整单次测试详情。" if self.lang_code == "zh_CN"
+                             else "Double-click this row to view full benchmark details.")
+            self._set_history_detail_text("\n".join(lines))
+            return
+
+        # ── Legacy history DB row ──
+        rid_str = values[0]
+        try:
+            rid = int(rid_str)
+        except (ValueError, TypeError):
+            rid = 0
         row = self._load_history_row(rid)
         if not row:
             self._set_history_detail_text("历史记录不存在或已删除")
@@ -6379,6 +8369,8 @@ class LLMBenchmarkApp:
                 sweep_result = {}
             cases = sweep_result.get("cases", [])
             lines = [
+                "  ⚠ 未绑定环境档案，本次结果不建议用于长期横向对比。",
+                "",
                 f"{self.tr('history.type')}: {self.tr('history.sweep')}",
                 f"{self.tr('history.time')}: {row['created_at']}",
                 f"{self.tr('history.model')}: {row['model']}",
@@ -6397,6 +8389,8 @@ class LLMBenchmarkApp:
         else:
             config_summary = row["config_summary"] or f"C{row['concurrency']} / N{row['total']}"
             lines = [
+                "  ⚠ 未绑定环境档案，本次结果不建议用于长期横向对比。",
+                "",
                 f"{self.tr('history.type')}: {self.tr('history.single')}",
                 f"{self.tr('history.time')}: {row['created_at']}",
                 f"{self.tr('history.model')}: {row['model']}",
