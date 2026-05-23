@@ -8973,10 +8973,11 @@ class LLMBenchmarkApp:
             self._hist_detail_right_nav = right_nav
 
             # Build nav buttons once
-            prev_lbl = "‹" if zh else "‹"
-            next_lbl = "›" if zh else "›"
+            # Tooltips: 上一条 / Previous   下一条 / Next
+            prev_tip = "上一条" if zh else "Previous"
+            next_tip = "下一条" if zh else "Next"
             self._hist_prev_btn = tk.Button(
-                self._hist_detail_left_nav, text=prev_lbl,
+                self._hist_detail_left_nav, text="‹",
                 font=("TkDefaultFont", 18, "bold"),
                 width=2, bd=0, relief=tk.FLAT,
                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"],
@@ -8984,9 +8985,10 @@ class LLMBenchmarkApp:
                 cursor="hand2",
                 command=self._show_prev_history_record)
             self._hist_prev_btn.place(relx=0.5, rely=0.5, anchor="center")
+            self._hist_prev_btn._tooltip_text = prev_tip   # 上一条 / Previous
 
             self._hist_next_btn = tk.Button(
-                self._hist_detail_right_nav, text=next_lbl,
+                self._hist_detail_right_nav, text="›",
                 font=("TkDefaultFont", 18, "bold"),
                 width=2, bd=0, relief=tk.FLAT,
                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"],
@@ -8994,6 +8996,7 @@ class LLMBenchmarkApp:
                 cursor="hand2",
                 command=self._show_next_history_record)
             self._hist_next_btn.place(relx=0.5, rely=0.5, anchor="center")
+            self._hist_next_btn._tooltip_text = next_tip   # 下一条 / Next
 
             # Keyboard bindings
             win.bind("<Left>",   lambda e: self._show_prev_history_record())
