@@ -248,6 +248,11 @@ I18N = {
         "tab.db_settings": "数据库设置",
         "env.selector_label": "被测环境",
         "env.manage_btn": "管理环境",
+        "env.read_params_btn": "读取环境参数",
+        "env.read_params_no_env": "当前未选择环境档案，请先在上方选择一个环境档案。",
+        "env.read_params_missing_fields": "环境档案缺少必要参数，请到「环境档案」页补齐后再读取：",
+        "env.read_params_overwrite": "当前参数已有手动填写内容，与环境档案不一致。\n是否用环境档案参数覆盖当前填写内容？",
+        "env.read_params_applied": "环境参数已成功读取并填入。",
         "env.no_env": "未指定环境 / Unspecified",
         "env.unspecified_warning": "未绑定环境档案，本次结果不建议用于长期横向对比。",
         "env.profile_name": "档案名称",
@@ -446,6 +451,11 @@ I18N = {
         "tab.db_settings": "Database Settings",
         "env.selector_label": "Test Environment",
         "env.manage_btn": "Manage Profiles",
+        "env.read_params_btn": "Read Environment Params",
+        "env.read_params_no_env": "No environment profile selected. Please select one above first.",
+        "env.read_params_missing_fields": "The environment profile is missing required parameters. Please complete it in the Environment Profiles tab:",
+        "env.read_params_overwrite": "Some current parameters differ from the selected environment profile.\nOverwrite current values with environment profile values?",
+        "env.read_params_applied": "Environment parameters applied successfully.",
         "env.no_env": "Unspecified Environment",
         "env.unspecified_warning": "No environment profile linked. Results are not recommended for long-term comparison.",
         "env.profile_name": "Profile Name",
@@ -3136,6 +3146,10 @@ class LLMBenchmarkApp:
         self.progress_overlay_anim_index = 0
         self.progress_overlay_after_id = None
         self.progress_overlay_running = False
+        # Environment parameter read-back tracking
+        self._applied_environment_params = False
+        self._applied_fields_json: list = []
+        self._overridden_fields_json: list = []
         self.lang_code = self._load_language_config()
         self.language_var = tk.StringVar(
             value=I18N[self.lang_code]["language.en"]
@@ -3471,6 +3485,10 @@ class LLMBenchmarkApp:
         ttk.Button(env_inner, text=self.tr("env.manage_btn"),
                    style="Secondary.TButton",
                    command=lambda: self.nb.select(self.env_profiles_frame)
+                   ).pack(side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
+        ttk.Button(env_inner, text=self.tr("env.read_params_btn"),
+                   style="Secondary.TButton",
+                   command=self._read_selected_environment_params
                    ).pack(side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
 
         card_a = SectionCard(col, "API 配置", collapsible=True, expanded=True)
@@ -6208,6 +6226,125 @@ class LLMBenchmarkApp:
             self._refresh_env_selector()
         except Exception:
             pass
+
+    # ── Environment Parameter Reader ─────────────────────────────────────────
+
+    def _validate_environment_required_params(self, sw: dict, model: dict) -> list:
+        """Return list of human-readable missing required field names.
+        Required: software_stack_profile.api_url, model_profile.api_model_name."""
+        sw = sw or {}
+        model = model or {}
+        missing = []
+        if not str(sw.get("api_url") or "").strip():
+            missing.append("API URL  (software_stack_profile → api_url)")
+        if not str(model.get("api_model_name") or "").strip():
+            missing.append("API Model Name  (model_profile → api_model_name)")
+        return missing
+
+    def _build_environment_param_map(self, sw: dict, model: dict) -> dict:
+        """Build mapping of param_key → (tk.Variable, new_value, display_label)
+        from the active environment profile's software stack and model profile."""
+        sw = sw or {}
+        model = model or {}
+        param_map: dict = {}
+        # Required parameters
+        api_url = str(sw.get("api_url") or "").strip()
+        api_model_name = str(model.get("api_model_name") or "").strip()
+        if api_url:
+            param_map["api_url"] = (self.url_var, api_url, "API URL")
+        if api_model_name:
+            param_map["model_name"] = (self.model_var, api_model_name, "Model Name")
+        return param_map
+
+    def _apply_environment_param_map(self, param_map: dict) -> tuple:
+        """Apply param_map to UI variables with overwrite-protection dialog.
+
+        Partition fields into:
+          - directly_applicable: target field is empty or already matches
+          - conflicting: target field has a different non-empty value
+
+        Conflicting fields are presented in a single confirmation dialog.
+        Returns (applied_fields: list, overridden_fields: list).
+        """
+        directly_applicable: dict = {}
+        conflicting: dict = {}
+
+        for key, (var, new_val, label) in param_map.items():
+            try:
+                current = str(var.get()).strip()
+            except Exception:
+                current = ""
+            if not current or current == new_val:
+                directly_applicable[key] = (var, new_val)
+            else:
+                conflicting[key] = (var, new_val, label, current)
+
+        applied_fields: list = []
+        overridden_fields: list = []
+
+        # Ask once for all conflicting fields
+        if conflicting:
+            field_lines = "\n".join(
+                f"  {label}: {repr(cur)!s} → {repr(new)!s}"
+                for key, (var, new, label, cur) in conflicting.items()
+            )
+            msg = self.tr("env.read_params_overwrite") + "\n\n" + field_lines
+            if messagebox.askyesno(self.tr("msg.confirm"), msg, parent=self.root):
+                for key, (var, new_val, label, _) in conflicting.items():
+                    var.set(new_val)
+                    applied_fields.append(key)
+                    overridden_fields.append(key)
+
+        # Apply non-conflicting fields directly
+        for key, (var, new_val) in directly_applicable.items():
+            var.set(new_val)
+            applied_fields.append(key)
+
+        return applied_fields, overridden_fields
+
+    def _read_selected_environment_params(self):
+        """Read the active environment profile and auto-fill benchmark parameters.
+
+        Validates required fields (api_url, api_model_name), applies them to
+        the settings tab, and updates applied_environment_params tracking state
+        for inclusion in benchmark_run DB records.
+
+        Must be called from the main thread only (UI method).
+        """
+        env_name = self.env_profile_var.get()
+        if not env_name:
+            messagebox.showinfo(
+                self.tr("env.read_params_btn"),
+                self.tr("env.read_params_no_env"),
+                parent=self.root)
+            return
+
+        env_info = self._get_active_env_info()
+        sw = env_info.get("sw", {})
+        model = env_info.get("model", {})
+
+        # Validate required params
+        missing = self._validate_environment_required_params(sw, model)
+        if missing:
+            msg = (self.tr("env.read_params_missing_fields") + "\n" +
+                   "\n".join(f"  - {m}" for m in missing))
+            messagebox.showwarning(self.tr("env.read_params_btn"), msg, parent=self.root)
+            return
+
+        # Build and apply param map with overwrite protection
+        param_map = self._build_environment_param_map(sw, model)
+        applied_fields, overridden_fields = self._apply_environment_param_map(param_map)
+
+        # Track applied_environment_params metadata for DB persistence
+        self._applied_environment_params = bool(applied_fields)
+        self._applied_fields_json = list(applied_fields)
+        self._overridden_fields_json = list(overridden_fields)
+
+        if applied_fields:
+            messagebox.showinfo(
+                self.tr("env.read_params_btn"),
+                self.tr("env.read_params_applied"),
+                parent=self.root)
 
     def _get_active_env_info(self) -> dict:
         """Return info about the currently selected environment profile,
