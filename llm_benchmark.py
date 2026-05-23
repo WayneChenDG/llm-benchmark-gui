@@ -2519,21 +2519,25 @@ def _ensure_result_db_snapshot_cols(conn):
     except Exception:
         return
     snapshot_cols = [
-        ("environment_profile_name_snapshot", "TEXT"),
-        ("hardware_profile_name_snapshot",    "TEXT"),
+        ("environment_profile_name_snapshot",    "TEXT"),
+        ("hardware_profile_name_snapshot",       "TEXT"),
         ("software_stack_profile_name_snapshot", "TEXT"),
-        ("model_profile_name_snapshot",       "TEXT"),
-        ("gpu_model_snapshot",                "TEXT"),
-        ("gpu_count_snapshot",                "TEXT"),
-        ("backend_snapshot",                  "TEXT"),
-        ("backend_version_snapshot",          "TEXT"),
-        ("api_type_snapshot",                 "TEXT"),
-        ("deployment_type_snapshot",          "TEXT"),
-        ("reasoning_parser_snapshot",         "TEXT"),
-        ("model_family_snapshot",             "TEXT"),
-        ("model_size_snapshot",               "TEXT"),
-        ("quantization_snapshot",             "TEXT"),
-        ("model_type_snapshot",               "TEXT"),
+        ("model_profile_name_snapshot",          "TEXT"),
+        ("gpu_model_snapshot",                   "TEXT"),
+        ("gpu_count_snapshot",                   "TEXT"),
+        ("backend_snapshot",                     "TEXT"),
+        ("backend_version_snapshot",             "TEXT"),
+        ("api_type_snapshot",                    "TEXT"),
+        ("deployment_type_snapshot",             "TEXT"),
+        ("reasoning_parser_snapshot",            "TEXT"),
+        ("model_family_snapshot",                "TEXT"),
+        ("model_size_snapshot",                  "TEXT"),
+        ("quantization_snapshot",                "TEXT"),
+        ("model_type_snapshot",                  "TEXT"),
+        # Applied-environment-params tracking (added in v2)
+        ("applied_environment_params",           "INTEGER"),
+        ("applied_fields_json",                  "TEXT"),
+        ("overridden_fields_json",               "TEXT"),
     ]
     for col, typ in snapshot_cols:
         if col not in existing:
@@ -2797,14 +2801,55 @@ def _make_run_dir(results_root: str, run_type: str, model_slug: str,
     os.makedirs(path, exist_ok=True)
     return path
 
+# Canonical column list for benchmark_runs INSERT — defines the exact set of
+# fields written at run time.  Any column not listed here is left NULL.
+# IMPORTANT: keep in sync with _ensure_result_db_snapshot_cols() and the
+# benchmark_runs CREATE TABLE statement above.
+_BENCHMARK_RUN_COLUMNS = [
+    "run_id", "run_type", "created_at", "tool_version", "git_commit",
+    "api_url", "model_name",
+    "environment_profile_id", "hardware_profile_id",
+    "software_stack_profile_id", "model_profile_id",
+    "preset", "concurrency", "total_requests", "max_tokens", "temperature",
+    "stream_mode", "output_length_mode", "fixed_output_tokens", "ignore_eos",
+    "success", "fail", "success_rate", "status", "duration_sec", "report_dir",
+    "environment_profile_name_snapshot", "hardware_profile_name_snapshot",
+    "software_stack_profile_name_snapshot", "model_profile_name_snapshot",
+    "gpu_model_snapshot", "gpu_count_snapshot",
+    "backend_snapshot", "backend_version_snapshot",
+    "api_type_snapshot", "deployment_type_snapshot", "reasoning_parser_snapshot",
+    "model_family_snapshot", "model_size_snapshot",
+    "quantization_snapshot", "model_type_snapshot",
+    "applied_environment_params", "applied_fields_json", "overridden_fields_json",
+]
+
+
+def _insert_benchmark_run_row(conn, run_data: dict) -> None:
+    """Insert one row into benchmark_runs using named parameters (:col_name).
+
+    Column names come from _BENCHMARK_RUN_COLUMNS.  Missing keys in run_data
+    default to None.  Using named parameters eliminates positional
+    column/value count mismatches.
+    """
+    cols = _BENCHMARK_RUN_COLUMNS
+    placeholders = ", ".join(f":{c}" for c in cols)
+    sql = (f"INSERT INTO benchmark_runs ({', '.join(cols)}) "
+           f"VALUES ({placeholders})")
+    payload = {col: run_data.get(col) for col in cols}
+    conn.execute(sql, payload)
+
+
 def _result_db_save_benchmark_run(db_path: str, summary: dict,
                                   env_profile_id: int | None,
                                   hw_id: int | None, sw_id: int | None,
                                   model_id: int | None, report_dir: str = "",
-                                  snapshots: dict | None = None) -> str | None:
+                                  snapshots: dict | None = None,
+                                  applied_info: dict | None = None) -> str | None:
     """Save a single benchmark result to the result DB. Returns run_id or None."""
     if snapshots is None:
         snapshots = {}
+    if applied_info is None:
+        applied_info = {}
     try:
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         conn = sqlite3.connect(db_path)
@@ -2812,41 +2857,59 @@ def _result_db_save_benchmark_run(db_path: str, summary: dict,
         _ensure_result_db_snapshot_cols(conn)
         run_id = datetime.now().strftime("run_%Y%m%d_%H%M%S_%f")
         created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        conn.execute("""INSERT INTO benchmark_runs
-            (run_id, run_type, created_at, api_url, model_name,
-             environment_profile_id, hardware_profile_id, software_stack_profile_id,
-             model_profile_id, concurrency, total_requests, max_tokens, temperature,
-             stream_mode, output_length_mode, fixed_output_tokens, ignore_eos,
-             success, fail, success_rate, status, duration_sec, report_dir,
-             environment_profile_name_snapshot, hardware_profile_name_snapshot,
-             software_stack_profile_name_snapshot, model_profile_name_snapshot,
-             gpu_model_snapshot, gpu_count_snapshot,
-             backend_snapshot, backend_version_snapshot,
-             api_type_snapshot, deployment_type_snapshot, reasoning_parser_snapshot,
-             model_family_snapshot, model_size_snapshot,
-             quantization_snapshot, model_type_snapshot)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (run_id, "single", created_at,
-             summary.get("api_url", ""), summary.get("model", ""),
-             env_profile_id, hw_id, sw_id, model_id,
-             summary.get("concurrency", 0), summary.get("total", 0),
-             summary.get("max_tokens", 0), summary.get("temperature", 0),
-             int(summary.get("stream_mode", False)),
-             summary.get("output_length_mode", "normal"),
-             summary.get("fixed_output_tokens"),
-             int(summary.get("output_length_mode", "") == "fixed"),
-             summary.get("success", 0), summary.get("fail", 0),
-             summary.get("success_rate", 0),
-             "completed" if summary.get("fail", 0) == 0 else "completed_with_failures",
-             summary.get("duration_sec", 0), report_dir,
-             snapshots.get("env_name", ""), snapshots.get("hw_name", ""),
-             snapshots.get("sw_name", ""), snapshots.get("model_name", ""),
-             snapshots.get("gpu_model", ""), snapshots.get("gpu_count", ""),
-             snapshots.get("backend", ""), snapshots.get("backend_version", ""),
-             snapshots.get("api_type", ""), snapshots.get("deployment_type", ""),
-             snapshots.get("reasoning_parser", ""),
-             snapshots.get("model_family", ""), snapshots.get("model_size", ""),
-             snapshots.get("quantization", ""), snapshots.get("model_type", "")))
+        run_data = {
+            "run_id":                  run_id,
+            "run_type":                "single",
+            "created_at":              created_at,
+            "tool_version":            None,
+            "git_commit":              None,
+            "api_url":                 summary.get("api_url", ""),
+            "model_name":              summary.get("model", ""),
+            "environment_profile_id":         env_profile_id,
+            "hardware_profile_id":            hw_id,
+            "software_stack_profile_id":      sw_id,
+            "model_profile_id":               model_id,
+            "preset":                  summary.get("preset"),
+            "concurrency":             summary.get("concurrency", 0),
+            "total_requests":          summary.get("total", 0),
+            "max_tokens":              summary.get("max_tokens", 0),
+            "temperature":             summary.get("temperature", 0),
+            "stream_mode":             int(bool(summary.get("stream_mode", False))),
+            "output_length_mode":      summary.get("output_length_mode", "normal"),
+            "fixed_output_tokens":     summary.get("fixed_output_tokens"),
+            "ignore_eos":              int(summary.get("output_length_mode", "") == "fixed"),
+            "success":                 summary.get("success", 0),
+            "fail":                    summary.get("fail", 0),
+            "success_rate":            summary.get("success_rate", 0),
+            "status":                  ("completed" if summary.get("fail", 0) == 0
+                                        else "completed_with_failures"),
+            "duration_sec":            summary.get("duration_sec", 0),
+            "report_dir":              report_dir,
+            # ── Environment snapshots ──
+            "environment_profile_name_snapshot":    snapshots.get("env_name", ""),
+            "hardware_profile_name_snapshot":        snapshots.get("hw_name", ""),
+            "software_stack_profile_name_snapshot":  snapshots.get("sw_name", ""),
+            "model_profile_name_snapshot":           snapshots.get("model_name", ""),
+            "gpu_model_snapshot":                    snapshots.get("gpu_model", ""),
+            "gpu_count_snapshot":       str(snapshots.get("gpu_count", "") or ""),
+            "backend_snapshot":                      snapshots.get("backend", ""),
+            "backend_version_snapshot":              snapshots.get("backend_version", ""),
+            "api_type_snapshot":                     snapshots.get("api_type", ""),
+            "deployment_type_snapshot":              snapshots.get("deployment_type", ""),
+            "reasoning_parser_snapshot":             snapshots.get("reasoning_parser", ""),
+            "model_family_snapshot":                 snapshots.get("model_family", ""),
+            "model_size_snapshot":                   snapshots.get("model_size", ""),
+            "quantization_snapshot":                 snapshots.get("quantization", ""),
+            "model_type_snapshot":                   snapshots.get("model_type", ""),
+            # ── Applied-environment-params tracking ──
+            "applied_environment_params": int(bool(
+                applied_info.get("applied_environment_params", False))),
+            "applied_fields_json":   json.dumps(
+                applied_info.get("applied_fields_json", [])),
+            "overridden_fields_json": json.dumps(
+                applied_info.get("overridden_fields_json", [])),
+        }
+        _insert_benchmark_run_row(conn, run_data)
         conn.execute("""INSERT INTO benchmark_metrics
             (run_id, request_throughput, output_token_throughput,
              per_request_output_tps_avg,
@@ -2882,10 +2945,13 @@ def _result_db_save_sweep_run(db_path: str, sweep_result: dict,
                                env_profile_id: int | None,
                                hw_id: int | None, sw_id: int | None,
                                model_id: int | None, report_dir: str = "",
-                               snapshots: dict | None = None) -> str | None:
+                               snapshots: dict | None = None,
+                               applied_info: dict | None = None) -> str | None:
     """Save a sweep result to the result DB. Returns run_id or None."""
     if snapshots is None:
         snapshots = {}
+    if applied_info is None:
+        applied_info = {}
     try:
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         conn = sqlite3.connect(db_path)
@@ -2895,37 +2961,60 @@ def _result_db_save_sweep_run(db_path: str, sweep_result: dict,
         created_at = sweep_result.get("finished_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cases = sweep_result.get("cases", [])
         levels = sweep_result.get("concurrency_levels", [])
-        conn.execute("""INSERT INTO benchmark_runs
-            (run_id, run_type, created_at, api_url, model_name,
-             environment_profile_id, hardware_profile_id, software_stack_profile_id,
-             model_profile_id, concurrency, total_requests, max_tokens, temperature,
-             stream_mode, output_length_mode, success, fail, success_rate, status,
-             report_dir,
-             environment_profile_name_snapshot, hardware_profile_name_snapshot,
-             software_stack_profile_name_snapshot, model_profile_name_snapshot,
-             gpu_model_snapshot, gpu_count_snapshot,
-             backend_snapshot, backend_version_snapshot,
-             api_type_snapshot, deployment_type_snapshot, reasoning_parser_snapshot,
-             model_family_snapshot, model_size_snapshot,
-             quantization_snapshot, model_type_snapshot)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (run_id, "sweep", created_at,
-             sweep_result.get("api_url", ""), sweep_result.get("model", ""),
-             env_profile_id, hw_id, sw_id, model_id,
-             len(levels), sum(c.get("total_requests", 0) for c in cases),
-             sweep_result.get("fixed_output_tokens") or 0, 0,
-             1, sweep_result.get("output_length_mode", "normal"),
-             sum(c.get("benchmark_summary", {}).get("success", 0) for c in cases),
-             sum(c.get("benchmark_summary", {}).get("fail", 0) for c in cases),
-             0, "completed", report_dir,
-             snapshots.get("env_name", ""), snapshots.get("hw_name", ""),
-             snapshots.get("sw_name", ""), snapshots.get("model_name", ""),
-             snapshots.get("gpu_model", ""), snapshots.get("gpu_count", ""),
-             snapshots.get("backend", ""), snapshots.get("backend_version", ""),
-             snapshots.get("api_type", ""), snapshots.get("deployment_type", ""),
-             snapshots.get("reasoning_parser", ""),
-             snapshots.get("model_family", ""), snapshots.get("model_size", ""),
-             snapshots.get("quantization", ""), snapshots.get("model_type", "")))
+        total_success = sum(c.get("benchmark_summary", {}).get("success", 0) for c in cases)
+        total_fail    = sum(c.get("benchmark_summary", {}).get("fail", 0)    for c in cases)
+        run_data = {
+            "run_id":                  run_id,
+            "run_type":                "sweep",
+            "created_at":              created_at,
+            "tool_version":            None,
+            "git_commit":              None,
+            "api_url":                 sweep_result.get("api_url", ""),
+            "model_name":              sweep_result.get("model", ""),
+            "environment_profile_id":         env_profile_id,
+            "hardware_profile_id":            hw_id,
+            "software_stack_profile_id":      sw_id,
+            "model_profile_id":               model_id,
+            "preset":                  None,
+            "concurrency":             len(levels),
+            "total_requests":          sum(c.get("total_requests", 0) for c in cases),
+            "max_tokens":              sweep_result.get("fixed_output_tokens") or 0,
+            "temperature":             0,
+            "stream_mode":             1,
+            "output_length_mode":      sweep_result.get("output_length_mode", "normal"),
+            "fixed_output_tokens":     sweep_result.get("fixed_output_tokens"),
+            "ignore_eos":              None,
+            "success":                 total_success,
+            "fail":                    total_fail,
+            "success_rate":            0,
+            "status":                  "completed",
+            "duration_sec":            None,
+            "report_dir":              report_dir,
+            # ── Environment snapshots ──
+            "environment_profile_name_snapshot":    snapshots.get("env_name", ""),
+            "hardware_profile_name_snapshot":        snapshots.get("hw_name", ""),
+            "software_stack_profile_name_snapshot":  snapshots.get("sw_name", ""),
+            "model_profile_name_snapshot":           snapshots.get("model_name", ""),
+            "gpu_model_snapshot":                    snapshots.get("gpu_model", ""),
+            "gpu_count_snapshot":       str(snapshots.get("gpu_count", "") or ""),
+            "backend_snapshot":                      snapshots.get("backend", ""),
+            "backend_version_snapshot":              snapshots.get("backend_version", ""),
+            "api_type_snapshot":                     snapshots.get("api_type", ""),
+            "deployment_type_snapshot":              snapshots.get("deployment_type", ""),
+            "reasoning_parser_snapshot":             snapshots.get("reasoning_parser", ""),
+            "model_family_snapshot":                 snapshots.get("model_family", ""),
+            "model_size_snapshot":                   snapshots.get("model_size", ""),
+            "quantization_snapshot":                 snapshots.get("quantization", ""),
+            "model_type_snapshot":                   snapshots.get("model_type", ""),
+            # ── Applied-environment-params tracking ──
+            "applied_environment_params": int(bool(
+                applied_info.get("applied_environment_params", False))),
+            "applied_fields_json":   json.dumps(
+                applied_info.get("applied_fields_json", [])),
+            "overridden_fields_json": json.dumps(
+                applied_info.get("overridden_fields_json", [])),
+        }
+        _insert_benchmark_run_row(conn, run_data)
         for idx, case in enumerate(cases):
             s = case.get("benchmark_summary", {})
             am = case.get("analysis_metrics", {})
@@ -3430,9 +3519,9 @@ class LLMBenchmarkApp:
         self.nb.add(self.settings_frame, text="  参数设置  ")
         self.nb.add(self.bench_frame, text="  基准测试  ")
         self.nb.add(self.sweep_frame, text="  并发扫测  ")
-        self.nb.add(self.history_frame, text="  历史记录  ")
         self.env_profiles_frame = tk.Frame(self.nb, bg=C_STYLE["bg_main"])
         self.nb.add(self.env_profiles_frame, text="  环境档案  ")
+        self.nb.add(self.history_frame, text="  历史记录  ")
         self._build_settings_tab()
         self._build_results_tab()
         self._build_sweep_tab()
@@ -4924,7 +5013,12 @@ class LLMBenchmarkApp:
                 env_info.get("sw_profile_id"),
                 env_info.get("model_profile_id"),
                 run_dir,
-                snapshots=env_info.get("snapshots", {}))
+                snapshots=env_info.get("snapshots", {}),
+                applied_info={
+                    "applied_environment_params": self._applied_environment_params,
+                    "applied_fields_json":        self._applied_fields_json,
+                    "overridden_fields_json":     self._overridden_fields_json,
+                })
             # Save report to run_dir
             if self.save_report_var.get() == "是":
                 try:
@@ -7935,7 +8029,12 @@ class LLMBenchmarkApp:
                 env_info.get("sw_profile_id"),
                 env_info.get("model_profile_id"),
                 run_dir,
-                snapshots=env_info.get("snapshots", {}))
+                snapshots=env_info.get("snapshots", {}),
+                applied_info={
+                    "applied_environment_params": self._applied_environment_params,
+                    "applied_fields_json":        self._applied_fields_json,
+                    "overridden_fields_json":     self._overridden_fields_json,
+                })
         except Exception as e:
             logging.warning("sweep result DB save failed: %s", e)
 
