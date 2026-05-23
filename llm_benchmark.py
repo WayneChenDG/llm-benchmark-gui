@@ -3239,6 +3239,15 @@ class LLMBenchmarkApp:
         self._applied_environment_params = False
         self._applied_fields_json: list = []
         self._overridden_fields_json: list = []
+        # ── History navigation state ──
+        self.history_item_records: dict = {}   # iid → ref dict
+        self.history_display_refs: list = []   # ordered for prev/next nav
+        self.history_detail_window = None      # active detail Toplevel
+        self.history_detail_current_index = None
+        # ── Sweep artifact paths for PDF generation ──
+        self._current_sweep_json_path: str = ""
+        self._current_sweep_md_path: str = ""
+        self._current_sweep_png_path: str = ""
         self.lang_code = self._load_language_config()
         self.language_var = tk.StringVar(
             value=I18N[self.lang_code]["language.en"]
@@ -7985,6 +7994,9 @@ class LLMBenchmarkApp:
             r.append("  Markdown 分析报告: 未保存")
         self.sweep_result_text.insert(tk.END, "\n".join(r) + "\n")
         self.sweep_result_text.config(state=tk.DISABLED)
+        self._current_sweep_json_path = json_path or ""
+        self._current_sweep_md_path = md_path or ""
+        self._current_sweep_png_path = png_path or ""
 
         # ── Populate expert analysis area ──
         commentary = self._generate_expert_commentary(cases,
@@ -8383,6 +8395,8 @@ class LLMBenchmarkApp:
     def _refresh_history(self):
         for item in self.hist_tree.get_children():
             self.hist_tree.delete(item)
+        self.history_item_records = {}
+        self.history_display_refs = []
 
         selected_filter = getattr(self, "history_type_filter_var",
                                   tk.StringVar(value="All")).get()
@@ -8432,6 +8446,13 @@ class LLMBenchmarkApp:
                                       f"{e2el_p95:.3f}s" if e2el_p95 is not None else "-",
                                       status,
                                   ), tags=("result_db",))
+            _ref = {
+                "source": "result_db", "run_id": run_id, "run_type": run_type,
+                "index": len(self.history_display_refs),
+                "created_at": created, "model": model,
+            }
+            self.history_item_records[f"rdb_{run_id}"] = _ref
+            self.history_display_refs.append(_ref)
             visible_count += 1
 
         # ── Legacy history DB rows ──
@@ -8467,6 +8488,13 @@ class LLMBenchmarkApp:
                                       f"{e2e_p95:.3f}s" if e2e_p95 is not None else "-",
                                       status,
                                   ), tags=("legacy",))
+            _ref = {
+                "source": "legacy", "rid": rid, "run_type": record_type,
+                "index": len(self.history_display_refs),
+                "created_at": created, "model": model,
+            }
+            self.history_item_records[f"leg_{rid}"] = _ref
+            self.history_display_refs.append(_ref)
             visible_count += 1
 
         if visible_count:
@@ -8880,147 +8908,979 @@ class LLMBenchmarkApp:
         sel = self.hist_tree.selection()
         if not sel:
             return
-        rid = self.hist_tree.item(sel[0], "values")[0]
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT * FROM benchmarks WHERE id=?",
-                           (rid,)).fetchone()
-        conn.close()
+        iid = sel[0]
+        ref = self.history_item_records.get(iid)
+        if not ref:
+            messagebox.showwarning("提示", "无法找到该历史记录的引用，请刷新历史列表。")
+            return
+        self._open_history_detail_by_ref(ref)
+
+    def _open_history_detail_by_ref(self, ref):
+        idx = ref.get("index", 0)
+        self.history_detail_current_index = idx
+        self._render_history_detail_window(idx)
+
+    def _show_prev_history_record(self):
+        idx = self.history_detail_current_index
+        if idx is not None and idx > 0:
+            self._render_history_detail_window(idx - 1)
+
+    def _show_next_history_record(self):
+        idx = self.history_detail_current_index
+        if idx is not None and idx < len(self.history_display_refs) - 1:
+            self._render_history_detail_window(idx + 1)
+
+    def _render_history_detail_window(self, index: int):
+        """Create or reuse the detail Toplevel and render the record at index."""
+        if index < 0 or index >= len(self.history_display_refs):
+            return
+        self.history_detail_current_index = index
+        ref = self.history_display_refs[index]
+
+        zh = (self.lang_code == "zh_CN")
+        model_name = ref.get("model", "-")
+        created = ref.get("created_at", "-")
+        win_title = (f"历史记录详情 - {created} - {model_name}"
+                     if zh else
+                     f"History Detail - {created} - {model_name}")
+
+        # ── Create or reuse the Toplevel ──────────────────────────────────
+        win = self.history_detail_window
+        if win is None or not win.winfo_exists():
+            win = tk.Toplevel(self.root)
+            win.geometry("960x760")
+            win.configure(bg=C_STYLE["bg_main"])
+            win.minsize(780, 560)
+            win.grid_columnconfigure(1, weight=1)
+            win.grid_rowconfigure(0, weight=1)
+            self.history_detail_window = win
+
+            # Left nav column
+            left_nav = tk.Frame(win, bg=C_STYLE["bg_main"], width=44)
+            left_nav.grid(row=0, column=0, sticky="ns")
+            left_nav.grid_propagate(False)
+            self._hist_detail_left_nav = left_nav
+
+            # Center frame (rebuilt on each navigation)
+            center = tk.Frame(win, bg=C_STYLE["bg_main"])
+            center.grid(row=0, column=1, sticky="nsew")
+            self._hist_detail_center = center
+
+            # Right nav column
+            right_nav = tk.Frame(win, bg=C_STYLE["bg_main"], width=44)
+            right_nav.grid(row=0, column=2, sticky="ns")
+            right_nav.grid_propagate(False)
+            self._hist_detail_right_nav = right_nav
+
+            # Build nav buttons once
+            prev_lbl = "‹" if zh else "‹"
+            next_lbl = "›" if zh else "›"
+            self._hist_prev_btn = tk.Button(
+                self._hist_detail_left_nav, text=prev_lbl,
+                font=("TkDefaultFont", 18, "bold"),
+                width=2, bd=0, relief=tk.FLAT,
+                bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"],
+                activebackground=C_STYLE["bg_main"],
+                cursor="hand2",
+                command=self._show_prev_history_record)
+            self._hist_prev_btn.place(relx=0.5, rely=0.5, anchor="center")
+
+            self._hist_next_btn = tk.Button(
+                self._hist_detail_right_nav, text=next_lbl,
+                font=("TkDefaultFont", 18, "bold"),
+                width=2, bd=0, relief=tk.FLAT,
+                bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"],
+                activebackground=C_STYLE["bg_main"],
+                cursor="hand2",
+                command=self._show_next_history_record)
+            self._hist_next_btn.place(relx=0.5, rely=0.5, anchor="center")
+
+            # Keyboard bindings
+            win.bind("<Left>",   lambda e: self._show_prev_history_record())
+            win.bind("<Right>",  lambda e: self._show_next_history_record())
+            win.bind("<Escape>", lambda e: win.destroy())
+
+        win.title(win_title)
+        win.lift()
+        win.focus_set()
+
+        # ── Update nav button enabled/disabled state ──────────────────────
+        total = len(self.history_display_refs)
+        prev_state = tk.NORMAL if index > 0 else tk.DISABLED
+        next_state = tk.NORMAL if index < total - 1 else tk.DISABLED
+        self._hist_prev_btn.config(state=prev_state)
+        self._hist_next_btn.config(state=next_state)
+
+        # ── Tooltips text ─────────────────────────────────────────────────
+        self._hist_prev_btn.config(text=f"‹\n{index}/{total}" if index > 0 else "‹")
+        self._hist_next_btn.config(text=f"›\n{index+2}/{total}" if index < total-1 else "›")
+
+        # ── Rebuild center content ────────────────────────────────────────
+        for w in self._hist_detail_center.winfo_children():
+            w.destroy()
+
+        if ref["source"] == "result_db":
+            if ref["run_type"] == "sweep":
+                self._render_rdb_sweep_detail(self._hist_detail_center, ref)
+            else:
+                self._render_rdb_single_detail(self._hist_detail_center, ref)
+        else:
+            if ref["run_type"] == "sweep":
+                self._render_legacy_sweep_detail(self._hist_detail_center, ref)
+            else:
+                self._render_legacy_single_detail(self._hist_detail_center, ref)
+
+    # ── Result DB sweep detail ────────────────────────────────────────────
+    def _render_rdb_sweep_detail(self, parent: tk.Frame, ref: dict):
+        zh = (self.lang_code == "zh_CN")
+        run_id = ref["run_id"]
+        db_path = getattr(self, "result_db_path_var",
+                          tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+        row = {}
+        cases_rows = []
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            r = conn.execute("SELECT * FROM benchmark_runs WHERE run_id=?",
+                             (run_id,)).fetchone()
+            row = dict(r) if r else {}
+            cr = conn.execute(
+                """SELECT * FROM sweep_cases WHERE run_id=? ORDER BY case_index""",
+                (run_id,)).fetchall()
+            cases_rows = [dict(c) for c in cr]
+            conn.close()
+        except Exception:
+            pass
+
+        # Try to load full sweep JSON from report_dir
+        sweep_result = {}
+        report_dir = row.get("report_dir", "")
+        if report_dir and os.path.isdir(report_dir):
+            for fname in sorted(os.listdir(report_dir)):
+                if fname.startswith("result_") and fname.endswith(".json"):
+                    try:
+                        with open(os.path.join(report_dir, fname),
+                                  encoding="utf-8") as f:
+                            sweep_result = json.load(f)
+                        break
+                    except Exception:
+                        pass
+
+        # Build cases list compatible with sweep renderer
+        cases = sweep_result.get("cases") or [
+            {
+                "concurrency": c.get("concurrency", 0),
+                "total_requests": c.get("total_requests", 0),
+                "benchmark_summary": {
+                    "success": c.get("success", 0),
+                    "fail": c.get("fail", 0),
+                    "success_rate": (c.get("success", 0) / max(c.get("total_requests", 1), 1) * 100),
+                    "e2e_latency_p95": c.get("e2el_p95", 0),
+                    "e2e_latency_avg": c.get("e2el_avg", 0),
+                    "system_output_tps": c.get("output_token_throughput", 0),
+                    "request_throughput_rps": c.get("request_throughput", 0),
+                    "ttft_avg": c.get("ttft_avg", 0),
+                    "ttft_p95": c.get("ttft_p95", 0),
+                    "tpot_avg": c.get("tpot_avg", 0),
+                },
+                "analysis_metrics": {"throughput_efficiency": c.get("throughput_efficiency", 0)},
+            }
+            for c in cases_rows
+        ]
+
+        # Env summary
+        env_name = row.get("environment_profile_name_snapshot") or ""
+        env_lines = self._build_env_summary_lines(row, zh)
+
+        # ── Render ────────────────────────────────────────────────────────
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(0, weight=1)
+        scroll = ScrollableFrame(parent, bg=C_STYLE["bg_main"])
+        scroll.grid(row=0, column=0, sticky="nsew")
+        inner = scroll.content
+        inner.configure(bg=C_STYLE["bg_main"])
+        inner.grid_columnconfigure(0, weight=1)
+
+        row_idx = 0
+        # Env card
+        env_card = SectionCard(inner, "被测环境 / Environment" if zh else "Test Environment",
+                               collapsible=True, expanded=True)
+        env_card.grid(row=row_idx, column=0, sticky="ew",
+                      padx=C_STYLE["pad_lg"], pady=(C_STYLE["pad_lg"], C_STYLE["gap_lg"]))
+        tk.Label(env_card.content, text="\n".join(env_lines),
+                 justify=tk.LEFT, anchor="w", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"],
+                 wraplength=780).pack(fill=tk.X)
+        row_idx += 1
+
+        # Overview card
+        ov_card = SectionCard(inner, "扫测概览" if zh else "Sweep Overview",
+                              collapsible=True, expanded=True)
+        ov_card.grid(row=row_idx, column=0, sticky="ew",
+                     padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        ov_txt = (
+            f"模型: {row.get('model_name', '-')}\n"
+            f"API: {row.get('api_url', '-')}\n"
+            f"Run ID: {run_id}\n"
+            f"档位数: {len(cases)}\n"
+            f"状态: {row.get('status', '-')}"
+        )
+        tk.Label(ov_card.content, text=ov_txt, justify=tk.LEFT, anchor="w",
+                 font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["text_primary"]).pack(fill=tk.X)
+        row_idx += 1
+
+        # Cases table
+        tbl_card = SectionCard(inner, "并发档位明细" if zh else "Concurrency Case Details",
+                               collapsible=True, expanded=True)
+        tbl_card.grid(row=row_idx, column=0, sticky="ew",
+                      padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        cols = ("C", "Req", "Success", "Fail", "Rate%",
+                "E2E Avg(s)", "E2E P95(s)", "TTFT(s)", "Out TPS", "RPS")
+        tv = ttk.Treeview(tbl_card.content, columns=cols, show="headings",
+                          height=min(max(len(cases), 3), 8), style="App.Treeview")
+        for col in cols:
+            tv.heading(col, text=col)
+            tv.column(col, anchor="center", width=82)
+        tv.pack(fill=tk.X)
+        for case in cases:
+            s = case.get("benchmark_summary", {})
+            tv.insert("", tk.END, values=(
+                case.get("concurrency", "-"),
+                case.get("total_requests", "-"),
+                s.get("success", 0),
+                s.get("fail", 0),
+                f"{s.get('success_rate', 0) or 0:.1f}%",
+                f"{s.get('e2e_latency_avg', 0) or 0:.3f}",
+                f"{s.get('e2e_latency_p95', 0) or 0:.3f}",
+                f"{s.get('ttft_avg', 0) or 0:.3f}",
+                f"{s.get('system_output_tps', 0) or 0:.1f}",
+                f"{s.get('request_throughput_rps', 0) or 0:.2f}",
+            ))
+        row_idx += 1
+
+        # Chart card
+        chart_card = SectionCard(inner, "图形分析" if zh else "Chart Analysis",
+                                 collapsible=True, expanded=True)
+        chart_card.grid(row=row_idx, column=0, sticky="ew",
+                        padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        chart_frame = tk.Frame(chart_card.content, bg=C_STYLE["bg_card"], height=460)
+        chart_frame.pack(fill=tk.BOTH, expand=True)
+        chart_frame.pack_propagate(False)
+        _sr = sweep_result if sweep_result.get("cases") else {"cases": cases, "model": row.get("model_name", "")}
+        if self._matplotlib_available() and cases:
+            try:
+                from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+                fig = self._build_sweep_analysis_figure(_sr)
+                if fig is not None:
+                    mpl_canvas = FigureCanvasTkAgg(fig, master=chart_frame)
+                    mpl_canvas.draw()
+                    mpl_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+                else:
+                    raise RuntimeError("no figure")
+            except Exception as e:
+                tk.Label(chart_frame, text=f"图表不可用: {e}",
+                         font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                         fg=C_STYLE["warning_text"], wraplength=700).pack(expand=True)
+        else:
+            tk.Label(chart_frame, text="matplotlib 未安装或暂无数据",
+                     font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                     fg=C_STYLE["warning_text"]).pack(expand=True)
+        row_idx += 1
+
+        # Expert analysis
+        expert_card = SectionCard(inner, "专家分析简评" if zh else "Expert Summary",
+                                  collapsible=True, expanded=True)
+        expert_card.grid(row=row_idx, column=0, sticky="ew",
+                         padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        analysis_lines = sweep_result.get("analysis_summary", [])
+        commentary = self._generate_expert_commentary(cases, analysis_lines) if cases else ""
+        expert_txt = "\n".join([*analysis_lines, "", commentary]).strip() or "未生成专家分析。"
+        tk.Label(expert_card.content, text=expert_txt, justify=tk.LEFT, anchor="w",
+                 font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["text_primary"], wraplength=820).pack(fill=tk.X)
+        row_idx += 1
+
+        # Output files
+        files_card = SectionCard(inner, "输出文件" if zh else "Output Files",
+                                 collapsible=True, expanded=True)
+        files_card.grid(row=row_idx, column=0, sticky="ew",
+                        padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        json_path = sweep_result.get("json_path") or row.get("report_dir", "")
+        md_path   = sweep_result.get("report_md", "")
+        png_path  = sweep_result.get("report_png", "")
+        files_txt = (
+            f"Report Dir: {report_dir or '未保存'}\n"
+            f"JSON: {json_path or '未保存'}\n"
+            f"Markdown: {md_path or '未保存'}\n"
+            f"PNG: {png_path or '未保存'}"
+        )
+        tk.Label(files_card.content, text=files_txt, justify=tk.LEFT, anchor="w",
+                 font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["text_primary"]).pack(fill=tk.X)
+        row_idx += 1
+
+        # Bottom button bar: PDF report + close
+        btn_bar = tk.Frame(inner, bg=C_STYLE["bg_main"])
+        btn_bar.grid(row=row_idx, column=0, sticky="e",
+                     padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["pad_lg"]))
+        pdf_btn_txt = "生成客户报告" if zh else "Generate Client Report"
+        pdf_btn = ttk.Button(btn_bar, text=pdf_btn_txt, style="Primary.TButton",
+                             command=lambda: self._generate_customer_report_for_history_record(
+                                 ref, row, sweep_result, json_path, md_path, png_path,
+                                 report_dir, btn_bar))
+        pdf_btn.pack(side=tk.LEFT, padx=(0, C_STYLE["gap_md"]))
+        close_txt = "关闭" if zh else "Close"
+        ttk.Button(btn_bar, text=close_txt, style="Secondary.TButton",
+                   command=self.history_detail_window.destroy).pack(side=tk.LEFT)
+
+    # ── Result DB single detail ───────────────────────────────────────────
+    def _render_rdb_single_detail(self, parent: tk.Frame, ref: dict):
+        zh = (self.lang_code == "zh_CN")
+        run_id = ref["run_id"]
+        db_path = getattr(self, "result_db_path_var",
+                          tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+        row = {}
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            r = conn.execute(
+                """SELECT br.*, bm.output_token_throughput, bm.ttft_avg, bm.ttft_p95,
+                          bm.e2el_avg, bm.e2el_p95, bm.tpot_avg,
+                          bm.request_throughput, bm.per_request_output_tps_avg
+                   FROM benchmark_runs br
+                   LEFT JOIN benchmark_metrics bm ON bm.run_id = br.run_id
+                   WHERE br.run_id=?""", (run_id,)).fetchone()
+            row = dict(r) if r else {}
+            conn.close()
+        except Exception:
+            pass
+
+        env_lines = self._build_env_summary_lines(row, zh)
+
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(0, weight=1)
+        top = parent.winfo_toplevel()
+        top.grid_columnconfigure(1, weight=1)
+        top.grid_rowconfigure(0, weight=1)
+
+        scroll = ScrollableFrame(parent, bg=C_STYLE["bg_main"])
+        scroll.grid(row=0, column=0, sticky="nsew")
+        inner = scroll.content
+        inner.configure(bg=C_STYLE["bg_main"])
+        inner.grid_columnconfigure(0, weight=1)
+
+        row_i = 0
+
+        # Env card
+        env_card = SectionCard(inner, "被测环境 / Environment" if zh else "Test Environment",
+                               collapsible=True, expanded=True)
+        env_card.grid(row=row_i, column=0, sticky="ew",
+                      padx=C_STYLE["pad_lg"], pady=(C_STYLE["pad_lg"], C_STYLE["gap_lg"]))
+        tk.Label(env_card.content, text="\n".join(env_lines), justify=tk.LEFT, anchor="w",
+                 font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["text_primary"], wraplength=780).pack(fill=tk.X)
+        row_i += 1
+
+        # Summary card
+        card = SectionCard(inner, "测试摘要" if zh else "Benchmark Summary",
+                           collapsible=True, expanded=True)
+        card.grid(row=row_i, column=0, sticky="ew",
+                  padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        succ  = row.get("success", 0) or 0
+        fail  = row.get("fail", 0) or 0
+        total = row.get("total_requests", 0) or 1
+        conc  = row.get("concurrency", 0) or 0
+        dur   = row.get("duration_sec", 0) or 0
+        out_tps = row.get("output_token_throughput")
+        ttft_avg = row.get("ttft_avg")
+        ttft_p95 = row.get("ttft_p95")
+        e2el_avg = row.get("e2el_avg")
+        e2el_p95 = row.get("e2el_p95")
+        tpot_avg = row.get("tpot_avg")
+        req_rps  = row.get("request_throughput")
+        sr = (succ / total * 100) if total else 0
+        metrics_lines = [
+            f"模型: {row.get('model_name', '-')}    并发: C{conc}    请求: {total}",
+            f"成功: {succ}    失败: {fail}    成功率: {sr:.1f}%    耗时: {dur:.1f}s",
+            (f"E2E avg: {e2el_avg:.3f}s" if e2el_avg is not None else "E2E avg: —") +
+            "    " + (f"E2E P95: {e2el_p95:.3f}s" if e2el_p95 is not None else "E2E P95: —"),
+            (f"TTFT avg: {ttft_avg:.3f}s" if ttft_avg is not None else "TTFT avg: —") +
+            "    " + (f"TTFT P95: {ttft_p95:.3f}s" if ttft_p95 is not None else "TTFT P95: —"),
+            (f"TPOT avg: {tpot_avg:.3f}s" if tpot_avg is not None else "TPOT avg: —") +
+            "    " + (f"Output TPS: {out_tps:.1f}" if out_tps is not None else "Output TPS: —") +
+            "    " + (f"RPS: {req_rps:.2f}" if req_rps is not None else "RPS: —"),
+            f"Run ID: {run_id}",
+            f"API: {row.get('api_url', '-')}",
+            f"Status: {row.get('status', '-')}",
+            f"Report Dir: {row.get('report_dir', '未保存')}",
+        ]
+        tk.Label(card.content, text="\n".join(metrics_lines), justify=tk.LEFT, anchor="w",
+                 font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["text_primary"]).pack(fill=tk.X)
+        row_i += 1
+
+        # Histogram placeholder (E2E latency data not stored per-request in result DB)
+        hist_card = SectionCard(inner, "E2E Latency 分布" if zh else "E2E Latency Distribution",
+                                collapsible=True, expanded=True)
+        hist_card.grid(row=row_i, column=0, sticky="ew",
+                       padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        hist_frame = tk.Frame(hist_card.content, bg=C_STYLE["bg_card"], height=200)
+        hist_frame.pack(fill=tk.BOTH, expand=True)
+        hist_frame.pack_propagate(False)
+        hist_canvas = tk.Canvas(hist_frame, bg=C_STYLE["bg_card"], highlightthickness=0)
+        hist_canvas.pack(fill=tk.BOTH, expand=True)
+        note = ("Result DB 仅存储聚合指标，逐请求延迟分布数据请查看对应旧版历史记录。"
+                if zh else
+                "Result DB stores aggregate metrics only. Per-request latency histogram "
+                "is available in the matching legacy history record.")
+        hist_canvas.create_text(400, 90, text=note, fill=C_STYLE["text_muted"],
+                                font=C_STYLE["font_small"], width=700)
+        row_i += 1
+
+        # Close button
+        btn_bar = tk.Frame(inner, bg=C_STYLE["bg_main"])
+        btn_bar.grid(row=row_i, column=0, sticky="e",
+                     padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["pad_lg"]))
+        ttk.Button(btn_bar, text="关闭" if zh else "Close",
+                   style="Secondary.TButton",
+                   command=self.history_detail_window.destroy).pack()
+
+    # ── Legacy sweep detail ───────────────────────────────────────────────
+    def _render_legacy_sweep_detail(self, parent: tk.Frame, ref: dict):
+        zh = (self.lang_code == "zh_CN")
+        rid = ref["rid"]
+        row = self._load_history_row(rid)
         if not row:
+            tk.Label(parent, text="历史记录不存在或已删除",
+                     font=C_STYLE["font_body"], bg=C_STYLE["bg_main"],
+                     fg=C_STYLE["error"]).pack(expand=True)
             return
-        if (row["record_type"] or "single") == "sweep":
-            self._show_sweep_history_detail(rid, row)
+        try:
+            sweep_result = json.loads(self._row_get(row, "summary_json") or "{}")
+        except Exception:
+            sweep_result = {}
+        cases = sweep_result.get("cases", [])
+
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(0, weight=1)
+        scroll = ScrollableFrame(parent, bg=C_STYLE["bg_main"])
+        scroll.grid(row=0, column=0, sticky="nsew")
+        inner = scroll.content
+        inner.configure(bg=C_STYLE["bg_main"])
+        inner.grid_columnconfigure(0, weight=1)
+
+        row_i = 0
+        # Legacy env warning
+        warn_card = SectionCard(inner, "被测环境" if zh else "Environment",
+                                collapsible=True, expanded=True)
+        warn_card.grid(row=row_i, column=0, sticky="ew",
+                       padx=C_STYLE["pad_lg"], pady=(C_STYLE["pad_lg"], C_STYLE["gap_lg"]))
+        tk.Label(warn_card.content,
+                 text="⚠ 未绑定环境档案，本次结果不建议用于长期横向对比。",
+                 font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["warning_text"]).pack(anchor="w")
+        row_i += 1
+
+        overview = SectionCard(inner, "扫测概览" if zh else "Sweep Overview",
+                               collapsible=True, expanded=True)
+        overview.grid(row=row_i, column=0, sticky="ew",
+                      padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        ov_txt = (
+            f"模型: {self._row_get(row, 'model', '-')}\n"
+            f"API: {self._row_get(row, 'api_url', '-')}\n"
+            f"配置: {self._row_get(row, 'config_summary', '-')}\n"
+            f"核心结果: {self._row_get(row, 'primary_metric', '-')}\n"
+            f"状态: {self._row_get(row, 'status', '-')}"
+        )
+        tk.Label(overview.content, text=ov_txt, justify=tk.LEFT, anchor="w",
+                 font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["text_primary"]).pack(fill=tk.X)
+        row_i += 1
+
+        tbl_card = SectionCard(inner, "并发档位明细" if zh else "Case Details",
+                               collapsible=True, expanded=True)
+        tbl_card.grid(row=row_i, column=0, sticky="ew",
+                      padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        cols = ("C", "Req", "Success", "Fail", "Rate%", "E2E P95", "Out TPS", "RPS")
+        tv = ttk.Treeview(tbl_card.content, columns=cols, show="headings",
+                          height=min(max(len(cases), 3), 8), style="App.Treeview")
+        for col in cols:
+            tv.heading(col, text=col)
+            tv.column(col, anchor="center", width=95)
+        tv.pack(fill=tk.X)
+        for case in cases:
+            s = case.get("benchmark_summary", {})
+            tv.insert("", tk.END, values=(
+                case.get("concurrency", "-"), case.get("total_requests", "-"),
+                s.get("success", 0), s.get("fail", 0),
+                f"{s.get('success_rate', 0) or 0:.0f}%",
+                f"{s.get('e2e_latency_p95', 0) or 0:.3f}s",
+                f"{s.get('system_output_tps', 0) or 0:.1f}",
+                f"{s.get('request_throughput_rps', 0) or 0:.2f}",
+            ))
+        row_i += 1
+
+        chart_card = SectionCard(inner, "图形分析" if zh else "Chart Analysis",
+                                 collapsible=True, expanded=True)
+        chart_card.grid(row=row_i, column=0, sticky="ew",
+                        padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        cf = tk.Frame(chart_card.content, bg=C_STYLE["bg_card"], height=460)
+        cf.pack(fill=tk.BOTH, expand=True)
+        cf.pack_propagate(False)
+        if self._matplotlib_available() and cases:
+            try:
+                from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+                fig = self._build_sweep_analysis_figure(sweep_result)
+                if fig is not None:
+                    c2 = FigureCanvasTkAgg(fig, master=cf)
+                    c2.draw()
+                    c2.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+                else:
+                    raise RuntimeError("no figure")
+            except Exception as ex:
+                tk.Label(cf, text=f"图表不可用: {ex}",
+                         font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                         fg=C_STYLE["warning_text"]).pack(expand=True)
+        else:
+            tk.Label(cf, text="matplotlib 未安装或暂无数据",
+                     font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                     fg=C_STYLE["warning_text"]).pack(expand=True)
+        row_i += 1
+
+        expert_card = SectionCard(inner, "专家分析" if zh else "Expert Analysis",
+                                  collapsible=True, expanded=True)
+        expert_card.grid(row=row_i, column=0, sticky="ew",
+                         padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        al = sweep_result.get("analysis_summary", [])
+        commentary = self._generate_expert_commentary(cases, al) if cases else ""
+        tk.Label(expert_card.content,
+                 text=("\n".join([*al, "", commentary]).strip() or "未生成专家分析。"),
+                 justify=tk.LEFT, anchor="w", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"],
+                 wraplength=820).pack(fill=tk.X)
+        row_i += 1
+
+        paths_card = SectionCard(inner, "输出文件" if zh else "Output Files",
+                                 collapsible=True, expanded=True)
+        paths_card.grid(row=row_i, column=0, sticky="ew",
+                        padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        json_path = self._row_get(row, "json_path", "")
+        md_path   = self._row_get(row, "markdown_path", "")
+        png_path  = self._row_get(row, "png_path", "")
+        tk.Label(paths_card.content, justify=tk.LEFT, anchor="w",
+                 text=(f"JSON: {json_path or '未保存'}\n"
+                       f"Markdown: {md_path or '未保存'}\n"
+                       f"PNG: {png_path or '未保存'}"),
+                 font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["text_primary"]).pack(fill=tk.X)
+        row_i += 1
+
+        raw_card = SectionCard(inner, "Raw JSON", collapsible=True, expanded=False)
+        raw_card.grid(row=row_i, column=0, sticky="ew",
+                      padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        txt_w = tk.Text(raw_card.content, height=10, wrap=tk.WORD,
+                        font=C_STYLE["font_code"], bg=C_STYLE["bg_input"],
+                        fg=C_STYLE["text_primary"], relief=tk.FLAT, borderwidth=0)
+        txt_w.insert(tk.END, json.dumps(sweep_result, ensure_ascii=False,
+                                        indent=2, default=str))
+        txt_w.config(state=tk.DISABLED)
+        txt_w.pack(fill=tk.BOTH, expand=True)
+        row_i += 1
+
+        btn_bar = tk.Frame(inner, bg=C_STYLE["bg_main"])
+        btn_bar.grid(row=row_i, column=0, sticky="e",
+                     padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["pad_lg"]))
+        report_dir = os.path.dirname(json_path) if json_path else ""
+        pdf_txt = "生成客户报告" if zh else "Generate Client Report"
+        pdf_btn = ttk.Button(btn_bar, text=pdf_txt, style="Primary.TButton",
+                             command=lambda: self._generate_customer_report_for_history_record(
+                                 ref, dict(row), sweep_result,
+                                 json_path, md_path, png_path, report_dir, btn_bar))
+        pdf_btn.pack(side=tk.LEFT, padx=(0, C_STYLE["gap_md"]))
+        ttk.Button(btn_bar, text="关闭" if zh else "Close",
+                   style="Secondary.TButton",
+                   command=self.history_detail_window.destroy).pack(side=tk.LEFT)
+
+    # ── Legacy single detail ──────────────────────────────────────────────
+    def _render_legacy_single_detail(self, parent: tk.Frame, ref: dict):
+        zh = (self.lang_code == "zh_CN")
+        rid = ref["rid"]
+        row = self._load_history_row(rid)
+        if not row:
+            tk.Label(parent, text="历史记录不存在或已删除",
+                     font=C_STYLE["font_body"], bg=C_STYLE["bg_main"],
+                     fg=C_STYLE["error"]).pack(expand=True)
             return
-        detail = json.loads(row["detail_json"]) if row["detail_json"] else []
-        # backward compat: old records use "latency", new records use "e2e_latency"
+        detail = []
+        try:
+            detail = json.loads(self._row_get(row, "detail_json") or "[]")
+        except Exception:
+            pass
         latencies = [
             r.get("e2e_latency", r.get("latency", 0))
             for r in detail if r.get("ok")
         ] if detail else []
-        fail_detail = [r for r in detail if not r.get("ok")]
-        # load warnings from DB
         metric_warnings = []
         try:
-            metric_warnings = json.loads(row["metric_warnings_json"] or "[]")
+            metric_warnings = json.loads(self._row_get(row, "metric_warnings_json") or "[]")
         except Exception:
             pass
 
-        top = tk.Toplevel(self.root)
-        top.title(f"测试详情  #{rid}")
-        top.geometry("800x620")
-        top.configure(bg=C_STYLE["bg_main"])
-        top.minsize(600, 450)
-        top.grid_columnconfigure(0, weight=1)
-        top.grid_rowconfigure(0, weight=0)  # summary card
-        top.grid_rowconfigure(1, weight=1)  # histogram
-        top.grid_rowconfigure(2, weight=0)  # close button
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(0, weight=1)
+        scroll = ScrollableFrame(parent, bg=C_STYLE["bg_main"])
+        scroll.grid(row=0, column=0, sticky="nsew")
+        inner = scroll.content
+        inner.configure(bg=C_STYLE["bg_main"])
+        inner.grid_columnconfigure(0, weight=1)
 
-        # ── summary card ──
-        card = tk.Frame(top, bg=C_STYLE["bg_card"],
-                        highlightbackground=C_STYLE["border"],
-                        highlightthickness=1, bd=0)
-        card.grid(row=0, column=0, sticky="ew",
-                  padx=C_STYLE["pad_lg"], pady=(C_STYLE["pad_lg"], C_STYLE["gap_md"]))
-        card_inner = tk.Frame(card, bg=C_STYLE["bg_card"])
-        card_inner.pack(fill=tk.X, padx=C_STYLE["pad_md"], pady=C_STYLE["pad_md"])
-        # row 1: model + concurrency + duration
-        r1 = tk.Frame(card_inner, bg=C_STYLE["bg_card"])
-        r1.pack(fill=tk.X)
-        tk.Label(r1, text=f"模型: {row['model']}", font=C_STYLE["font_section"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).pack(side=tk.LEFT)
-        tk.Label(r1, text=f"  并发: {row['concurrency']}", font=C_STYLE["font_body"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_secondary"]).pack(
-            side=tk.LEFT, padx=(C_STYLE["pad_md"], 0))
-        tk.Label(r1, text=f"请求: {row['total']}", font=C_STYLE["font_body"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_secondary"]).pack(
-            side=tk.LEFT, padx=(C_STYLE["pad_md"], 0))
-        succ = row["success"] or 0
-        fail = row["fail"] or 0
-        total = row["total"] or 1
-        succ_color = C_STYLE["success"] if succ == total else \
-                     C_STYLE["warning"] if succ > 0 else C_STYLE["error"]
-        tk.Label(r1, text=f"成功: {succ}", font=C_STYLE["font_body"],
-                 bg=C_STYLE["bg_card"], fg=succ_color).pack(
-            side=tk.LEFT, padx=(C_STYLE["pad_md"], 0))
-        if fail > 0:
-            tk.Label(r1, text=f"失败: {fail}", font=C_STYLE["font_body"],
-                     bg=C_STYLE["bg_card"], fg=C_STYLE["error"]).pack(
-                side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
-        dur = row["duration_sec"]
-        tk.Label(r1, text=f"耗时: {dur:.1f}s" if dur else "耗时: —",
-                 font=C_STYLE["font_body"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_secondary"]).pack(
-            side=tk.RIGHT)
-        # row 2: latency + TTFT/TPOT metrics
-        r2 = tk.Frame(card_inner, bg=C_STYLE["bg_card"])
-        r2.pack(fill=tk.X, pady=(C_STYLE["gap_sm"], 0))
-        metrics_text = (
-            f"E2E avg: {row['e2e_latency_avg']:.3f}s" if row["e2e_latency_avg"] else "E2E avg: —"
-        ) + "    " + (
-            f"E2E P95: {row['e2e_latency_p95']:.3f}s" if row["e2e_latency_p95"] else "E2E P95: —"
-        ) + "    " + (
-            f"TTFT: {row['ttft_avg']:.3f}s" if row["ttft_avg"] else "TTFT: —"
-        )
-        tk.Label(r2, text=metrics_text, font=C_STYLE["font_small"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).pack(side=tk.LEFT)
-        pct_text = (
-            f"Output TPS: {row['system_output_tps']:.1f}" if row["system_output_tps"] else "Output TPS: —"
-        ) + "    " + (
-            f"Req/s: {row['request_throughput_rps']:.2f}" if row["request_throughput_rps"] else "Req/s: —"
-        ) + "    " + (
-            f"Success: {row['success_rate']:.0f}%" if row["success_rate"] else "Success: —"
-        )
-        tk.Label(r2, text=pct_text, font=C_STYLE["font_small"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_secondary"]).pack(
-            side=tk.LEFT, padx=(C_STYLE["gap_lg"], 0))
+        row_i = 0
+        # Env warning card
+        warn_card = SectionCard(inner, "被测环境" if zh else "Environment",
+                                collapsible=True, expanded=True)
+        warn_card.grid(row=row_i, column=0, sticky="ew",
+                       padx=C_STYLE["pad_lg"], pady=(C_STYLE["pad_lg"], C_STYLE["gap_lg"]))
+        tk.Label(warn_card.content,
+                 text="⚠ 未绑定环境档案，本次结果不建议用于长期横向对比。",
+                 font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["warning_text"]).pack(anchor="w")
+        row_i += 1
 
-        # row 3: metric standard + warnings
-        if row["metric_standard"] or metric_warnings:
-            r3 = tk.Frame(card_inner, bg=C_STYLE["bg_card"])
-            r3.pack(fill=tk.X, pady=(C_STYLE["gap_sm"], 0))
-            std_label = f"标准: {row['metric_standard']}" if row["metric_standard"] else "标准: —"
-            warn_label = f"  |  警告: {len(metric_warnings)} 条" if metric_warnings else ""
-            tk.Label(r3, text=std_label + warn_label, font=C_STYLE["font_small"],
-                     bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"] if not metric_warnings else C_STYLE["warning"]).pack(side=tk.LEFT)
-            if metric_warnings:
-                r3w = tk.Frame(card_inner, bg=C_STYLE["bg_card"])
-                r3w.pack(fill=tk.X, pady=(2, 0))
-                for w in metric_warnings[:5]:
-                    tk.Label(r3w, text=f"  • {w[:100]}", font=C_STYLE["font_small"],
-                             bg=C_STYLE["bg_card"], fg=C_STYLE["warning_text"]).pack(anchor="w")
+        # Summary card
+        card = SectionCard(inner, "测试摘要" if zh else "Summary",
+                           collapsible=True, expanded=True)
+        card.grid(row=row_i, column=0, sticky="ew",
+                  padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        succ  = self._row_get(row, "success", 0) or 0
+        fail  = self._row_get(row, "fail", 0) or 0
+        total = self._row_get(row, "total", 0) or 1
+        conc  = self._row_get(row, "concurrency", 0)
+        dur   = self._row_get(row, "duration_sec")
+        e2e_avg  = self._row_get(row, "e2e_latency_avg")
+        e2e_p95  = self._row_get(row, "e2e_latency_p95")
+        ttft_avg = self._row_get(row, "ttft_avg")
+        out_tps  = self._row_get(row, "system_output_tps")
+        req_rps  = self._row_get(row, "request_throughput_rps")
+        sr = (succ / total * 100) if total else 0
+        metrics_lines = [
+            f"模型: {self._row_get(row, 'model', '-')}    并发: C{conc}    请求: {total}",
+            f"成功: {succ}    失败: {fail}    成功率: {sr:.1f}%    " +
+            (f"耗时: {dur:.1f}s" if dur is not None else "耗时: —"),
+            (f"E2E avg: {e2e_avg:.3f}s" if e2e_avg is not None else "E2E avg: —") +
+            "    " + (f"E2E P95: {e2e_p95:.3f}s" if e2e_p95 is not None else "E2E P95: —"),
+            (f"TTFT avg: {ttft_avg:.3f}s" if ttft_avg is not None else "TTFT avg: —") +
+            "    " + (f"Output TPS: {out_tps:.1f}" if out_tps is not None else "Output TPS: —") +
+            "    " + (f"RPS: {req_rps:.2f}" if req_rps is not None else "RPS: —"),
+        ]
+        if metric_warnings:
+            metrics_lines.append(f"⚠ {len(metric_warnings)} 条指标警告")
+            for w in metric_warnings[:3]:
+                metrics_lines.append(f"  • {w[:100]}")
+        tk.Label(card.content, text="\n".join(metrics_lines), justify=tk.LEFT, anchor="w",
+                 font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["text_primary"]).pack(fill=tk.X)
+        row_i += 1
 
-        # ── histogram ──
-        hist_frame = tk.Frame(top, bg=C_STYLE["bg_card"],
-                              highlightbackground=C_STYLE["border"],
-                              highlightthickness=1, bd=0)
-        hist_frame.grid(row=1, column=0, sticky="nsew",
-                        padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_md"]))
-        hist_frame.grid_columnconfigure(0, weight=1)
-        hist_frame.grid_rowconfigure(0, weight=1)
-        hist_inner = tk.Frame(hist_frame, bg=C_STYLE["bg_card"])
-        hist_inner.grid(row=0, column=0, sticky="nsew",
-                        padx=C_STYLE["pad_md"], pady=C_STYLE["pad_md"])
-        hist_inner.grid_columnconfigure(0, weight=1)
-        hist_inner.grid_rowconfigure(0, weight=1)
+        # E2E Histogram
+        hist_card = SectionCard(inner, "E2E Latency 分布" if zh else "E2E Latency Distribution",
+                                collapsible=True, expanded=True)
+        hist_card.grid(row=row_i, column=0, sticky="ew",
+                       padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        hist_frame = tk.Frame(hist_card.content, bg=C_STYLE["bg_card"], height=200)
+        hist_frame.pack(fill=tk.BOTH, expand=True)
+        hist_frame.pack_propagate(False)
+        hist_canvas = tk.Canvas(hist_frame, bg=C_STYLE["bg_card"],
+                                highlightthickness=0, bd=0)
+        hist_canvas.pack(fill=tk.BOTH, expand=True)
 
-        canvas = tk.Canvas(hist_inner, bg=C_STYLE["bg_card"],
-                           highlightthickness=0, bd=0)
-        canvas.grid(row=0, column=0, sticky="nsew")
-
-        # bind resize to redraw
-        def _redraw(event=None):
+        def _redraw_hist(event=None):
             if latencies:
-                self._draw_popup_histogram(canvas, latencies)
-        canvas.bind("<Configure>", _redraw, add="+")
-        # initial draw after layout
-        top.after(100, _redraw)
+                self._draw_popup_histogram(hist_canvas, latencies)
+        hist_canvas.bind("<Configure>", _redraw_hist, add="+")
+        hist_card.content.after(120, _redraw_hist)
+        row_i += 1
 
-        # ── close button ──
-        btn_frame = tk.Frame(top, bg=C_STYLE["bg_main"])
-        btn_frame.grid(row=2, column=0, sticky="e",
-                       padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["pad_lg"]))
-        ttk.Button(btn_frame, text="关闭", style="Secondary.TButton",
-                   command=top.destroy).pack()
+        # Close button
+        btn_bar = tk.Frame(inner, bg=C_STYLE["bg_main"])
+        btn_bar.grid(row=row_i, column=0, sticky="e",
+                     padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["pad_lg"]))
+        ttk.Button(btn_bar, text="关闭" if zh else "Close",
+                   style="Secondary.TButton",
+                   command=self.history_detail_window.destroy).pack()
+
+    # ── Env summary helper ────────────────────────────────────────────────
+    def _build_env_summary_lines(self, row: dict, zh: bool) -> list:
+        """Build environment summary text lines from a benchmark_runs dict."""
+        env_name  = row.get("environment_profile_name_snapshot") or ""
+        hw_name   = row.get("hardware_profile_name_snapshot") or "-"
+        sw_name   = row.get("software_stack_profile_name_snapshot") or "-"
+        mod_name  = row.get("model_profile_name_snapshot") or "-"
+        gpu_model = row.get("gpu_model_snapshot") or "-"
+        gpu_count = row.get("gpu_count_snapshot") or "-"
+        backend   = row.get("backend_snapshot") or "-"
+        bk_ver    = row.get("backend_version_snapshot") or "-"
+        api_type  = row.get("api_type_snapshot") or "-"
+        deploy    = row.get("deployment_type_snapshot") or "-"
+        parser    = row.get("reasoning_parser_snapshot") or "-"
+        mfamily   = row.get("model_family_snapshot") or "-"
+        msize     = row.get("model_size_snapshot") or "-"
+        quant     = row.get("quantization_snapshot") or "-"
+        mtype     = row.get("model_type_snapshot") or "-"
+        lines = [
+            f"  Environment Profile: {env_name or '未指定环境'}",
+            f"  Hardware Profile:    {hw_name}",
+            f"  GPU:                 {gpu_model}  x{gpu_count}",
+            f"  Software Stack:      {sw_name}",
+            f"  Backend:             {backend} {bk_ver}",
+            f"  API Type:            {api_type}",
+            f"  Deployment:          {deploy}",
+            f"  Reasoning Parser:    {parser}",
+            f"  Model Profile:       {mod_name}",
+            f"  Model:               {row.get('model_name', '-')}",
+            f"  Family/Size:         {mfamily} {msize}",
+            f"  Quantization:        {quant}",
+            f"  Model Type:          {mtype}",
+        ]
+        if not env_name:
+            lines.append("  ⚠ 未绑定环境档案，本次结果不建议用于长期横向对比。")
+        return lines
+
+    # ── PDF report integration ────────────────────────────────────────────
+
+    def _get_pdf_report_generator_path(self) -> str:
+        """Return path to generate_pdf_report.py. Configurable, defaults to /opt/..."""
+        default = "/opt/jisuman-pdf-report-generator/generate_pdf_report.py"
+        val = getattr(self, "pdf_generator_path_var", None)
+        if val and val.get():
+            return val.get()
+        return default
+
+    def _get_pdf_python_executable(self) -> str:
+        default = "python3"
+        val = getattr(self, "pdf_python_var", None)
+        if val and val.get():
+            return val.get()
+        return default
+
+    def _generate_customer_report_for_current_sweep(self):
+        """Called from sweep tab "生成客户报告" button."""
+        zh = (self.lang_code == "zh_CN")
+        sweep_result = getattr(self, "_sweep_result", None)
+        if not sweep_result or not sweep_result.get("cases"):
+            messagebox.showwarning(
+                "提示" if zh else "Warning",
+                "请先完成扫测并保存结果文件。\n(No completed sweep result found.)"
+            )
+            return
+        json_path  = sweep_result.get("json_path", "")
+        md_path    = sweep_result.get("report_md", "")
+        png_path   = sweep_result.get("report_png", "")
+        report_dir = getattr(self, "_current_sweep_run_dir", "") or ""
+        if not report_dir and json_path:
+            report_dir = os.path.dirname(json_path)
+        missing = []
+        if not json_path or not os.path.isfile(json_path):
+            missing.append("result.json")
+        if not md_path or not os.path.isfile(md_path):
+            missing.append("report.md/report.txt")
+        if not png_path or not os.path.isfile(png_path):
+            missing.append("chart.png")
+        if missing:
+            msg = ("缺少生成报告所需文件：\n" + "\n".join(f"  - {m}" for m in missing) +
+                   "\n\n请先完成扫测并启用保存报告/图片。")
+            messagebox.showwarning("缺少文件" if zh else "Missing Files", msg)
+            return
+        self._run_pdf_report_generator_async(
+            json_path, md_path, png_path, report_dir,
+            parent_btn=getattr(self, "_sweep_pdf_btn", None))
+
+    def _generate_customer_report_for_history_record(
+            self, ref, row, sweep_result, json_path, md_path, png_path, report_dir, btn_bar):
+        """Called from history detail "生成客户报告" button."""
+        zh = (self.lang_code == "zh_CN")
+        missing = []
+        if not json_path or not os.path.isfile(json_path):
+            missing.append("result.json")
+        if not png_path or not os.path.isfile(png_path):
+            # non-fatal — continue without chart
+            pass
+        if not report_dir:
+            report_dir = os.path.dirname(json_path) if json_path else ""
+        if missing:
+            msg = ("缺少生成报告所需文件：\n" + "\n".join(f"  - {m}" for m in missing) +
+                   "\n\n请确认扫测时已启用保存 JSON 和 PNG。")
+            messagebox.showwarning("缺少文件" if zh else "Missing Files", msg)
+            return
+        # Use md_path if available; json_path is mandatory
+        self._run_pdf_report_generator_async(
+            json_path, md_path, png_path, report_dir, parent_btn=None)
+
+    def _run_pdf_report_generator_async(
+            self, json_path: str, md_path: str, png_path: str,
+            report_dir: str, parent_btn=None):
+        """Invoke generate_pdf_report.py in a background thread."""
+        import threading as _threading
+        zh = (self.lang_code == "zh_CN")
+        gen_path = self._get_pdf_report_generator_path()
+        python_exe = self._get_pdf_python_executable()
+
+        if not os.path.isfile(gen_path):
+            messagebox.showerror(
+                "错误" if zh else "Error",
+                f"未找到 PDF 报告生成器，请检查路径：\n{gen_path}"
+            )
+            return
+
+        lang_arg = "zh_CN" if zh else "en_US"
+        lang_suffix = lang_arg
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if not report_dir:
+            report_dir = os.path.dirname(json_path) if json_path else "."
+        os.makedirs(report_dir, exist_ok=True)
+        out_pdf  = os.path.join(report_dir, f"customer_acceptance_report_{lang_suffix}.pdf")
+        out_docx = os.path.join(report_dir, f"customer_acceptance_report_{lang_suffix}.docx")
+        log_path = os.path.join(report_dir, f"pdf_report_generation.log")
+
+        cmd = [python_exe, gen_path,
+               "--result-json", json_path,
+               "--output", out_pdf,
+               "--output-docx", out_docx,
+               "--report-type", "customer_acceptance",
+               "--lang", lang_arg]
+        if md_path and os.path.isfile(md_path):
+            cmd += ["--report-md", md_path]
+        if png_path and os.path.isfile(png_path):
+            cmd += ["--chart-png", png_path]
+
+        # Disable button while running
+        if parent_btn:
+            try:
+                parent_btn.config(state=tk.DISABLED)
+            except Exception:
+                pass
+
+        # Status popup
+        status_win = tk.Toplevel(self.root)
+        status_win.title("正在生成报告..." if zh else "Generating Report...")
+        status_win.geometry("420x120")
+        status_win.resizable(False, False)
+        status_win.configure(bg=C_STYLE["bg_card"])
+        status_var = tk.StringVar(value="正在生成客户报告..." if zh else "Generating client report...")
+        tk.Label(status_win, textvariable=status_var, font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"],
+                 wraplength=380).pack(expand=True)
+
+        def _bg_run():
+            import subprocess as _sp
+            try:
+                result = _sp.run(cmd, capture_output=True, text=True, timeout=180)
+                stdout = result.stdout
+                stderr = result.stderr
+                rc = result.returncode
+                with open(log_path, "w", encoding="utf-8") as lf:
+                    lf.write(f"CMD: {' '.join(cmd)}\nRC: {rc}\n\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}\n")
+                success = (rc == 0)
+            except Exception as ex:
+                success = False
+                rc = -1
+                stderr = str(ex)
+                stdout = ""
+                try:
+                    with open(log_path, "w", encoding="utf-8") as lf:
+                        lf.write(f"CMD: {' '.join(cmd)}\nEXCEPTION: {ex}\n")
+                except Exception:
+                    pass
+            self.root.after(0, lambda: self._on_pdf_report_done(
+                success, out_pdf, out_docx, log_path, json_path,
+                stderr, status_win, status_var, parent_btn))
+
+        t = _threading.Thread(target=_bg_run, daemon=True)
+        t.start()
+
+    def _on_pdf_report_done(self, success, out_pdf, out_docx, log_path,
+                             json_path, stderr, status_win, status_var, parent_btn):
+        zh = (self.lang_code == "zh_CN")
+        try:
+            status_win.destroy()
+        except Exception:
+            pass
+        if parent_btn:
+            try:
+                parent_btn.config(state=tk.NORMAL)
+            except Exception:
+                pass
+
+        if success:
+            msg = (f"客户报告生成完成！\n\nPDF:  {out_pdf}\nDOCX: {out_docx}"
+                   if zh else
+                   f"Client report generated!\n\nPDF:  {out_pdf}\nDOCX: {out_docx}")
+            messagebox.showinfo("完成" if zh else "Done", msg)
+            # Try to write pdf_report_summary.json
+            try:
+                summary = {
+                    "status": "passed",
+                    "language": "zh_CN" if zh else "en_US",
+                    "output_pdf": out_pdf,
+                    "output_docx": out_docx,
+                    "log_path": log_path,
+                    "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                summary_json_path = os.path.join(
+                    os.path.dirname(out_pdf), "pdf_report_summary.json")
+                with open(summary_json_path, "w", encoding="utf-8") as f:
+                    json.dump(summary, f, ensure_ascii=False, indent=2)
+                self._record_pdf_artifacts(json_path, out_pdf, out_docx, log_path)
+            except Exception:
+                pass
+        else:
+            err_summary = (stderr or "").strip()[:300]
+            # Friendly error messages
+            if "soffice" in err_summary or "LibreOffice" in err_summary:
+                hint = "未找到 LibreOffice / soffice，无法转换 DOCX 到 PDF。"
+            elif "python-docx" in err_summary or "import" in err_summary.lower():
+                hint = "PDF 生成器依赖未安装，请执行: pip install python-docx pypdf pillow"
+            else:
+                hint = f"错误摘要: {err_summary}"
+            msg = (f"客户报告生成失败。\n\n{hint}\n\n日志: {log_path}"
+                   if zh else
+                   f"Client report generation failed.\n\n{hint}\n\nLog: {log_path}")
+            messagebox.showerror("生成失败" if zh else "Failed", msg)
+
+    def _record_pdf_artifacts(self, json_path, out_pdf, out_docx, log_path):
+        """Record generated PDF/DOCX as benchmark_artifacts in result DB (best-effort)."""
+        try:
+            db_path = getattr(self, "result_db_path_var",
+                              tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
+            if not os.path.exists(db_path):
+                return
+            conn = sqlite3.connect(db_path)
+            # Find run_id by report_dir proximity
+            report_dir = os.path.dirname(out_pdf)
+            rows = conn.execute(
+                "SELECT run_id FROM benchmark_runs WHERE report_dir=?",
+                (report_dir,)).fetchall()
+            for r in rows:
+                run_id = r[0]
+                for atype, apath in [
+                    ("customer_pdf_report", out_pdf),
+                    ("customer_docx_report", out_docx),
+                    ("pdf_generation_log", log_path),
+                ]:
+                    try:
+                        conn.execute(
+                            """INSERT OR REPLACE INTO benchmark_artifacts
+                               (run_id, artifact_type, path, created_at)
+                               VALUES (?,?,?,?)""",
+                            (run_id, atype, apath,
+                             datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                    except Exception:
+                        pass
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
 # ============================================================
 # Entry point
 # ============================================================
