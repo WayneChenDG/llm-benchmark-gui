@@ -9014,9 +9014,9 @@ class LLMBenchmarkApp:
         self._hist_prev_btn.config(state=prev_state)
         self._hist_next_btn.config(state=next_state)
 
-        # ── Tooltips text ─────────────────────────────────────────────────
-        self._hist_prev_btn.config(text=f"‹\n{index}/{total}" if index > 0 else "‹")
-        self._hist_next_btn.config(text=f"›\n{index+2}/{total}" if index < total-1 else "›")
+        # ── Nav button text (simple arrows only) ─────────────────────────
+        self._hist_prev_btn.config(text="‹")
+        self._hist_next_btn.config(text="›")
 
         # ── Rebuild center content ────────────────────────────────────────
         for w in self._hist_detail_center.winfo_children():
@@ -9204,21 +9204,30 @@ class LLMBenchmarkApp:
                  fg=C_STYLE["text_primary"], wraplength=820).pack(fill=tk.X)
         row_idx += 1
 
-        # Output files
+        # Output files — resolved via priority-based helper
         files_card = SectionCard(inner, "输出文件" if zh else "Output Files",
                                  collapsible=True, expanded=True)
         files_card.grid(row=row_idx, column=0, sticky="ew",
                         padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
-        json_path = sweep_result.get("json_path") or row.get("report_dir", "")
-        md_path   = sweep_result.get("report_md", "")
-        png_path  = sweep_result.get("report_png", "")
-        files_txt = (
-            f"Report Dir: {report_dir or '未保存'}\n"
-            f"JSON: {json_path or '未保存'}\n"
-            f"Markdown: {md_path or '未保存'}\n"
-            f"PNG: {png_path or '未保存'}"
-        )
-        tk.Label(files_card.content, text=files_txt, justify=tk.LEFT, anchor="w",
+        _arts     = self._resolve_history_artifacts(ref, row, sweep_result)
+        json_path = _arts["result_json"]
+        md_path   = _arts["report_md"]
+        png_path  = _arts["chart_png"]
+        cust_pdf  = _arts["customer_pdf"]
+        cust_docx = _arts["customer_docx"]
+        _rdir     = _arts["report_dir"] or report_dir
+        files_lines = [
+            f"Report Dir: {_rdir or '未保存'}",
+            f"JSON:       {json_path or '未保存'}",
+            f"Markdown:   {md_path or '未保存'}",
+            f"PNG:        {png_path or '未保存'}",
+        ]
+        if cust_pdf:
+            files_lines.append(f"PDF 报告:   {cust_pdf}")
+        if cust_docx:
+            files_lines.append(f"DOCX 报告:  {cust_docx}")
+        tk.Label(files_card.content, text="\n".join(files_lines),
+                 justify=tk.LEFT, anchor="w",
                  font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
                  fg=C_STYLE["text_primary"]).pack(fill=tk.X)
         row_idx += 1
@@ -9228,10 +9237,10 @@ class LLMBenchmarkApp:
         btn_bar.grid(row=row_idx, column=0, sticky="e",
                      padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["pad_lg"]))
         pdf_btn_txt = "生成客户报告" if zh else "Generate Client Report"
+        _j, _m, _p, _rd = json_path, md_path, png_path, _rdir
         pdf_btn = ttk.Button(btn_bar, text=pdf_btn_txt, style="Primary.TButton",
                              command=lambda: self._generate_customer_report_for_history_record(
-                                 ref, row, sweep_result, json_path, md_path, png_path,
-                                 report_dir, btn_bar))
+                                 ref, row, sweep_result, _j, _m, _p, _rd, btn_bar))
         pdf_btn.pack(side=tk.LEFT, padx=(0, C_STYLE["gap_md"]))
         close_txt = "关闭" if zh else "Close"
         ttk.Button(btn_bar, text=close_txt, style="Secondary.TButton",
@@ -9468,13 +9477,26 @@ class LLMBenchmarkApp:
                                  collapsible=True, expanded=True)
         paths_card.grid(row=row_i, column=0, sticky="ew",
                         padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
-        json_path = self._row_get(row, "json_path", "")
-        md_path   = self._row_get(row, "markdown_path", "")
-        png_path  = self._row_get(row, "png_path", "")
+        _arts_leg  = self._resolve_history_artifacts(ref, dict(row), sweep_result)
+        json_path  = _arts_leg["result_json"]
+        md_path    = _arts_leg["report_md"]
+        png_path   = _arts_leg["chart_png"]
+        cust_pdf   = _arts_leg["customer_pdf"]
+        cust_docx  = _arts_leg["customer_docx"]
+        report_dir = _arts_leg["report_dir"]
+        path_lines = [
+            f"JSON:      {json_path or '未保存'}",
+            f"Markdown:  {md_path or '未保存'}",
+            f"PNG:       {png_path or '未保存'}",
+        ]
+        if report_dir:
+            path_lines.insert(0, f"Report Dir: {report_dir}")
+        if cust_pdf:
+            path_lines.append(f"PDF 报告:  {cust_pdf}")
+        if cust_docx:
+            path_lines.append(f"DOCX 报告: {cust_docx}")
         tk.Label(paths_card.content, justify=tk.LEFT, anchor="w",
-                 text=(f"JSON: {json_path or '未保存'}\n"
-                       f"Markdown: {md_path or '未保存'}\n"
-                       f"PNG: {png_path or '未保存'}"),
+                 text="\n".join(path_lines),
                  font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
                  fg=C_STYLE["text_primary"]).pack(fill=tk.X)
         row_i += 1
@@ -9494,12 +9516,12 @@ class LLMBenchmarkApp:
         btn_bar = tk.Frame(inner, bg=C_STYLE["bg_main"])
         btn_bar.grid(row=row_i, column=0, sticky="e",
                      padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["pad_lg"]))
-        report_dir = os.path.dirname(json_path) if json_path else ""
         pdf_txt = "生成客户报告" if zh else "Generate Client Report"
+        _j, _m, _p, _rd = json_path, md_path, png_path, report_dir
         pdf_btn = ttk.Button(btn_bar, text=pdf_txt, style="Primary.TButton",
                              command=lambda: self._generate_customer_report_for_history_record(
                                  ref, dict(row), sweep_result,
-                                 json_path, md_path, png_path, report_dir, btn_bar))
+                                 _j, _m, _p, _rd, btn_bar))
         pdf_btn.pack(side=tk.LEFT, padx=(0, C_STYLE["gap_md"]))
         ttk.Button(btn_bar, text="关闭" if zh else "Close",
                    style="Secondary.TButton",
@@ -9649,6 +9671,196 @@ class LLMBenchmarkApp:
             lines.append("  ⚠ 未绑定环境档案，本次结果不建议用于长期横向对比。")
         return lines
 
+    # ── Artifact resolution helpers ───────────────────────────────────────
+
+    def _scan_report_dir_for_artifacts(self, report_dir: str) -> dict:
+        """Glob-scan *report_dir* and return best-guess artifact paths.
+
+        Returns a dict with keys: result_json, report_md, chart_png,
+        customer_pdf, customer_docx.  Values are absolute path strings or ''.
+        """
+        from pathlib import Path as _Path
+        result = {
+            "result_json": "", "report_md": "", "chart_png": "",
+            "customer_pdf": "", "customer_docx": "",
+        }
+        if not report_dir:
+            return result
+        p = _Path(report_dir)
+        if not p.is_dir():
+            return result
+
+        # ── result JSON ───────────────────────────────────────────────────
+        # Prefer files whose stem starts with "result" or "sweep"; exclude
+        # generation-summary files and pdf_report_summary files.
+        def _is_data_json(f):
+            stem = f.stem.lower()
+            return ("summary" not in stem and "pdf_report" not in stem
+                    and "generation" not in stem)
+
+        pref_json = sorted(
+            (f for f in p.glob("result*.json") if _is_data_json(f)),
+            key=lambda f: f.stat().st_mtime, reverse=True,
+        )
+        if not pref_json:
+            pref_json = sorted(
+                (f for f in p.glob("*.json") if _is_data_json(f)),
+                key=lambda f: f.stat().st_mtime, reverse=True,
+            )
+        if pref_json:
+            result["result_json"] = str(pref_json[0])
+
+        # ── Markdown ──────────────────────────────────────────────────────
+        report_kws = ("report", "sweep", "analysis", "benchmark")
+        md_cands = sorted(
+            p.glob("*.md"),
+            key=lambda f: (
+                not any(kw in f.stem.lower() for kw in report_kws),
+                -f.stat().st_mtime,
+            ),
+        )
+        if md_cands:
+            result["report_md"] = str(md_cands[0])
+
+        # ── PNG chart ─────────────────────────────────────────────────────
+        chart_kws = ("chart", "analysis", "sweep", "benchmark")
+        png_cands = sorted(
+            p.glob("*.png"),
+            key=lambda f: (
+                not any(kw in f.stem.lower() for kw in chart_kws),
+                -f.stat().st_mtime,
+            ),
+        )
+        if png_cands:
+            result["chart_png"] = str(png_cands[0])
+
+        # ── Customer PDF / DOCX ───────────────────────────────────────────
+        for ext, key in [("pdf", "customer_pdf"), ("docx", "customer_docx")]:
+            preferred = sorted(
+                (f for f in p.glob(f"*.{ext}")
+                 if "customer" in f.stem.lower() or "jisuman" in f.stem.lower()
+                 or "acceptance" in f.stem.lower()),
+                key=lambda f: f.stat().st_mtime, reverse=True,
+            )
+            fallback = sorted(
+                p.glob(f"*.{ext}"),
+                key=lambda f: f.stat().st_mtime, reverse=True,
+            )
+            cands = preferred or fallback
+            if cands:
+                result[key] = str(cands[0])
+
+        return result
+
+    def _resolve_history_artifacts(
+            self, ref: dict, row: dict = None,
+            sweep_result: dict = None) -> dict:
+        """Resolve artifact paths for a history record using 5-tier priority.
+
+        Priority (highest → lowest):
+          1. benchmark_artifacts table (result_db records)
+          2. sweep_result embedded fields (json_path, report_md, report_png)
+          3. Legacy DB row columns (json_path, markdown_path, png_path)
+          4. Derive report_dir from any found path
+          5. Scan report_dir with glob
+
+        Returns dict with keys:
+          report_dir, result_json, report_md, chart_png,
+          customer_pdf, customer_docx, pdf_log
+        """
+        if row is None:
+            row = {}
+        if sweep_result is None:
+            sweep_result = {}
+
+        arts = {
+            "report_dir":   "",
+            "result_json":  "",
+            "report_md":    "",
+            "chart_png":    "",
+            "customer_pdf": "",
+            "customer_docx": "",
+            "pdf_log":      "",
+        }
+
+        # Seed report_dir from row / sweep_result
+        arts["report_dir"] = (
+            (row.get("report_dir") if isinstance(row, dict) else "")
+            or sweep_result.get("report_dir", "")
+            or ""
+        )
+
+        # ── Tier 1: benchmark_artifacts table (result_db only) ────────────
+        if ref.get("source") == "result_db":
+            run_id = ref.get("run_id", "")
+            db_path = (
+                getattr(self, "result_db_path_var", None) and
+                self.result_db_path_var.get()
+            ) or RESULT_DB_PATH
+            try:
+                conn = sqlite3.connect(db_path)
+                conn.row_factory = sqlite3.Row
+                rows_art = conn.execute(
+                    "SELECT artifact_type, path FROM benchmark_artifacts"
+                    " WHERE run_id=?", (run_id,)
+                ).fetchall()
+                conn.close()
+                for ar in rows_art:
+                    atype = ar["artifact_type"]
+                    apath = ar["path"] or ""
+                    if not apath or not os.path.isfile(apath):
+                        continue
+                    if atype == "customer_pdf_report":
+                        arts["customer_pdf"] = apath
+                    elif atype == "customer_docx_report":
+                        arts["customer_docx"] = apath
+                    elif atype == "pdf_generation_log":
+                        arts["pdf_log"] = apath
+            except Exception:
+                pass
+
+        # ── Tier 2: sweep_result embedded fields ──────────────────────────
+        for src_key, art_key in [
+            ("json_path",   "result_json"),
+            ("result_json", "result_json"),
+            ("report_md",   "report_md"),
+            ("report_png",  "chart_png"),
+        ]:
+            if not arts[art_key]:
+                p = sweep_result.get(src_key, "") or ""
+                if p and os.path.isfile(p):
+                    arts[art_key] = p
+
+        # ── Tier 3: legacy DB row columns ────────────────────────────────
+        for col, art_key in [
+            ("json_path",      "result_json"),
+            ("markdown_path",  "report_md"),
+            ("png_path",       "chart_png"),
+        ]:
+            if not arts[art_key]:
+                p = (row.get(col, "") if isinstance(row, dict)
+                     else self._row_get(row, col, "")) or ""
+                if p and os.path.isfile(p):
+                    arts[art_key] = p
+
+        # ── Tier 4: derive report_dir from any found path ─────────────────
+        if not arts["report_dir"]:
+            for k in ("result_json", "report_md", "chart_png",
+                      "customer_pdf", "customer_docx"):
+                if arts[k]:
+                    arts["report_dir"] = os.path.dirname(arts[k])
+                    break
+
+        # ── Tier 5: scan report_dir ────────────────────────────────────────
+        if arts["report_dir"] and os.path.isdir(arts["report_dir"]):
+            scanned = self._scan_report_dir_for_artifacts(arts["report_dir"])
+            for k in ("result_json", "report_md", "chart_png",
+                      "customer_pdf", "customer_docx"):
+                if not arts[k] and scanned.get(k):
+                    arts[k] = scanned[k]
+
+        return arts
+
     # ── PDF report integration ────────────────────────────────────────────
 
     def _get_pdf_report_generator_path(self) -> str:
@@ -9700,24 +9912,63 @@ class LLMBenchmarkApp:
 
     def _generate_customer_report_for_history_record(
             self, ref, row, sweep_result, json_path, md_path, png_path, report_dir, btn_bar):
-        """Called from history detail "生成客户报告" button."""
+        """Called from history detail "生成客户报告" button.
+
+        Re-resolves artifacts so paths are always fresh, then validates
+        mandatory files before launching the async generator.
+        """
         zh = (self.lang_code == "zh_CN")
+
+        # Re-resolve artifacts to catch any files written after the window opened
+        _arts = self._resolve_history_artifacts(ref, row, sweep_result)
+        # Caller-supplied paths take precedence if they are valid files
+        _json = (json_path if json_path and os.path.isfile(json_path)
+                 else _arts["result_json"])
+        _md   = (md_path if md_path and os.path.isfile(md_path)
+                 else _arts["report_md"])
+        _png  = (png_path if png_path and os.path.isfile(png_path)
+                 else _arts["chart_png"])
+        _rd   = report_dir or _arts["report_dir"]
+        if not _rd and _json:
+            _rd = os.path.dirname(_json)
+
         missing = []
-        if not json_path or not os.path.isfile(json_path):
-            missing.append("result.json")
-        if not png_path or not os.path.isfile(png_path):
-            # non-fatal — continue without chart
-            pass
-        if not report_dir:
-            report_dir = os.path.dirname(json_path) if json_path else ""
+        if not _json or not os.path.isfile(_json):
+            missing.append(
+                f"result.json  {'(未找到)' if not _json else '(文件不存在: ' + _json + ')'}"
+            )
+        if not _md or not os.path.isfile(_md):
+            missing.append(
+                f"report.md  {'(未找到)' if not _md else '(文件不存在: ' + _md + ')'}"
+            )
+        # PNG is non-fatal; warn but do not block
+        png_warn = ""
+        if not _png or not os.path.isfile(_png):
+            png_warn = (
+                "\n⚠ chart.png 未找到，将生成无图表版报告。"
+                if zh else
+                "\n⚠ chart.png not found — report will be generated without a chart."
+            )
+
         if missing:
-            msg = ("缺少生成报告所需文件：\n" + "\n".join(f"  - {m}" for m in missing) +
-                   "\n\n请确认扫测时已启用保存 JSON 和 PNG。")
+            msg = (
+                ("缺少生成报告所需文件：\n" if zh else "Missing required files:\n")
+                + "\n".join(f"  · {m}" for m in missing)
+                + (("\n\n报告目录: " + (_rd or "未知")) if _rd else "")
+                + "\n\n请确认扫测时已启用保存 JSON 结果。"
+            )
             messagebox.showwarning("缺少文件" if zh else "Missing Files", msg)
             return
-        # Use md_path if available; json_path is mandatory
+
+        if png_warn:
+            if not messagebox.askyesno(
+                "确认" if zh else "Confirm",
+                png_warn + ("\n\n是否继续生成报告？" if zh else "\n\nContinue generating report?"),
+            ):
+                return
+
         self._run_pdf_report_generator_async(
-            json_path, md_path, png_path, report_dir, parent_btn=None)
+            _json, _md, _png, _rd, parent_btn=None)
 
     def _run_pdf_report_generator_async(
             self, json_path: str, md_path: str, png_path: str,
