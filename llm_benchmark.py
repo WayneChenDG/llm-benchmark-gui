@@ -25,6 +25,23 @@ from tkinter import messagebox, ttk
 from typing import Optional
 from urllib import request, error
 from urllib.parse import urlparse, urlunparse
+import asyncio
+import queue
+
+# Optional aiohttp for high-concurrency (C>256) sweep
+try:
+    import aiohttp as _aiohttp_mod
+    _AIOHTTP_AVAILABLE = True
+except ImportError:
+    _aiohttp_mod = None
+    _AIOHTTP_AVAILABLE = False
+
+# Windows asyncio: use Selector policy to avoid proactor/SSL issues with aiohttp
+if sys.platform.startswith("win"):
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    except AttributeError:
+        pass
 
 # Resolve paths relative to script location (fixes double-click on Windows)
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -60,6 +77,20 @@ BENCHMARK_PRESETS = {
     "自定义":                    {"concurrency": 64, "total": 640, "desc": "自定义并发与请求数，可手动修改"},
 }
 DEFAULT_PRESET_KEY = "标准基线 — C8/N80（默认）"
+
+# ---------- 并发扫测预设 ----------
+SWEEP_PRESETS = {
+    "自定义": None,
+    "客户验收峰值吞吐 — 1024/2048": {
+        "concurrency_levels": "1,2,4,8,16,32,64,128,256,512,768,1024",
+        "max_tokens": 2048,
+        "output_length_mode": "fixed",
+        "temperature": 0.0,
+        "stream": True,
+        "request_rule": "x2",
+    },
+}
+
 # ---------- 字体自动检测 ----------
 def _detect_font_family() -> str:
     """Detect the best available font for CJK + Latin rendering.
@@ -223,6 +254,38 @@ I18N = {
         "msg.prompt_required": "请输入用户提示词",
         "msg.prompt_required_settings": "请在「参数设置」中填写用户提示词",
         "msg.multiplier_positive": "请求倍数必须大于 0",
+        "sweep.preset_label": "预设",
+        "sweep.preset_custom": "自定义",
+        "sweep.preset_hc_peak": "客户验收峰值吞吐 — 1024/2048",
+        "sweep.request_rule_label": "请求规则",
+        "sweep.request_rule_x1": "× 1",
+        "sweep.request_rule_x2": "× 2（推荐）",
+        "sweep.request_rule_x5": "× 5",
+        "sweep.request_rule_x10": "× 10",
+        "sweep.request_rule_fixed": "固定总请求数",
+        "sweep.fixed_total_label": "固定请求总数",
+        "sweep.hc_warning_title": "高并发确认",
+        "sweep.hc_warning_body": (
+            "当前扫测包含 C512 或更高并发，可能同时建立大量 HTTP streaming 连接。\n"
+            "这会显著增加客户端、网络和服务端压力，并可能持续较长时间。\n"
+            "建议先确认服务端已稳定运行，并优先使用 concurrency × 1 或 × 2 进行试跑。\n\n"
+            "是否继续？"
+        ),
+        "sweep.aiohttp_required": (
+            "高并发扫测（C>256）需要 aiohttp，请安装：\n"
+            "pip install aiohttp\n\n"
+            "当前将使用线程池模式（C≤256 时推荐）。"
+        ),
+        "sweep.hc_mode_title": "正在进行高并发扫测...",
+        "sweep.peak_output_tps": "峰值输出吞吐 (Peak Output TPS)",
+        "sweep.peak_concurrency": "峰值并发档位",
+        "sweep.peak_stable_concurrency": "峰值稳定并发",
+        "sweep.hc_success_rate": "C{conc} 成功率",
+        "sweep.hc_fail_count": "C{conc} 失败数",
+        "sweep.hc_failure_summary": "失败原因分布",
+        "sweep.hc_threshold_8k": "是否达到单实例 >8000 tok/s",
+        "sweep.hc_threshold_25k": "是否达到双实例 >25000 tok/s",
+        "sweep.ulimit_hint": "提示: Linux 客户端建议 ulimit -n >= 65535",
         "stream.parser_profile": "流式解析能力档案",
         "stream.first_generated_token": "首个生成内容延迟",
         "stream.first_answer_token": "首个回答正文延迟",
@@ -426,6 +489,38 @@ I18N = {
         "msg.prompt_required": "Enter a user prompt.",
         "msg.prompt_required_settings": "Enter a user prompt in Settings.",
         "msg.multiplier_positive": "Request multiplier must be greater than 0.",
+        "sweep.preset_label": "Preset",
+        "sweep.preset_custom": "Custom",
+        "sweep.preset_hc_peak": "Peak Throughput Acceptance — 1024/2048",
+        "sweep.request_rule_label": "Request Rule",
+        "sweep.request_rule_x1": "× 1",
+        "sweep.request_rule_x2": "× 2 (recommended)",
+        "sweep.request_rule_x5": "× 5",
+        "sweep.request_rule_x10": "× 10",
+        "sweep.request_rule_fixed": "Fixed Total",
+        "sweep.fixed_total_label": "Fixed Total Requests",
+        "sweep.hc_warning_title": "High-Concurrency Confirmation",
+        "sweep.hc_warning_body": (
+            "This sweep includes C512 or higher concurrency and may open many HTTP streaming connections.\n"
+            "It can heavily load the client, network, and server, and may run for a long time.\n"
+            "Start with concurrency × 1 or × 2 before formal validation.\n\n"
+            "Continue?"
+        ),
+        "sweep.aiohttp_required": (
+            "High-concurrency sweep (C>256) requires aiohttp. Please install:\n"
+            "pip install aiohttp\n\n"
+            "Thread-pool mode will be used (recommended for C<=256)."
+        ),
+        "sweep.hc_mode_title": "High-concurrency sweep running...",
+        "sweep.peak_output_tps": "Peak Output TPS",
+        "sweep.peak_concurrency": "Peak Concurrency",
+        "sweep.peak_stable_concurrency": "Peak Stable Concurrency",
+        "sweep.hc_success_rate": "C{conc} Success Rate",
+        "sweep.hc_fail_count": "C{conc} Fail Count",
+        "sweep.hc_failure_summary": "Failure Distribution",
+        "sweep.hc_threshold_8k": "Meets single-instance >8000 tok/s",
+        "sweep.hc_threshold_25k": "Meets dual-instance >25000 tok/s",
+        "sweep.ulimit_hint": "Tip: Linux client recommends ulimit -n >= 65535",
         "stream.parser_profile": "Stream Parser Profile",
         "stream.first_generated_token": "First Generated Token Latency",
         "stream.first_answer_token": "First Answer Token Latency",
@@ -2168,6 +2263,49 @@ def fetch_models(api_url: str, api_key: str, timeout: int = 10) -> tuple[list[st
         return [], str(e)
 
 
+# ── HC runner helpers (module-level, shared by async runner) ─────────────────
+
+def _hc_classify_error(exc: Exception) -> str:
+    """Classify an exception into a failure taxonomy string.
+    Taxonomy: timeout, connect_error, read_error, server_5xx, server_4xx,
+              json_parse_error, stream_parse_error, cancelled,
+              client_resource_error, unknown.
+    """
+    name = type(exc).__name__.lower()
+    msg  = str(exc).lower()
+    if "timeout" in name or "timeout" in msg:
+        return "timeout"
+    if "connector" in name or "connect" in msg:
+        return "connect_error"
+    if "disconnect" in name or "read" in name:
+        return "read_error"
+    if "oserror" in name or "connectionerror" in name:
+        return "client_resource_error"
+    if "json" in name or "json" in msg:
+        return "json_parse_error"
+    if "cancel" in name:
+        return "cancelled"
+    return "unknown"
+
+
+def _hc_fail_result(err_type: str, err_msg: str, e2e: float = 0.0) -> dict:
+    """Build a failure result dict compatible with aggregate_results()."""
+    return {
+        "ok": False,
+        "e2e_latency": round(e2e, 6),
+        "latency": round(e2e, 6),
+        "ttft": None, "tpot": None, "itl_avg": None, "itl_values": [],
+        "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+        "per_request_output_tps_e2e": 0.0, "per_request_decode_tps": None,
+        "finish_reason": "",
+        "stream": True,
+        "error": err_msg,
+        "error_type": err_type,
+    }
+
+# ── end HC helpers ────────────────────────────────────────────────────────────
+
+
 def build_chat_payload(model: str, messages: list[dict], max_tokens: int,
                        temperature: float, stream: bool = True,
                        output_length_mode: str = "normal") -> dict:
@@ -3248,6 +3386,25 @@ class LLMBenchmarkApp:
         self._current_sweep_json_path: str = ""
         self._current_sweep_md_path: str = ""
         self._current_sweep_png_path: str = ""
+        # ── High-concurrency sweep runtime state (written by HC runner, read by poll) ──
+        self.sweep_status_queue: queue.Queue = queue.Queue(maxsize=1000)
+        self.sweep_runtime_state: dict = {
+            "running": False,
+            "case_index": 0,
+            "case_total": 0,
+            "current_concurrency": None,
+            "completed_requests": 0,
+            "total_requests": 0,
+            "success": 0,
+            "fail": 0,
+            "output_tokens": 0,
+            "elapsed_sec": 0.0,
+            "rolling_output_tps": None,
+            "rolling_rps": None,
+            "last_error_summary": None,
+        }
+        self.sweep_ui_poll_after_id = None
+        self._sweep_hc_mode: bool = False  # True when max(concurrency) > 256
         self.lang_code = self._load_language_config()
         self.language_var = tk.StringVar(
             value=I18N[self.lang_code]["language.en"]
@@ -4054,9 +4211,10 @@ class LLMBenchmarkApp:
     # ── end lightweight status animation ──
 
     # ── progress overlay ──────────────────────────────────────────────────────
-    def _show_progress_overlay(self, run_type: str):
+    def _show_progress_overlay(self, run_type: str, hc_mode: bool = False):
         """Create and display the non-modal progress overlay.
-        Must only be called on the main (Tk) thread."""
+        Must only be called on the main (Tk) thread.
+        hc_mode=True → larger window with 2-line detail for high-concurrency sweeps."""
         # Destroy any lingering overlay first
         if self.progress_overlay is not None:
             try:
@@ -4065,24 +4223,26 @@ class LLMBenchmarkApp:
                 pass
             self.progress_overlay = None
 
-        title_key = (
-            "progress.benchmarking" if run_type == "benchmark"
-            else "progress.sweeping"
-        )
-        title_text = self.tr(title_key)
+        if hc_mode:
+            title_text = self.tr("sweep.hc_mode_title")
+        elif run_type == "benchmark":
+            title_text = self.tr("progress.benchmarking")
+        else:
+            title_text = self.tr("progress.sweeping")
 
         ov = tk.Toplevel(self.root)
         ov.title("JISUMAN LLM Benchmark")
-        ov.transient(self.root)          # child of main window
+        ov.transient(self.root)          # child of main window — non-modal
         ov.resizable(False, False)
         ov.configure(bg=C_STYLE["bg_card"],
                      highlightbackground=C_STYLE["border"],
                      highlightthickness=1)
         # Disable the close button so it cannot be closed mid-run
         ov.protocol("WM_DELETE_WINDOW", lambda: None)
+        # NOTE: do NOT call grab_set() or wait_window() — non-modal required
 
-        # Size and center over main window
-        W, H = 460, 120
+        # Size and center over main window (larger for HC mode)
+        W, H = (560, 145) if hc_mode else (460, 120)
         self.root.update_idletasks()
         rx = self.root.winfo_x()
         ry = self.root.winfo_y()
@@ -4110,18 +4270,21 @@ class LLMBenchmarkApp:
         lbl_detail = tk.Label(
             frame,
             textvariable=self.progress_overlay_detail_var,
-            font=(FONT_FAMILY, 11),
+            font=(FONT_FAMILY, 10 if hc_mode else 11),
             bg=C_STYLE["bg_card"],
             fg=C_STYLE["text_secondary"],
             anchor="w",
+            justify=tk.LEFT,
+            wraplength=W - 48,
         )
         lbl_detail.pack(fill=tk.X, pady=(2, 8))
         self.progress_overlay_label = lbl_detail
 
-        # Indeterminate progress bar — lightweight, native, no per-token redraw
-        pb = ttk.Progressbar(frame, mode="indeterminate", length=420)
+        # Indeterminate progress bar — lightweight, native
+        # HC mode: slower animation (500ms) to reduce CPU; normal: 150ms
+        pb = ttk.Progressbar(frame, mode="indeterminate", length=W - 40)
         pb.pack(fill=tk.X)
-        pb.start(150)  # step every 150 ms
+        pb.start(500 if hc_mode else 150)
         self.progress_overlay_canvas = pb  # store reference for stop/destroy
 
         self.progress_overlay = ov
@@ -6654,51 +6817,86 @@ class LLMBenchmarkApp:
         self._sweep_config_card = config_card
 
         cfg = config_card.content
-        # Row 0: Concurrency levels
-        tk.Label(cfg, text="并发级别", font=C_STYLE["font_body"],
+        cfg.grid_columnconfigure(1, weight=1)
+
+        # Row 0: Preset selector
+        tk.Label(cfg, text="预设", font=C_STYLE["font_body"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
             row=0, column=0, sticky="w", padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
-        self.sweep_conc_var = tk.StringVar(value="1,5,10,20,40")
-        ttk.Entry(cfg, textvariable=self.sweep_conc_var, width=40).grid(
-            row=0, column=1, sticky="ew", pady=(0, C_STYLE["gap_sm"]))
-        tk.Label(cfg, text="例如: 1,5,10,20,40", font=C_STYLE["font_small"],
+        preset_names = list(SWEEP_PRESETS.keys())
+        self.sweep_preset_var = tk.StringVar(value=preset_names[0])
+        preset_combo = ttk.Combobox(cfg, textvariable=self.sweep_preset_var,
+                                    values=preset_names, width=36, state="readonly")
+        preset_combo.grid(row=0, column=1, sticky="ew", pady=(0, C_STYLE["gap_sm"]))
+        preset_combo.bind("<<ComboboxSelected>>", lambda e: self._apply_sweep_preset())
+        tk.Label(cfg, text="高并发验收建议选「客户验收峰值吞吐」", font=C_STYLE["font_small"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"]).grid(
             row=0, column=2, sticky="w", padx=(C_STYLE["pad_sm"], 0), pady=(0, C_STYLE["gap_sm"]))
 
-        # Row 1: Requests multiplier
-        tk.Label(cfg, text="请求倍数", font=C_STYLE["font_body"],
+        # Row 1: Concurrency levels
+        tk.Label(cfg, text="并发级别", font=C_STYLE["font_body"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
             row=1, column=0, sticky="w", padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
-        self.sweep_mult_var = tk.IntVar(value=10)
-        ttk.Spinbox(cfg, from_=1, to=100, increment=1,
-                    textvariable=self.sweep_mult_var, width=8).grid(
-            row=1, column=1, sticky="w", pady=(0, C_STYLE["gap_sm"]))
-        tk.Label(cfg, text="每个并发级别: 请求数 = 并发数 × 倍数",
+        self.sweep_conc_var = tk.StringVar(value="1,4,8,16,32,64")
+        ttk.Entry(cfg, textvariable=self.sweep_conc_var, width=40).grid(
+            row=1, column=1, sticky="ew", pady=(0, C_STYLE["gap_sm"]))
+        tk.Label(cfg, text="支持最大 C1024，例如: 1,2,4,8,16,32,64,128,256,512,768,1024",
                  font=C_STYLE["font_small"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"]).grid(
             row=1, column=2, sticky="w", padx=(C_STYLE["pad_sm"], 0), pady=(0, C_STYLE["gap_sm"]))
 
-        # Row 2: Resource mode (always disabled for MVP)
-        tk.Label(cfg, text="资源监测", font=C_STYLE["font_body"],
+        # Row 2: Request count rule
+        tk.Label(cfg, text="请求规则", font=C_STYLE["font_body"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
             row=2, column=0, sticky="w", padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
+        rule_frame = tk.Frame(cfg, bg=C_STYLE["bg_card"])
+        rule_frame.grid(row=2, column=1, columnspan=2, sticky="ew", pady=(0, C_STYLE["gap_sm"]))
+        self.sweep_request_rule_var = tk.StringVar(value="x2")
+        rule_options = [("× 1", "x1"), ("× 2（推荐）", "x2"), ("× 5", "x5"),
+                        ("× 10", "x10"), ("固定总请求数", "fixed")]
+        for label, val in rule_options:
+            rb = ttk.Radiobutton(rule_frame, text=label, variable=self.sweep_request_rule_var,
+                                 value=val, command=self._on_request_rule_change)
+            rb.pack(side=tk.LEFT, padx=(0, C_STYLE["pad_sm"]))
+        # Fixed total entry (hidden by default)
+        self.sweep_fixed_total_var = tk.IntVar(value=100)
+        self._sweep_fixed_total_frame = tk.Frame(cfg, bg=C_STYLE["bg_card"])
+        self._sweep_fixed_total_frame.grid(row=3, column=0, columnspan=3, sticky="w",
+                                           pady=(0, C_STYLE["gap_sm"]))
+        tk.Label(self._sweep_fixed_total_frame, text="固定请求总数:", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).pack(side=tk.LEFT,
+                 padx=(0, C_STYLE["pad_sm"]))
+        ttk.Spinbox(self._sweep_fixed_total_frame, from_=1, to=99999, increment=10,
+                    textvariable=self.sweep_fixed_total_var, width=8).pack(side=tk.LEFT)
+        tk.Label(self._sweep_fixed_total_frame, text="(所有并发档位使用相同总请求数)",
+                 font=C_STYLE["font_small"], bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["text_muted"]).pack(side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
+        self._sweep_fixed_total_frame.grid_remove()  # hidden by default
+
+        # Keep sweep_mult_var for backward compatibility (used when rule=fixed-old)
+        self.sweep_mult_var = tk.IntVar(value=2)
+
+        # Row 4: Resource mode (always disabled for MVP)
+        tk.Label(cfg, text="资源监测", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
+            row=4, column=0, sticky="w", padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
         self.sweep_resource_var = tk.StringVar(value="disabled")
         res_combo = ttk.Combobox(cfg, textvariable=self.sweep_resource_var,
                                  values=["disabled"], width=12, state="readonly")
-        res_combo.grid(row=2, column=1, sticky="w", pady=(0, C_STYLE["gap_sm"]))
+        res_combo.grid(row=4, column=1, sticky="w", pady=(0, C_STYLE["gap_sm"]))
         res_combo.current(0)
         tk.Label(cfg, text="MVP 阶段资源监测暂不可用",
                  font=C_STYLE["font_small"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"]).grid(
-            row=2, column=2, sticky="w", padx=(C_STYLE["pad_sm"], 0), pady=(0, C_STYLE["gap_sm"]))
+            row=4, column=2, sticky="w", padx=(C_STYLE["pad_sm"], 0), pady=(0, C_STYLE["gap_sm"]))
 
-        # Row 3: Save options
+        # Row 5: Save options
         save_lbl = tk.Label(cfg, text="保存选项", font=C_STYLE["font_body"],
                             bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"])
-        save_lbl.grid(row=3, column=0, sticky="w",
+        save_lbl.grid(row=5, column=0, sticky="w",
                       padx=(0, C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0))
         save_row = tk.Frame(cfg, bg=C_STYLE["bg_card"])
-        save_row.grid(row=3, column=1, columnspan=2, sticky="ew",
+        save_row.grid(row=5, column=1, columnspan=2, sticky="ew",
                       pady=(C_STYLE["gap_sm"], 0))
         self.sweep_save_json_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(save_row, text="保存扫测数据 JSON",
@@ -6716,9 +6914,9 @@ class LLMBenchmarkApp:
                         variable=self.sweep_save_history_var).pack(side=tk.LEFT,
                         padx=(C_STYLE["pad_sm"], 0))
 
-        # Row 4: Start button
+        # Row 6: Start button
         btn_row = tk.Frame(cfg, bg=C_STYLE["bg_card"])
-        btn_row.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(C_STYLE["gap_sm"], 0))
+        btn_row.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(C_STYLE["gap_sm"], 0))
         self.sweep_start_btn = ttk.Button(btn_row, text="开始扫测",
                                           style="Primary.TButton",
                                           command=self._start_sweep)
@@ -6802,9 +7000,60 @@ class LLMBenchmarkApp:
                                     height=6,
                                     state=tk.DISABLED)
         self._expert_text.pack(fill=tk.X)
+
+    def _on_request_rule_change(self):
+        """Show/hide the fixed-total-requests entry based on selected rule."""
+        if self.sweep_request_rule_var.get() == "fixed":
+            self._sweep_fixed_total_frame.grid()
+        else:
+            self._sweep_fixed_total_frame.grid_remove()
+
+    def _apply_sweep_preset(self):
+        """Apply a sweep preset to the UI fields."""
+        name = self.sweep_preset_var.get()
+        preset = SWEEP_PRESETS.get(name)
+        if not preset:
+            return  # "自定义" — keep current values
+        # Apply concurrency list
+        self.sweep_conc_var.set(preset["concurrency_levels"])
+        # Apply request rule
+        self.sweep_request_rule_var.set(preset.get("request_rule", "x2"))
+        self._on_request_rule_change()
+        # Apply generation params from Settings tab
+        try:
+            self.max_tokens_var.set(preset["max_tokens"])
+        except Exception:
+            pass
+        try:
+            mode = preset.get("output_length_mode", "normal")
+            self.output_length_mode_var.set("fixed" if mode == "fixed" else "normal")
+        except Exception:
+            pass
+        try:
+            self.temp_var.set(float(preset.get("temperature", 0.0)))
+        except Exception:
+            pass
+        try:
+            self.stream_var.set("是" if preset.get("stream", True) else "否")
+        except Exception:
+            pass
+        # Show info dialog about the preset
+        info = (
+            "已应用「客户验收峰值吞吐」预设:\n\n"
+            "• 并发级别: 1,2,4,8,16,32,64,128,256,512,768,1024\n"
+            "• Max Tokens: 2048\n"
+            "• 输出模式: 固定输出模式\n"
+            "• Temperature: 0.0\n"
+            "• 请求规则: × 2\n\n"
+            "请求数计算: 每个并发档位 = 并发数 × 2\n"
+            "C1024 档位将发送 2048 个请求。\n\n"
+            "正式验收可将请求规则改为 × 5。"
+        )
+        messagebox.showinfo("预设已应用", info)
+
     def _parse_concurrency_levels(self, text: str) -> list[int]:
         """Parse comma-separated concurrency levels. Returns sorted unique ints.
-        Raises ValueError for invalid input."""
+        Supports up to C1024. Raises ValueError for invalid input."""
         parts = [p.strip() for p in text.split(",") if p.strip()]
         if not parts:
             raise ValueError("并发级别不能为空")
@@ -6813,11 +7062,11 @@ class LLMBenchmarkApp:
             try:
                 v = int(p)
             except ValueError:
-                raise ValueError(f"无效的并发值: '{p}'，请输入逗号分隔的整数，例如: 1,5,10")
+                raise ValueError(f"无效的并发值: '{p}'，请输入逗号分隔的整数，例如: 1,5,10,20,40")
             if v < 1:
                 raise ValueError(f"并发数必须大于 0，收到: {v}")
-            if v > 512:
-                raise ValueError(f"并发数不能超过 512，收到: {v}")
+            if v > 1024:
+                raise ValueError(f"并发数不能超过 1024，收到: {v}")
             levels.append(v)
         # Sort and deduplicate
         levels = sorted(set(levels))
@@ -7668,10 +7917,44 @@ class LLMBenchmarkApp:
             messagebox.showerror(self.tr("msg.input_error"), str(e))
             return
 
-        multiplier = self.sweep_mult_var.get()
-        if multiplier < 1:
-            messagebox.showerror(self.tr("msg.input_error"), self.tr("msg.multiplier_positive"))
+        # Request count rule
+        request_rule = getattr(self, "sweep_request_rule_var",
+                               tk.StringVar(value="x2")).get()
+        fixed_total = 0
+        try:
+            fixed_total = int(self.sweep_fixed_total_var.get())
+        except Exception:
+            fixed_total = 100
+        if request_rule == "fixed" and fixed_total < 1:
+            messagebox.showerror(self.tr("msg.input_error"), "固定请求总数必须大于 0")
             return
+
+        # High-concurrency warning: max >= 512
+        if max(concurrency_levels) >= 512:
+            if not messagebox.askyesno(
+                    self.tr("sweep.hc_warning_title"),
+                    self.tr("sweep.hc_warning_body")):
+                return
+
+        # Check aiohttp availability for HC mode
+        hc_mode = max(concurrency_levels) > 256
+        if hc_mode and not _AIOHTTP_AVAILABLE:
+            messagebox.showwarning("aiohttp 未安装", self.tr("sweep.aiohttp_required"))
+            hc_mode = False  # fall back to thread pool
+
+        # Linux: show ulimit hint once per session for HC mode
+        if hc_mode and sys.platform.startswith("linux"):
+            import resource as _res
+            try:
+                soft, _ = _res.getrlimit(_res.RLIMIT_NOFILE)
+                if soft < 65535:
+                    messagebox.showinfo(
+                        "系统资源提示",
+                        f"当前 ulimit -n = {soft}，高并发扫测建议 >= 65535。\n"
+                        f"可临时执行: ulimit -n 65535\n\n"
+                        f"此提示不影响扫测继续。")
+            except Exception:
+                pass
 
         api_key = self.key_var.get().strip()
         model = self.model_var.get().strip()
@@ -7691,11 +7974,29 @@ class LLMBenchmarkApp:
             {"role": "user", "content": user_prompt},
         ]
 
+        # Reset sweep_runtime_state
+        self.sweep_runtime_state.update({
+            "running": True,
+            "case_index": 0,
+            "case_total": len(concurrency_levels),
+            "current_concurrency": None,
+            "completed_requests": 0,
+            "total_requests": 0,
+            "success": 0,
+            "fail": 0,
+            "output_tokens": 0,
+            "elapsed_sec": 0.0,
+            "rolling_output_tps": None,
+            "rolling_rps": None,
+            "last_error_summary": None,
+        })
+        self._sweep_hc_mode = hc_mode
+
         # Update UI
         if not self._begin_run("sweep"):
             self._show_run_busy("sweep")
             return
-        self._show_progress_overlay("sweep")
+        self._show_progress_overlay("sweep", hc_mode=hc_mode)
         self._set_sweep_running_state(True)
         first_label = f"C={concurrency_levels[0]}" if concurrency_levels else ""
         self._start_status_animation(phase="sweep", total=len(concurrency_levels),
@@ -7710,45 +8011,128 @@ class LLMBenchmarkApp:
         self.sweep_result_text.insert(tk.END, "等待扫测结果...\n")
         self.sweep_result_text.config(state=tk.DISABLED)
 
+        # Start throttled UI poll (every 500ms)
+        self._start_sweep_ui_poll()
+
         t = threading.Thread(
             target=self._run_sweep_thread,
             args=(api_url, api_key, model, messages, max_tokens, temperature,
-                  concurrency_levels, multiplier, stream, warmup,
-                  output_length_mode),
+                  concurrency_levels, request_rule, fixed_total, stream, warmup,
+                  output_length_mode, hc_mode),
             daemon=True,
         )
         t.start()
 
     def _run_sweep_thread(self, api_url, api_key, model, messages,
                           max_tokens, temperature,
-                          concurrency_levels, multiplier, stream, warmup,
-                          output_length_mode="normal"):
+                          concurrency_levels, request_rule, fixed_total,
+                          stream, warmup, output_length_mode="normal",
+                          hc_mode=False):
         try:
-            self._run_sweep(api_url, api_key, model, messages, max_tokens,
-                            temperature, concurrency_levels, multiplier, stream,
-                            warmup, output_length_mode)
+            if hc_mode and _AIOHTTP_AVAILABLE:
+                self._run_sweep_hc_entry(
+                    api_url, api_key, model, messages, max_tokens, temperature,
+                    concurrency_levels, request_rule, fixed_total, stream, warmup,
+                    output_length_mode)
+            else:
+                self._run_sweep(api_url, api_key, model, messages, max_tokens,
+                                temperature, concurrency_levels, request_rule,
+                                fixed_total, stream, warmup, output_length_mode)
         except Exception as e:
-            self._append_sweep_status(f"\n✕ 扫测异常: {e}\n")
+            self._append_sweep_status(f"\n[FAIL] 扫测异常: {e}\n")
             self.root.after(0, lambda err=str(e): self._sweep_done(None, err))
         finally:
+            self.sweep_runtime_state["running"] = False
+            self.root.after(0, self._stop_sweep_ui_poll)
             self.root.after(0, self._hide_progress_overlay)
             self.root.after(0, lambda: self._set_sweep_running_state(False))
             self.root.after(0, lambda: self._end_run("sweep"))
 
+    # ── Throttled UI poll for sweep progress (runs on main thread) ─────────────
+    def _start_sweep_ui_poll(self):
+        """Start the 500ms throttled UI poll for sweep progress."""
+        self._stop_sweep_ui_poll()
+        self.sweep_ui_poll_after_id = self.root.after(500, self._poll_sweep_ui_status)
+
+    def _stop_sweep_ui_poll(self):
+        """Cancel any pending poll callback."""
+        if self.sweep_ui_poll_after_id is not None:
+            try:
+                self.root.after_cancel(self.sweep_ui_poll_after_id)
+            except Exception:
+                pass
+            self.sweep_ui_poll_after_id = None
+
+    def _poll_sweep_ui_status(self):
+        """Main-thread poll: read sweep_runtime_state and update UI (max 2/s)."""
+        state = dict(self.sweep_runtime_state)  # shallow copy — thread-safe for simple dicts
+
+        # Build overlay detail text
+        case_i    = state.get("case_index", 0)
+        case_tot  = state.get("case_total", 0)
+        conc      = state.get("current_concurrency")
+        done      = state.get("completed_requests", 0)
+        total     = state.get("total_requests", 0)
+        succ      = state.get("success", 0)
+        fail      = state.get("fail", 0)
+        elapsed   = state.get("elapsed_sec", 0.0)
+        tps       = state.get("rolling_output_tps")
+
+        if conc is not None:
+            m, s = divmod(int(elapsed), 60)
+            elapsed_str = f"{m:02d}:{s:02d}"
+            if self._sweep_hc_mode:
+                line1 = (f"case {case_i} / {case_tot} · C={conc} · "
+                         f"done={done}/{total} · success={succ} · fail={fail} · {elapsed_str}")
+                tps_str = f"{tps:.0f}" if tps is not None else "--"
+                line2 = f"Rolling Output TPS: {tps_str} tok/s"
+                detail = f"{line1}\n{line2}"
+            else:
+                detail = (f"case {case_i} / {case_tot} · C={conc} · "
+                          f"fail={fail} · {elapsed_str}")
+            try:
+                self._update_progress_overlay(detail)
+            except Exception:
+                pass
+
+        # Reschedule if sweep is still running
+        if state.get("running"):
+            self.sweep_ui_poll_after_id = self.root.after(500, self._poll_sweep_ui_status)
+        else:
+            self.sweep_ui_poll_after_id = None
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def _compute_num_requests(self, c: int, rule: str, fixed_total: int) -> int:
+        """Compute number of requests for a given concurrency level and rule."""
+        rule_map = {"x1": 1, "x2": 2, "x5": 5, "x10": 10}
+        if rule in rule_map:
+            return c * rule_map[rule]
+        elif rule == "fixed":
+            return max(1, fixed_total)
+        else:
+            # Legacy: treat rule as multiplier string or fallback to ×2
+            try:
+                mult = int(rule)
+                return c * mult
+            except (ValueError, TypeError):
+                return c * 2
+
     def _run_sweep(self, api_url, api_key, model, messages,
                    max_tokens, temperature,
-                   concurrency_levels, multiplier, stream, warmup,
+                   concurrency_levels, request_rule="x2", fixed_total=0,
+                   stream=True, warmup=0,
                    output_length_mode="normal"):
-        """Run a concurrency sweep in the current (background) thread."""
+        """Run a concurrency sweep in the current (background) thread (thread-pool path)."""
         sweep_id = datetime.now().strftime("sweep_%Y%m%d_%H%M%S")
         started_at = datetime.now().isoformat()
         self.root.after(0, lambda: setattr(self, "_current_sweep_run_dir", ""))
+        multiplier = 2  # kept for display; actual per-level count from rule
 
         self._append_sweep_status(f"扫测开始 — {sweep_id}\n")
         self._append_sweep_status(f"API: {api_url}\n")
         self._append_sweep_status(f"Model: {model}\n")
         self._append_sweep_status(f"并发级别: {concurrency_levels}\n")
-        self._append_sweep_status(f"请求倍数: {multiplier}\n\n")
+        self._append_sweep_status(f"请求规则: {request_rule}\n\n")
 
         # Quick connectivity check
         reachable, err = check_server_reachable(api_url)
@@ -7774,14 +8158,20 @@ class LLMBenchmarkApp:
         sweep_fail_count = 0
 
         for idx, c in enumerate(concurrency_levels):
-            num_requests = c * multiplier
+            num_requests = self._compute_num_requests(c, request_rule, fixed_total)
+            # Update sweep_runtime_state for UI poll (no direct Tk calls from here)
+            self.sweep_runtime_state.update({
+                "case_index": idx + 1,
+                "current_concurrency": c,
+                "total_requests": num_requests,
+                "completed_requests": 0,
+                "success": 0,
+                "fail": 0,
+            })
             self.root.after(0, lambda i=idx, total=total_levels, cc=c, fail=sweep_fail_count:
                             self._update_status_animation(
                                 completed=i, total=total, fail=fail,
                                 phase="sweep", current_label=f"C={cc}"))
-            self.root.after(0, lambda i=idx, total=total_levels, cc=c, fail=sweep_fail_count:
-                            self._update_progress_overlay(
-                                f"case {i + 1} / {total} · C={cc} · fail={fail} · {self._format_elapsed()}"))
             self._append_sweep_status(
                 f"[{idx + 1}/{total_levels}] 并发={c}, 请求数={num_requests}... ")
 
@@ -7821,6 +8211,7 @@ class LLMBenchmarkApp:
                     "detail_count": analysis_metrics.get("detail_count"),
                     "detail_truncated": analysis_metrics.get("detail_truncated"),
                     "detail_truncation_note": analysis_metrics.get("detail_truncation_note", ""),
+                    "failure_summary": {},  # no per-error taxonomy in thread-pool mode
                 }
                 cases.append(case)
                 sweep_fail_count += summary.get("fail", 0) or 0
@@ -7828,11 +8219,8 @@ class LLMBenchmarkApp:
                                 self._update_status_animation(
                                     completed=i, total=total, fail=fail,
                                     phase="sweep", current_label=f"C={cc}"))
-                self.root.after(0, lambda i=idx + 1, total=total_levels, cc=c, fail=sweep_fail_count:
-                                self._update_progress_overlay(
-                                    f"case {i} / {total} · C={cc} · fail={fail} · {self._format_elapsed()}"))
                 self._append_sweep_status(
-                    f"✓ success={summary['success']} fail={summary['fail']} "
+                    f"[OK] success={summary['success']} fail={summary['fail']} "
                     f"E2E_avg={summary['e2e_latency_avg']:.3f}s "
                     f"Output_TPS={summary['system_output_tps']:.1f} tok/s\n")
             else:
@@ -7841,10 +8229,7 @@ class LLMBenchmarkApp:
                                 self._update_status_animation(
                                     completed=i, total=total, fail=fail,
                                     phase="sweep", current_label=f"C={cc}"))
-                self.root.after(0, lambda i=idx + 1, total=total_levels, cc=c, fail=sweep_fail_count:
-                                self._update_progress_overlay(
-                                    f"case {i} / {total} · C={cc} · fail={fail} · {self._format_elapsed()}"))
-                self._append_sweep_status(f"✕ 未返回结果\n")
+                self._append_sweep_status(f"[FAIL] 未返回结果\n")
 
         finished_at = datetime.now().isoformat()
         self._safe_set_progress_overlay_detail(self.tr("progress.finishing"))
@@ -7866,9 +8251,11 @@ class LLMBenchmarkApp:
             "fixed_output_tokens": max_tokens if output_length_mode == "fixed" else None,
             "min_tokens_sent": max_tokens if output_length_mode == "fixed" else None,
             "ignore_eos": output_length_mode == "fixed",
+            "runner": "threadpool",
             "cases": cases,
             "analysis_summary": analysis_summary,
             "sweep_diagnostics": sweep_diagnostics,
+            "hc_peak_metrics": self._compute_hc_peak_metrics(cases, concurrency_levels),
         }
         self._sweep_result = sweep_result
 
@@ -7903,6 +8290,448 @@ class LLMBenchmarkApp:
 
         self.root.after(0, lambda: self._sweep_done(sweep_result, None,
                                                      json_path, png_path, md_path))
+
+    # ── High-Concurrency Async Runner (asyncio + aiohttp) ────────────────────
+    def _run_sweep_hc_entry(self, api_url, api_key, model, messages,
+                             max_tokens, temperature,
+                             concurrency_levels, request_rule, fixed_total,
+                             stream, warmup, output_length_mode):
+        """Entry point for HC runner: creates an asyncio event loop and runs HC sweep."""
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(
+                self._run_sweep_hc_async(
+                    api_url, api_key, model, messages, max_tokens, temperature,
+                    concurrency_levels, request_rule, fixed_total,
+                    stream, warmup, output_length_mode))
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+
+    async def _run_sweep_hc_async(self, api_url, api_key, model, messages,
+                                   max_tokens, temperature,
+                                   concurrency_levels, request_rule, fixed_total,
+                                   stream, warmup, output_length_mode):
+        """Full high-concurrency sweep using asyncio + aiohttp."""
+        import aiohttp
+
+        sweep_id = datetime.now().strftime("sweep_%Y%m%d_%H%M%S")
+        started_at = datetime.now().isoformat()
+        self.root.after(0, lambda: setattr(self, "_current_sweep_run_dir", ""))
+
+        self._append_sweep_status(f"扫测开始 (HC) — {sweep_id}\n")
+        self._append_sweep_status(f"API: {api_url}\n")
+        self._append_sweep_status(f"并发级别: {concurrency_levels}\n")
+        self._append_sweep_status(f"请求规则: {request_rule}\n")
+        self._append_sweep_status(f"高并发模式: asyncio + aiohttp\n\n")
+
+        max_conc = max(concurrency_levels)
+        connector = aiohttp.TCPConnector(
+            limit=max_conc + 128,
+            limit_per_host=max_conc + 128,
+            ttl_dns_cache=300,
+            enable_cleanup_closed=True,
+        )
+        timeout = aiohttp.ClientTimeout(
+            total=1800,
+            connect=30,
+            sock_connect=30,
+            sock_read=600,
+        )
+
+        body_dict_base = build_chat_payload(model, messages, max_tokens, temperature,
+                                            stream=stream,
+                                            output_length_mode=output_length_mode)
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        cases = []
+        baseline_output_tps = 0.0
+        baseline_concurrency = concurrency_levels[0] if concurrency_levels else 1
+        sweep_fail_count = 0
+        total_levels = len(concurrency_levels)
+
+        async with aiohttp.ClientSession(
+                connector=connector, timeout=timeout, headers=headers) as session:
+
+            # Warmup (serial)
+            if warmup > 0:
+                self._append_sweep_status(f"预热: 发送 {warmup} 次请求...\n")
+                for _ in range(warmup):
+                    try:
+                        await self._hc_call_one_async(session, api_url, body_dict_base, stream)
+                    except Exception:
+                        pass
+                self._append_sweep_status("[OK] 预热完成\n\n")
+
+            for idx, c in enumerate(concurrency_levels):
+                num_requests = self._compute_num_requests(c, request_rule, fixed_total)
+                self._append_sweep_status(
+                    f"[{idx + 1}/{total_levels}] 并发={c}, 请求数={num_requests}... ")
+
+                # Reset per-case counters in shared state
+                case_start_wall = asyncio.get_event_loop().time()
+                self.sweep_runtime_state.update({
+                    "case_index": idx + 1,
+                    "current_concurrency": c,
+                    "total_requests": num_requests,
+                    "completed_requests": 0,
+                    "success": 0,
+                    "fail": 0,
+                    "output_tokens": 0,
+                    "elapsed_sec": 0.0,
+                })
+
+                # Update status animation (from main thread)
+                self.root.after(0, lambda i=idx, total=total_levels, cc=c, fail=sweep_fail_count:
+                                self._update_status_animation(
+                                    completed=i, total=total, fail=fail,
+                                    phase="sweep", current_label=f"C={cc}"))
+
+                results, duration, failure_counts = await self._run_hc_case_async(
+                    session, api_url, body_dict_base, c, num_requests, stream,
+                    case_start_wall)
+
+                # Aggregate
+                config = {
+                    "api_url": api_url,
+                    "model": model,
+                    "prompt": messages[-1]["content"][:100] if messages else "",
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "concurrency": c,
+                    "total": num_requests,
+                    "stream_mode": stream,
+                    "benchmark_preset_name": f"sweep_hc_C{c}",
+                    "benchmark_preset_type": "fixed_concurrency",
+                    "output_length_mode": output_length_mode,
+                }
+                summary = aggregate_results(results, duration, config)
+                summary["benchmark_preset_name"] = f"sweep_hc_C{c}"
+                summary["benchmark_preset_type"] = "fixed_concurrency"
+
+                if idx == 0:
+                    baseline_output_tps = summary.get("system_output_tps", 0) or 0
+                    baseline_concurrency = c
+                analysis_metrics = self._compute_analysis_metrics(
+                    summary, baseline_output_tps, baseline_concurrency)
+                case = {
+                    "concurrency": c,
+                    "total_requests": num_requests,
+                    "benchmark_summary": summary,
+                    "analysis_metrics": analysis_metrics,
+                    "detail_count": analysis_metrics.get("detail_count"),
+                    "detail_truncated": analysis_metrics.get("detail_truncated"),
+                    "detail_truncation_note": analysis_metrics.get("detail_truncation_note", ""),
+                    "failure_summary": failure_counts,
+                }
+                cases.append(case)
+                sweep_fail_count += summary.get("fail", 0) or 0
+
+                self.root.after(0, lambda i=idx + 1, total=total_levels, cc=c, fail=sweep_fail_count:
+                                self._update_status_animation(
+                                    completed=i, total=total, fail=fail,
+                                    phase="sweep", current_label=f"C={cc}"))
+
+                # Log failure summary if any
+                fail_log = ""
+                if failure_counts:
+                    parts = [f"{k}={v}" for k, v in sorted(failure_counts.items()) if v > 0]
+                    fail_log = f" [{', '.join(parts)}]"
+                self._append_sweep_status(
+                    f"[OK] success={summary['success']} fail={summary['fail']}{fail_log} "
+                    f"E2E_avg={summary['e2e_latency_avg']:.3f}s "
+                    f"Output_TPS={summary['system_output_tps']:.1f} tok/s\n")
+
+        finished_at = datetime.now().isoformat()
+        self._safe_set_progress_overlay_detail(self.tr("progress.finishing"))
+        analysis_summary = self._generate_analysis_summary(cases)
+        sweep_diagnostics = {
+            "detail_truncation_notes": self._detect_detail_truncation_notes(cases),
+            "non_monotonic_anomalies": self._detect_non_monotonic_sweep_anomalies(cases),
+            "recommendation": self._recommend_sweep_concurrency_range(cases),
+        }
+
+        # HC peak metrics
+        peak_case = max(cases, key=lambda ca: ca["benchmark_summary"].get("system_output_tps", 0),
+                        default=None)
+        hc_peak_metrics = self._compute_hc_peak_metrics(cases, concurrency_levels)
+
+        sweep_result = {
+            "sweep_id": sweep_id,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "api_url": api_url,
+            "model": model,
+            "concurrency_levels": concurrency_levels,
+            "requests_multiplier": request_rule,
+            "output_length_mode": output_length_mode,
+            "fixed_output_tokens": max_tokens if output_length_mode == "fixed" else None,
+            "min_tokens_sent": max_tokens if output_length_mode == "fixed" else None,
+            "ignore_eos": output_length_mode == "fixed",
+            "runner": "asyncio+aiohttp",
+            "cases": cases,
+            "analysis_summary": analysis_summary,
+            "sweep_diagnostics": sweep_diagnostics,
+            "hc_peak_metrics": hc_peak_metrics,
+        }
+        self._sweep_result = sweep_result
+
+        # Export (same as thread-pool path)
+        json_path = ""
+        png_path = ""
+        md_path = ""
+        if self.sweep_save_json_var.get():
+            json_path = self._export_sweep_json(sweep_result)
+        else:
+            self._append_sweep_status("⊘ JSON 保存已跳过\n")
+        if self.sweep_save_png_var.get():
+            png_path = self._export_sweep_png(sweep_result) or ""
+        else:
+            self._append_sweep_status("⊘ PNG 保存已跳过\n")
+        if self.sweep_save_md_var.get():
+            md_path = self._export_sweep_markdown(sweep_result)
+        else:
+            self._append_sweep_status("⊘ Markdown 保存已跳过\n")
+        sweep_result["result_json"] = json_path or ""
+        sweep_result["report_png"] = png_path or ""
+        sweep_result["report_md"] = md_path or ""
+        if self.sweep_save_history_var.get():
+            try:
+                save_sweep_history(sweep_result, json_path, md_path, png_path or "")
+                self._append_sweep_status("[OK] 已保存到历史记录\n")
+                self.root.after(0, self._refresh_history)
+            except Exception as e:
+                self._append_sweep_status(f"[FAIL] 历史记录保存失败: {e}\n")
+        else:
+            self._append_sweep_status("⊘ 历史记录保存已跳过\n")
+
+        self.root.after(0, lambda: self._sweep_done(sweep_result, None,
+                                                     json_path, png_path, md_path))
+
+    async def _run_hc_case_async(self, session, api_url, body_dict_base, concurrency,
+                                  num_requests, stream, case_start_wall):
+        """Run all requests for one concurrency level asynchronously.
+        Returns (results_list, duration_sec, failure_counts_dict)."""
+        results = []
+        failure_counts: dict = {}
+        state = self.sweep_runtime_state
+        loop = asyncio.get_event_loop()
+
+        sem = asyncio.Semaphore(concurrency)
+
+        async def one_request():
+            async with sem:
+                try:
+                    result = await self._hc_call_one_async(
+                        session, api_url, body_dict_base, stream)
+                except asyncio.CancelledError:
+                    result = _hc_fail_result("cancelled", "cancelled")
+                except Exception as exc:
+                    err_type = _hc_classify_error(exc)
+                    result = _hc_fail_result(err_type, str(exc)[:200])
+
+                results.append(result)
+                elapsed = loop.time() - case_start_wall
+                # Update shared state (asyncio single-threaded, no lock needed)
+                state["elapsed_sec"] = elapsed
+                state["completed_requests"] += 1
+                if result["ok"]:
+                    state["success"] += 1
+                    tok = result.get("completion_tokens", 0) or 0
+                    state["output_tokens"] += tok
+                    if elapsed > 0:
+                        state["rolling_output_tps"] = state["output_tokens"] / elapsed
+                        state["rolling_rps"] = state["success"] / elapsed
+                else:
+                    state["fail"] += 1
+                    err_type = result.get("error_type", "unknown")
+                    failure_counts[err_type] = failure_counts.get(err_type, 0) + 1
+
+        t0 = loop.time()
+        tasks = [asyncio.create_task(one_request()) for _ in range(num_requests)]
+        await asyncio.gather(*tasks, return_exceptions=True)
+        duration = loop.time() - t0
+        return results, duration, dict(failure_counts)
+
+    async def _hc_call_one_async(self, session, api_url, body_dict_base, stream: bool) -> dict:
+        """Async HTTP call for one request. Returns a result dict compatible with aggregate_results()."""
+        import aiohttp as _aio
+        body_dict = dict(body_dict_base)
+        body = json.dumps(body_dict).encode("utf-8")
+        t0 = asyncio.get_event_loop().time()
+
+        try:
+            async with session.post(api_url, data=body) as resp:
+                if resp.status >= 500:
+                    text = await resp.text()
+                    e2e = asyncio.get_event_loop().time() - t0
+                    return _hc_fail_result("server_5xx", text[:200], e2e)
+                if resp.status >= 400:
+                    text = await resp.text()
+                    e2e = asyncio.get_event_loop().time() - t0
+                    return _hc_fail_result("server_4xx", text[:200], e2e)
+
+                if not stream:
+                    raw = await resp.read()
+                    e2e = asyncio.get_event_loop().time() - t0
+                    try:
+                        data = json.loads(raw)
+                        choice = data.get("choices", [{}])[0]
+                        usage = data.get("usage", {})
+                        prompt_tokens = usage.get("prompt_tokens", 0)
+                        completion_tokens = usage.get("completion_tokens", 0)
+                        total_tokens = usage.get("total_tokens", prompt_tokens + completion_tokens)
+                        per_req_tps = completion_tokens / e2e if e2e > 0 and completion_tokens > 0 else 0.0
+                        return {
+                            "ok": True,
+                            "e2e_latency": round(e2e, 6),
+                            "latency": round(e2e, 6),
+                            "ttft": None, "tpot": None, "itl_avg": None, "itl_values": [],
+                            "prompt_tokens": prompt_tokens,
+                            "completion_tokens": completion_tokens,
+                            "total_tokens": total_tokens,
+                            "per_request_output_tps_e2e": round(per_req_tps, 2),
+                            "per_request_decode_tps": None,
+                            "finish_reason": choice.get("finish_reason", "unknown"),
+                            "stream": False,
+                        }
+                    except Exception as exc:
+                        return _hc_fail_result("json_parse_error", str(exc)[:200], e2e)
+
+                # Streaming SSE path
+                first_data_line_time = None
+                first_json_chunk_time = None
+                completion_tokens = 0
+                prompt_tokens = 0
+                finish_reason = "unknown"
+
+                async for raw_line in resp.content:
+                    now = asyncio.get_event_loop().time()
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    if first_data_line_time is None:
+                        first_data_line_time = now
+                    data_str = line[5:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        obj = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                    if first_json_chunk_time is None:
+                        first_json_chunk_time = now
+                    # Use central parser for token counting
+                    _chunk = _parse_stream_chunk(obj)
+                    if _chunk.finish_reason:
+                        finish_reason = _chunk.finish_reason
+                    # Token counting from usage field or accumulated
+                    usage = obj.get("usage") or {}
+                    if usage.get("completion_tokens"):
+                        completion_tokens = usage["completion_tokens"]
+                        prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
+                    elif _chunk.generated_text:
+                        # Approximate: count by whitespace (fast, good enough for HC)
+                        completion_tokens += len((_chunk.generated_text or "").split())
+
+                e2e = asyncio.get_event_loop().time() - t0
+                ttft = (first_data_line_time - t0) if first_data_line_time else None
+                per_req_tps = completion_tokens / e2e if e2e > 0 and completion_tokens > 0 else 0.0
+                tpot = None
+                if ttft is not None and completion_tokens >= 2 and (e2e - ttft) > 0:
+                    tpot = (e2e - ttft) / max(completion_tokens - 1, 1)
+                return {
+                    "ok": True,
+                    "e2e_latency": round(e2e, 6),
+                    "latency": round(e2e, 6),
+                    "ttft": round(ttft, 6) if ttft is not None else None,
+                    "tpot": round(tpot, 6) if tpot is not None else None,
+                    "itl_avg": None, "itl_values": [],
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                    "per_request_output_tps_e2e": round(per_req_tps, 2),
+                    "per_request_decode_tps": None,
+                    "finish_reason": finish_reason,
+                    "stream": True,
+                }
+
+        except asyncio.TimeoutError as exc:
+            return _hc_fail_result("timeout", str(exc)[:200],
+                                   asyncio.get_event_loop().time() - t0)
+        except _aio.ServerTimeoutError as exc:
+            return _hc_fail_result("timeout", str(exc)[:200],
+                                   asyncio.get_event_loop().time() - t0)
+        except _aio.ClientConnectorError as exc:
+            return _hc_fail_result("connect_error", str(exc)[:200],
+                                   asyncio.get_event_loop().time() - t0)
+        except _aio.ServerDisconnectedError as exc:
+            return _hc_fail_result("read_error", str(exc)[:200],
+                                   asyncio.get_event_loop().time() - t0)
+        except _aio.ClientResponseError as exc:
+            err_type = ("server_5xx" if exc.status >= 500
+                        else "server_4xx" if exc.status >= 400
+                        else "read_error")
+            return _hc_fail_result(err_type, str(exc)[:200],
+                                   asyncio.get_event_loop().time() - t0)
+        except (OSError, ConnectionError) as exc:
+            return _hc_fail_result("client_resource_error", str(exc)[:200],
+                                   asyncio.get_event_loop().time() - t0)
+        except json.JSONDecodeError as exc:
+            return _hc_fail_result("json_parse_error", str(exc)[:200],
+                                   asyncio.get_event_loop().time() - t0)
+        except Exception as exc:
+            return _hc_fail_result("unknown", str(exc)[:200],
+                                   asyncio.get_event_loop().time() - t0)
+
+    def _compute_hc_peak_metrics(self, cases: list, concurrency_levels: list) -> dict:
+        """Compute high-concurrency peak metrics for report."""
+        if not cases:
+            return {}
+        peak_tps = max((c["benchmark_summary"].get("system_output_tps", 0) or 0
+                        for c in cases), default=0)
+        peak_case = max(cases,
+                        key=lambda ca: ca["benchmark_summary"].get("system_output_tps", 0) or 0,
+                        default=None)
+        peak_conc = peak_case["concurrency"] if peak_case else None
+
+        # Stable concurrency: highest concurrency where success_rate >= 95%
+        stable_conc = None
+        for ca in reversed(cases):
+            sr = ca["benchmark_summary"].get("success_rate", 0) or 0
+            if sr >= 95.0:
+                stable_conc = ca["concurrency"]
+                break
+
+        # C1024 specific metrics
+        c1024_case = next((ca for ca in cases if ca["concurrency"] == 1024), None)
+        c1024_metrics = {}
+        if c1024_case:
+            s = c1024_case["benchmark_summary"]
+            c1024_metrics = {
+                "success_rate": s.get("success_rate"),
+                "fail_count": s.get("fail"),
+                "output_tps": s.get("system_output_tps"),
+                "failure_summary": c1024_case.get("failure_summary", {}),
+            }
+
+        # Find highest tested concurrency
+        max_tested_conc = max(concurrency_levels) if concurrency_levels else 0
+
+        return {
+            "peak_output_tps": round(peak_tps, 1),
+            "peak_concurrency": peak_conc,
+            "peak_stable_concurrency": stable_conc,
+            "max_tested_concurrency": max_tested_conc,
+            "c1024_metrics": c1024_metrics,
+            "meets_8k_threshold": peak_tps >= 8000,
+            "meets_25k_threshold": peak_tps >= 25000,
+        }
+    # ── End HC runner ─────────────────────────────────────────────────────────
 
     def _append_sweep_status(self, text: str):
         """Append text to the sweep status widget (thread-safe via root.after)."""
@@ -7970,6 +8799,40 @@ class LLMBenchmarkApp:
                 f"{s.get('system_output_tps', 0):>8.1f} "
                 f"{s.get('request_throughput_rps', 0):>7.2f}")
         r.append("")
+        # Per-case failure summary (HC mode)
+        has_failure_summary = any(case.get("failure_summary") for case in cases)
+        if has_failure_summary:
+            r.append("-" * 78)
+            r.append("  失败原因分布 (Failure Taxonomy)")
+            r.append("-" * 78)
+            for case in cases:
+                fs = case.get("failure_summary") or {}
+                if fs:
+                    parts = [f"{k}={v}" for k, v in sorted(fs.items()) if v > 0]
+                    if parts:
+                        r.append(f"  C={case['concurrency']:>4}: {', '.join(parts)}")
+            r.append("")
+        # HC peak metrics section
+        hc_peak = sweep_result.get("hc_peak_metrics") or {}
+        if hc_peak:
+            r.append("-" * 78)
+            r.append("  高并发峰值指标 (Peak Metrics)")
+            r.append("-" * 78)
+            r.append(f"  Peak Output TPS:       {hc_peak.get('peak_output_tps', 0):.1f} tok/s")
+            r.append(f"  Peak Concurrency:      C={hc_peak.get('peak_concurrency')}")
+            r.append(f"  Peak Stable Conc:      C={hc_peak.get('peak_stable_concurrency')}")
+            r.append(f"  Max Tested Conc:       C={hc_peak.get('max_tested_concurrency')}")
+            r.append(f"  Meets >8000 tok/s:     {'Yes' if hc_peak.get('meets_8k_threshold') else 'No'}")
+            r.append(f"  Meets >25000 tok/s:    {'Yes' if hc_peak.get('meets_25k_threshold') else 'No'}")
+            c1024 = hc_peak.get("c1024_metrics") or {}
+            if c1024:
+                r.append(f"  C1024 Success Rate:    {c1024.get('success_rate', 0):.1f}%")
+                r.append(f"  C1024 Fail Count:      {c1024.get('fail_count', 0)}")
+                c1024_fs = c1024.get("failure_summary") or {}
+                if c1024_fs:
+                    fs_parts = [f"{k}={v}" for k, v in sorted(c1024_fs.items()) if v > 0]
+                    r.append(f"  C1024 Failures:        {', '.join(fs_parts)}")
+            r.append("")
         r.append("-" * 78)
         r.append("  自动分析摘要")
         r.append("-" * 78)
