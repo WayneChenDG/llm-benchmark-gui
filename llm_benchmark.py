@@ -397,17 +397,17 @@ I18N = {
         "report.env_unspecified": "未指定",
         # ── Token calibration section (TASK-LLM-BENCHMARK-INPUT-TOKEN-CALIBRATION-UI-FIX-001-v1) ──
         "section.token_calibration": "输入 Token 校准",
-        "calib.target_input_tokens": "目标输入 Tokens",
-        "calib.target_output_tokens": "目标输出 Tokens",
+        "calib.target_input_tokens": "目标输入 Token 数",
+        "calib.target_output_tokens": "目标输出 Token 数",
         "calib.prompt_mode": "输入模式",
         "calib.calibration_method": "校准方式",
-        "calib.system_prompt": "System Prompt（校准用）",
-        "calib.user_prompt": "User Prompt",
+        "calib.system_prompt": "系统提示词（校准用）",
+        "calib.user_prompt": "用户提示词（校准用）",
         "button.generate_input": "自动生成输入",
-        "button.calibrate_input": "校准输入 Token",
+        "button.calibrate_input": "校准输入 Token 数",
         "button.verify_token_usage": "验证 Token 用量",
         "button.apply_to_benchmark": "应用到测试参数",
-        "calib.status_not_calibrated": "尚未校准 — 点击「校准输入 Token」开始",
+        "calib.status_not_calibrated": "尚未校准 — 点击「校准输入 Token 数」开始",
         "calib.apply_no_result": "当前没有有效的输入 Token 校准结果，未应用到测试参数。",
         "calib.apply_success": "已将输入 Token 校准结果应用到测试参数。",
     },
@@ -1702,10 +1702,10 @@ class LLMBenchmarkApp:
                        ).pack(side=tk.LEFT, padx=(2, 0))
 
         # ── Prompt Mode ──
-        self._prompt_mode_var = tk.StringVar(value="Fixed Prompt")
+        self._prompt_mode_var = tk.StringVar(value="固定提示词")
         _lbl(frame, "calib.prompt_mode", 2)
         ttk.Combobox(frame, textvariable=self._prompt_mode_var,
-                     values=["Fixed Prompt", "Same-Length Variants", "Synthetic Random"],
+                     values=["固定提示词", "等长变体", "合成随机"],
                      width=22, state="readonly").grid(
             row=2, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
 
@@ -1713,7 +1713,7 @@ class LLMBenchmarkApp:
         self._calibration_method_var = tk.StringVar(value="服务端 usage 校准")
         _lbl(frame, "calib.calibration_method", 3)
         ttk.Combobox(frame, textvariable=self._calibration_method_var,
-                     values=["服务端 usage 校准", "本地 tokenizer 估算", "Manual"],
+                     values=["服务端 usage 校准", "本地 tokenizer 估算", "手动"],
                      width=22, state="readonly").grid(
             row=3, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
 
@@ -1908,17 +1908,17 @@ class LLMBenchmarkApp:
             generate_synthetic_prompt, generate_same_length_variants, _FILLER_TEXT)
         target_in = self.target_input_tokens_var.get()
         prompt_mode = getattr(self, "_prompt_mode_var", None)
-        mode = prompt_mode.get() if prompt_mode else "Fixed Prompt"
+        mode = prompt_mode.get() if prompt_mode else "固定提示词"
         sys_prompt = self._get_calib_system_prompt()
 
-        if mode == "Synthetic Random":
+        if mode == "合成随机":
             generated = generate_synthetic_prompt(target_in, sys_prompt)
-        elif mode == "Same-Length Variants":
+        elif mode == "等长变体":
             base = self._get_calib_user_prompt() or "请介绍人工智能。"
             variants = generate_same_length_variants(base, num_variants=1)
             generated = variants[0] if variants else base
         else:
-            # Fixed Prompt — use filler-augmented base prompt
+            # 固定提示词 — use filler-augmented base prompt
             base = self._get_calib_user_prompt() or "请介绍人工智能。"
             # Append calibration filler as suffix preview
             generated = base + "\n" + _FILLER_TEXT[:200]
@@ -1929,8 +1929,8 @@ class LLMBenchmarkApp:
         except Exception:
             pass
         self._calib_status_var.set(
-            f"已生成 prompt ({len(generated)} 字符)  mode={mode}  "
-            f"点击「校准输入 Token」验证实际 Token 数量")
+            f"已生成提示词（{len(generated)} 字符）  模式={mode}  "
+            f"点击「校准输入 Token 数」验证实际 Token 数量")
 
     def _on_calibrate_input_token(self):
         """Button handler: calibrate prompt length to match Target Input Tokens.
@@ -1948,7 +1948,7 @@ class LLMBenchmarkApp:
         target_out = self.target_output_tokens_var.get()
         method = self._calibration_method_var.get()
         prompt_mode = getattr(self, "_prompt_mode_var", None)
-        mode_str = prompt_mode.get() if prompt_mode else "Fixed Prompt"
+        mode_str = prompt_mode.get() if prompt_mode else "固定提示词"
 
         self._calib_status_var.set("正在校准…")
         self._target_input_tokens = target_in
@@ -1959,12 +1959,12 @@ class LLMBenchmarkApp:
                 calibrate_by_server_usage, calibrate_by_local_tokenizer,
                 TokenCalibrationResult)
             try:
-                if method == "Manual":
-                    # Manual mode: record as-is, mark calibration_method=manual
+                if method == "手动":
+                    # 手动模式: record as-is, mark calibration_method=manual
                     actual = 0  # unknown until server verifies
                     calib_method = "manual"
                     prompt = base_prompt
-                    warnings_out = ["Manual 模式: Token 数量未经校准，请使用「验证 Token 用量」确认。"]
+                    warnings_out = ["手动模式: Token 数量未经校准，请使用「验证 Token 用量」确认。"]
                 elif method == "本地 tokenizer 估算":
                     r: TokenCalibrationResult = calibrate_by_local_tokenizer(
                         model, system_prompt, base_prompt, target_in,
@@ -1986,7 +1986,13 @@ class LLMBenchmarkApp:
                 self._calibrated_system_prompt = system_prompt
                 self._actual_prompt_tokens = actual
                 self._calibration_method = calib_method
-                self._prompt_mode = mode_str.lower().replace(" ", "_").replace("-", "_")
+                _mode_code_map = {
+                    "固定提示词": "fixed",
+                    "等长变体":   "same_length_variants",
+                    "合成随机":   "synthetic_random",
+                }
+                self._prompt_mode = _mode_code_map.get(
+                    mode_str, mode_str.lower().replace(" ", "_").replace("-", "_"))
 
                 warn_str = f"\n⚠ {warnings_out[0]}" if warnings_out else ""
                 status_msg = (
@@ -1994,7 +2000,7 @@ class LLMBenchmarkApp:
                     f"target={target_in} calibration_method={calib_method} "
                     f"prompt_mode={self._prompt_mode}\n"
                     f"提示词: {len(prompt)} 字符  "
-                    f"Target Output Tokens: {target_out}{warn_str}")
+                    f"目标输出 Token 数: {target_out}{warn_str}")
                 self.root.after(0, lambda: self._calib_status_var.set(status_msg))
                 # Update text area with calibrated prompt
                 self.root.after(0, lambda: (
