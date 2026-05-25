@@ -104,6 +104,7 @@ BENCHMARK_PRESETS = {
     "标准基线 — C8/N80（默认）": {"concurrency": 8,  "total": 80,  "desc": "标准并发基线测试，默认推荐"},
     "中高并发 — C16/N160":      {"concurrency": 16, "total": 160, "desc": "中高并发，验证服务端排队行为"},
     "压力测试 — C32/N320":      {"concurrency": 32, "total": 320, "desc": "压力测试，接近服务端上限（需确认）"},
+    "客户验收 — 单用户 1024/2048": {"concurrency": 1, "total": 5,  "desc": "客户验收单用户 1024in/2048out tokens"},
     "自定义":                    {"concurrency": 64, "total": 640, "desc": "自定义并发与请求数，可手动修改"},
 }
 DEFAULT_PRESET_KEY = "标准基线 — C8/N80（默认）"
@@ -1042,6 +1043,12 @@ class LLMBenchmarkApp:
         }
         self.sweep_ui_poll_after_id = None
         self._sweep_hc_mode: bool = False  # True when max(concurrency) > 256
+        # ── Token calibration state (TASK-LLM-BENCHMARK-TOKEN-CALIBRATION-HIGH-CONCURRENCY-001-v1) ──
+        self._actual_prompt_tokens: int = 0
+        self._calibration_method: str = ""
+        self._calibrated_user_prompt: str = ""
+        self._target_input_tokens: int = 1024
+        self._target_output_tokens: int = 2048
         self.lang_code = self._load_language_config()
         self.language_var = tk.StringVar(
             value=I18N[self.lang_code]["language.en"]
@@ -1418,6 +1425,11 @@ class LLMBenchmarkApp:
         card_b.pack(fill=tk.X, pady=(0, C_STYLE["gap_lg"]))
         self._build_test_params(card_b.content)
 
+        # ── Token 校准 / Token Calibration ──────────────────────────────────────
+        card_token_calib = SectionCard(col, "Token 校准 / Token Calibration",
+                                       collapsible=True, expanded=False)
+        card_token_calib.pack(fill=tk.X, pady=(0, C_STYLE["gap_lg"]))
+        self._build_token_calib_section(card_token_calib.content)
 
         card_c = SectionCard(col, "操作", collapsible=True, expanded=True)
         card_c.pack(fill=tk.X)
@@ -1460,9 +1472,15 @@ class LLMBenchmarkApp:
 
         self.max_tokens_var = tk.IntVar(value=512)
         _lbl(gen, "最大 Token 数", 0, 0, padx=(0, C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0))
-        ttk.Spinbox(gen, from_=16, to=8192, increment=16,
-                    textvariable=self.max_tokens_var, width=SPIN_W).grid(
-            row=0, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
+        _max_tok_frame = tk.Frame(gen, bg=C_STYLE["bg_card"])
+        _max_tok_frame.grid(row=0, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
+        ttk.Spinbox(_max_tok_frame, from_=16, to=8192, increment=16,
+                    textvariable=self.max_tokens_var, width=SPIN_W).pack(side=tk.LEFT)
+        # Target Output Tokens quick-select: 512 / 1024 / 2048 / 自定义
+        for _qtok in (512, 1024, 2048):
+            ttk.Button(_max_tok_frame, text=str(_qtok), width=5,
+                       command=lambda v=_qtok: self.max_tokens_var.set(v)
+                       ).pack(side=tk.LEFT, padx=(2, 0))
 
         self.temp_var = tk.DoubleVar(value=0.0)
         _lbl(gen, "温度参数", 0, 2, padx=(C_STYLE["gap_lg"], C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0))
@@ -1591,6 +1609,277 @@ class LLMBenchmarkApp:
                   self.stream_var, self.output_length_mode_var,
                   self.warmup_var, self.auto_save_var):
             v.trace_add("write", lambda *a: self._auto_save_check())
+
+    # ── Token 校准 / Token Calibration methods ─────────────────────────────────
+    def _build_token_calib_section(self, parent):
+        """Build Token Calibration UI section.
+
+        Provides Target Input Tokens, Target Output Tokens, calibration method,
+        and buttons to calibrate, verify, and apply.
+        """
+        LABEL_W = 18
+        BG = C_STYLE["bg_card"]
+
+        def _lbl(pr, text, row, col=0, **kw):
+            tk.Label(pr, text=text, font=C_STYLE["font_body"], width=LABEL_W,
+                     bg=BG, fg=C_STYLE["text_primary"], anchor="w").grid(
+                row=row, column=col, sticky="w",
+                padx=(0, C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0), **kw)
+
+        frame = tk.Frame(parent, bg=BG)
+        frame.pack(fill=tk.X, pady=(0, C_STYLE["gap_sm"]))
+        frame.columnconfigure(1, weight=1)
+
+        # ── Target Input Tokens ──
+        self.target_input_tokens_var = tk.IntVar(value=self._target_input_tokens)
+        _lbl(frame, "Target Input Tokens", 0)
+        _inp_frame = tk.Frame(frame, bg=BG)
+        _inp_frame.grid(row=0, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
+        ttk.Spinbox(_inp_frame, from_=64, to=32768, increment=64,
+                    textvariable=self.target_input_tokens_var, width=8).pack(side=tk.LEFT)
+        for _v in (512, 1024, 2048, 4096):
+            ttk.Button(_inp_frame, text=str(_v), width=5,
+                       command=lambda v=_v: self.target_input_tokens_var.set(v)
+                       ).pack(side=tk.LEFT, padx=(2, 0))
+
+        # ── Target Output Tokens ──
+        self.target_output_tokens_var = tk.IntVar(value=self._target_output_tokens)
+        _lbl(frame, "Target Output Tokens", 1)
+        _out_frame = tk.Frame(frame, bg=BG)
+        _out_frame.grid(row=1, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
+        ttk.Spinbox(_out_frame, from_=64, to=32768, increment=64,
+                    textvariable=self.target_output_tokens_var, width=8).pack(side=tk.LEFT)
+        for _v in (512, 1024, 2048):
+            ttk.Button(_out_frame, text=str(_v), width=5,
+                       command=lambda v=_v: self.target_output_tokens_var.set(v)
+                       ).pack(side=tk.LEFT, padx=(2, 0))
+
+        # ── Calibration method ──
+        self._calibration_method_var = tk.StringVar(value="服务端 usage 校准")
+        _lbl(frame, "校准方式", 2)
+        ttk.Combobox(frame, textvariable=self._calibration_method_var,
+                     values=["服务端 usage 校准", "本地 tokenizer 估算"],
+                     width=20, state="readonly").grid(
+            row=2, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
+
+        # ── Buttons row ──
+        btn_row = tk.Frame(parent, bg=BG)
+        btn_row.pack(fill=tk.X, pady=(C_STYLE["gap_sm"], 0))
+        ttk.Button(btn_row, text="校准输入 Token",
+                   command=self._on_calibrate_input_token).pack(side=tk.LEFT)
+        ttk.Button(btn_row, text="验证 Token 用量",
+                   command=self._on_verify_token_usage).pack(side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
+        ttk.Button(btn_row, text="应用到测试",
+                   command=self._on_apply_calibration_to_test).pack(side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
+
+        # ── Status label ──
+        self._calib_status_var = tk.StringVar(value="尚未校准 — 点击「校准输入 Token」开始")
+        tk.Label(parent, textvariable=self._calib_status_var,
+                 font=C_STYLE["font_small"], bg=BG,
+                 fg=C_STYLE["text_secondary"], anchor="w",
+                 wraplength=480, justify="left").pack(
+            fill=tk.X, pady=(C_STYLE["pad_sm"], 0))
+
+    def _calibrate_input_tokens_server_usage(self, api_url, api_key, model,
+                                              system_prompt, target_tokens,
+                                              tolerance=8, max_iter=12) -> tuple:
+        """Binary-search the prompt length to match target_tokens (server-side).
+
+        Sends lightweight requests (max_tokens=1, stream=False) and reads
+        usage.prompt_tokens from the response.  Returns (adjusted_prompt, actual_tokens).
+
+        Taxonomy: calibration_method = "server_usage"
+        """
+        base_prompt = self.prompt_var.get() or "请用300字左右介绍机器学习。"
+        # Seed prompt with repeated content so we can adjust length
+        unit = base_prompt.strip()
+        if not unit:
+            unit = "请介绍人工智能。"
+
+        # Estimate current token density: get baseline
+        messages = [{"role": "user", "content": unit}]
+        if system_prompt:
+            messages = [{"role": "system", "content": system_prompt}] + messages
+        result = call_llm(api_url, api_key, model, messages, max_tokens=1,
+                          temperature=0.0, stream=False)
+        if not result.get("ok"):
+            return unit, 0
+
+        current_tokens = result.get("prompt_tokens", 0)
+        if current_tokens <= 0:
+            return unit, 0
+
+        # Binary search on number of repeated units
+        char_per_token = len(unit) / max(current_tokens, 1)
+        estimated_chars = int(target_tokens * char_per_token)
+        lo, hi = max(1, estimated_chars // 2), estimated_chars * 3
+        best_prompt = unit
+        best_tokens = current_tokens
+
+        for _i in range(max_iter):
+            mid = (lo + hi) // 2
+            candidate = (unit * ((mid // len(unit)) + 1))[:mid]
+            msgs = [{"role": "user", "content": candidate}]
+            if system_prompt:
+                msgs = [{"role": "system", "content": system_prompt}] + msgs
+            r = call_llm(api_url, api_key, model, msgs, max_tokens=1,
+                         temperature=0.0, stream=False)
+            if not r.get("ok"):
+                break
+            got = r.get("prompt_tokens", 0)
+            best_prompt = candidate
+            best_tokens = got
+            diff = got - target_tokens
+            if abs(diff) <= tolerance:
+                break
+            if diff < 0:
+                lo = mid + 1
+            else:
+                hi = mid - 1
+
+        return best_prompt, best_tokens
+
+    def _calibrate_input_tokens_local(self, model_name_or_path, system_prompt,
+                                      target_tokens, tolerance=8) -> tuple:
+        """Estimate prompt length using a local tokenizer (lazy import of transformers).
+
+        Returns (adjusted_prompt, estimated_tokens).
+        Taxonomy: calibration_method = "local_tokenizer"
+        """
+        try:
+            from transformers import AutoTokenizer  # lazy import — optional dependency
+        except ImportError:
+            return self.prompt_var.get(), 0
+
+        base_prompt = self.prompt_var.get() or "请用300字左右介绍机器学习。"
+        unit = base_prompt.strip() or "请介绍人工智能。"
+        try:
+            tok = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=True)
+        except Exception:
+            return unit, 0
+
+        msgs = []
+        if system_prompt:
+            msgs.append({"role": "system", "content": system_prompt})
+        msgs.append({"role": "user", "content": unit})
+        try:
+            encoded = tok.apply_chat_template(msgs, add_generation_prompt=True,
+                                              tokenize=True)
+            current_tokens = len(encoded)
+        except Exception:
+            current_tokens = len(tok.encode(unit))
+
+        char_per_token = len(unit) / max(current_tokens, 1)
+        estimated_chars = int(target_tokens * char_per_token)
+        for _step in range(20):
+            candidate = (unit * ((estimated_chars // len(unit)) + 2))[:estimated_chars]
+            try:
+                msgs2 = []
+                if system_prompt:
+                    msgs2.append({"role": "system", "content": system_prompt})
+                msgs2.append({"role": "user", "content": candidate})
+                got = len(tok.apply_chat_template(msgs2, add_generation_prompt=True,
+                                                  tokenize=True))
+            except Exception:
+                got = len(tok.encode(candidate))
+            diff = got - target_tokens
+            if abs(diff) <= tolerance:
+                return candidate, got
+            estimated_chars += int(-diff * char_per_token)
+            estimated_chars = max(1, estimated_chars)
+        return candidate, got
+
+    def _on_calibrate_input_token(self):
+        """Button handler: calibrate prompt length to match Target Input Tokens."""
+        api_url = self.url_var.get().strip()
+        api_key = self.key_var.get().strip()
+        model = self.model_var.get().strip()
+        system_prompt = self.system_var.get().strip()
+        target_in = self.target_input_tokens_var.get()
+        target_out = self.target_output_tokens_var.get()
+        method = self._calibration_method_var.get()
+
+        self._calib_status_var.set("正在校准…")
+        self._target_input_tokens = target_in
+        self._target_output_tokens = target_out
+
+        def _do_calib():
+            try:
+                if method == "本地 tokenizer 估算":
+                    prompt, actual = self._calibrate_input_tokens_local(
+                        model, system_prompt, target_in)
+                    calib_method = "local_tokenizer"
+                else:
+                    prompt, actual = self._calibrate_input_tokens_server_usage(
+                        api_url, api_key, model, system_prompt, target_in)
+                    calib_method = "server_usage"
+                self._calibrated_user_prompt = prompt
+                self._actual_prompt_tokens = actual
+                self._calibration_method = calib_method
+                status_msg = (
+                    f"校准完成: actual_prompt_tokens={actual} "
+                    f"target={target_in} calibration_method={calib_method}\n"
+                    f"提示词长度: {len(prompt)} 字符  "
+                    f"Target Output Tokens: {target_out}")
+                self.root.after(0, lambda: self._calib_status_var.set(status_msg))
+            except Exception as exc:
+                self.root.after(0, lambda: self._calib_status_var.set(
+                    f"校准失败: {exc}"))
+        threading.Thread(target=_do_calib, daemon=True).start()
+
+    def _on_verify_token_usage(self):
+        """Button handler: send one request and display actual prompt/completion tokens."""
+        api_url = self.url_var.get().strip()
+        api_key = self.key_var.get().strip()
+        model = self.model_var.get().strip()
+        system_prompt = self.system_var.get().strip()
+        prompt = self._calibrated_user_prompt or self.prompt_var.get()
+        max_tok = self.target_output_tokens_var.get()
+
+        self._calib_status_var.set("正在验证 Token 用量…")
+
+        def _do_verify():
+            try:
+                messages = [{"role": "user", "content": prompt}]
+                if system_prompt:
+                    messages = [{"role": "system", "content": system_prompt}] + messages
+                r = call_llm(api_url, api_key, model, messages,
+                             max_tokens=max_tok, temperature=0.0, stream=False)
+                if r.get("ok"):
+                    pt = r.get("prompt_tokens", 0)
+                    ct = r.get("completion_tokens", 0)
+                    target_in = self._target_input_tokens
+                    target_out = self._target_output_tokens
+                    # fixed_output_validation_passed: check completion_tokens vs target
+                    fov = (abs(ct - target_out) <= 32) if ct > 0 else False
+                    status = (
+                        f"验证通过: prompt_tokens={pt} completion_tokens={ct} "
+                        f"fixed_output_validation_passed={fov}\n"
+                        f"  target_input_tokens={target_in} "
+                        f"target_output_tokens={target_out}")
+                    self.root.after(0, lambda: self._calib_status_var.set(status))
+                else:
+                    err = r.get("error", "unknown")
+                    self.root.after(0, lambda: self._calib_status_var.set(
+                        f"验证失败: {err}"))
+            except Exception as exc:
+                self.root.after(0, lambda: self._calib_status_var.set(
+                    f"验证异常: {exc}"))
+        threading.Thread(target=_do_verify, daemon=True).start()
+
+    def _on_apply_calibration_to_test(self):
+        """Apply calibrated prompt and target_output_tokens to main test settings."""
+        if not self._calibrated_user_prompt:
+            self._calib_status_var.set("请先执行「校准输入 Token」")
+            return
+        self.prompt_var.set(self._calibrated_user_prompt)
+        self.max_tokens_var.set(self._target_output_tokens)
+        self._calib_status_var.set(
+            f"已应用: prompt 已更新 ({len(self._calibrated_user_prompt)} 字符)  "
+            f"max_tokens={self._target_output_tokens}  "
+            f"actual_prompt_tokens={self._actual_prompt_tokens}  "
+            f"calibration_method={self._calibration_method}")
+
     def _build_results_tab(self):
         bf = self.bench_frame
         bf.grid_columnconfigure(0, weight=1)
@@ -2704,6 +2993,15 @@ class LLMBenchmarkApp:
 
         def _done_with_warmup(s):
             s["warmup_requests"] = warmup
+            # Inject token calibration fields if calibration was applied
+            if self._actual_prompt_tokens:
+                s["actual_prompt_tokens"] = self._actual_prompt_tokens
+            if self._target_input_tokens:
+                s["target_input_tokens"] = self._target_input_tokens
+            if self._target_output_tokens:
+                s["target_output_tokens"] = self._target_output_tokens
+            if self._calibration_method:
+                s["calibration_method"] = self._calibration_method
             self._on_done(s)
 
         run_benchmark(api_url, api_key, model, messages, max_tokens, temperature,
@@ -5860,6 +6158,9 @@ class LLMBenchmarkApp:
                     f"[OK] success={summary['success']} fail={summary['fail']} "
                     f"E2E_avg={summary['e2e_latency_avg']:.3f}s "
                     f"Output_TPS={summary['system_output_tps']:.1f} tok/s\n")
+                # Case cooldown: 0s for normal thread-pool sweep
+                if idx < total_levels - 1:
+                    time.sleep(0)  # explicit 0s cooldown (no-op; reserved for normal mode)
             else:
                 sweep_fail_count += 1
                 self.root.after(0, lambda i=idx + 1, total=total_levels, cc=c, fail=sweep_fail_count:
@@ -6083,6 +6384,11 @@ class LLMBenchmarkApp:
                     f"E2E_avg={summary['e2e_latency_avg']:.3f}s "
                     f"Output_TPS={summary['system_output_tps']:.1f} tok/s\n")
 
+                # Case cooldown: 10s between HC cases (让服务端自然恢复)
+                if idx < total_levels - 1:
+                    self._append_sweep_status("  (冷却 10s...)\n")
+                    await asyncio.sleep(10)
+
         finished_at = datetime.now().isoformat()
         self._safe_set_progress_overlay_detail(self.tr("progress.finishing"))
         analysis_summary = self._generate_analysis_summary(cases)
@@ -6110,6 +6416,7 @@ class LLMBenchmarkApp:
             "min_tokens_sent": max_tokens if output_length_mode == "fixed" else None,
             "ignore_eos": output_length_mode == "fixed",
             "runner": "asyncio+aiohttp",
+            "high_concurrency": True,
             "cases": cases,
             "analysis_summary": analysis_summary,
             "sweep_diagnostics": sweep_diagnostics,
@@ -6168,8 +6475,15 @@ class LLMBenchmarkApp:
                 except asyncio.CancelledError:
                     result = _hc_fail_result("cancelled", "cancelled")
                 except Exception as exc:
-                    err_type = _hc_classify_error(exc)
-                    result = _hc_fail_result(err_type, str(exc)[:200])
+                    exc_s = str(exc)
+                    # WinError inline check (WSAECONNRESET=10054, WSAETIMEDOUT=10060)
+                    if "WinError 10054" in exc_s or "winerror 10054" in exc_s:
+                        err_type = "connection_reset"
+                    elif "WinError 10060" in exc_s or "winerror 10060" in exc_s:
+                        err_type = "connect_error"
+                    else:
+                        err_type = _hc_classify_error(exc)
+                    result = _hc_fail_result(err_type, exc_s[:200])
 
                 results.append(result)
                 elapsed = loop.time() - case_start_wall
