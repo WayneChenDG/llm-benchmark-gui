@@ -395,6 +395,21 @@ I18N = {
         "db.test_fail": "写入测试失败",
         "report.env_summary": "被测环境",
         "report.env_unspecified": "未指定",
+        # ── Token calibration section (TASK-LLM-BENCHMARK-INPUT-TOKEN-CALIBRATION-UI-FIX-001-v1) ──
+        "section.token_calibration": "输入 Token 校准",
+        "calib.target_input_tokens": "目标输入 Tokens",
+        "calib.target_output_tokens": "目标输出 Tokens",
+        "calib.prompt_mode": "输入模式",
+        "calib.calibration_method": "校准方式",
+        "calib.system_prompt": "System Prompt（校准用）",
+        "calib.user_prompt": "User Prompt",
+        "button.generate_input": "自动生成输入",
+        "button.calibrate_input": "校准输入 Token",
+        "button.verify_token_usage": "验证 Token 用量",
+        "button.apply_to_benchmark": "应用到测试参数",
+        "calib.status_not_calibrated": "尚未校准 — 点击「校准输入 Token」开始",
+        "calib.apply_no_result": "当前没有有效的输入 Token 校准结果，未应用到测试参数。",
+        "calib.apply_success": "已将输入 Token 校准结果应用到测试参数。",
     },
     "en_US": {
         "app.title": "JISUMAN LLM Benchmark GUI",
@@ -630,6 +645,21 @@ I18N = {
         "db.test_fail": "Write test failed",
         "report.env_summary": "Test Environment",
         "report.env_unspecified": "Unspecified",
+        # ── Token calibration section (TASK-LLM-BENCHMARK-INPUT-TOKEN-CALIBRATION-UI-FIX-001-v1) ──
+        "section.token_calibration": "Input Token Calibration",
+        "calib.target_input_tokens": "Target Input Tokens",
+        "calib.target_output_tokens": "Target Output Tokens",
+        "calib.prompt_mode": "Prompt Mode",
+        "calib.calibration_method": "Calibration Method",
+        "calib.system_prompt": "System Prompt (Calibration)",
+        "calib.user_prompt": "User Prompt",
+        "button.generate_input": "Generate Input",
+        "button.calibrate_input": "Calibrate Input Tokens",
+        "button.verify_token_usage": "Verify Token Usage",
+        "button.apply_to_benchmark": "Apply to Benchmark Settings",
+        "calib.status_not_calibrated": "Not calibrated — click Calibrate Input Tokens to start",
+        "calib.apply_no_result": "No valid input-token calibration result is available. Benchmark settings were not updated.",
+        "calib.apply_success": "Input-token calibration result has been applied to benchmark settings.",
     },
 }
 
@@ -1421,14 +1451,18 @@ class LLMBenchmarkApp:
             row=0, column=1, padx=(C_STYLE["pad_sm"], 0))
         self.system_var = tk.StringVar(value="你是一个有帮助的助手。")
         self._labeled_text(card_a.content, "系统提示词", self.system_var, 3, height=2)
+        # Store stable reference so Apply can update the widget directly
+        self._api_system_prompt_widget = self._text_widgets.get("系统提示词")
         self.prompt_var = tk.StringVar(value="请用300字左右介绍机器学习。")
         self._labeled_text(card_a.content, "用户提示词", self.prompt_var, 4, height=2)
+        # Store stable reference so Apply can update the widget directly
+        self._api_user_prompt_widget = self._text_widgets.get("用户提示词")
         card_b = SectionCard(col, "测试参数", collapsible=True, expanded=True)
         card_b.pack(fill=tk.X, pady=(0, C_STYLE["gap_lg"]))
         self._build_test_params(card_b.content)
 
-        # ── Token 校准 / Token Calibration ──────────────────────────────────────
-        card_token_calib = SectionCard(col, "Token 校准 / Token Calibration",
+        # ── 输入 Token 校准 (Input Token Calibration) ────────────────────────────
+        card_token_calib = SectionCard(col, self.tr("section.token_calibration"),
                                        collapsible=True, expanded=False)
         card_token_calib.pack(fill=tk.X, pady=(0, C_STYLE["gap_lg"]))
         self._build_token_calib_section(card_token_calib.content)
@@ -1612,31 +1646,32 @@ class LLMBenchmarkApp:
                   self.warmup_var, self.auto_save_var):
             v.trace_add("write", lambda *a: self._auto_save_check())
 
-    # ── Token 校准 / Token Calibration methods ─────────────────────────────────
+    # ── 输入 Token 校准 (Input Token Calibration) methods ───────────────────────
     def _build_token_calib_section(self, parent):
-        """Build Token Calibration UI section.
+        """Build Input Token Calibration UI section.
+
+        All labels and buttons use self.tr() for i18n — no bilingual slash strings.
 
         Fields:
-          - Target Input Tokens / Target Output Tokens
-          - System Prompt (calibration-local)
-          - User Prompt (large editable text area)
-          - Prompt Mode: Fixed Prompt / Same-Length Variants / Synthetic Random
-          - Calibration Method: Server usage / Local tokenizer / Manual
+          - 目标输入 Tokens / Target Input Tokens
+          - 目标输出 Tokens / Target Output Tokens
+          - 输入模式 / Prompt Mode
+          - 校准方式 / Calibration Method
+          - System Prompt（校准用）
+          - User Prompt text area
 
-        Buttons:
-          - 自动生成输入 / Generate Input
-          - 校准输入 Token / Calibrate Input Tokens
-          - 验证 Token 用量 / Verify Token Usage
-          - 应用到测试参数 / Apply to Benchmark Settings
+        Buttons: 自动生成输入 · 校准输入 Token · 验证 Token 用量 · 应用到测试参数
         """
         LABEL_W = 20
         BG = C_STYLE["bg_card"]
 
-        def _lbl(pr, text, row, col=0, **kw):
-            tk.Label(pr, text=text, font=C_STYLE["font_body"], width=LABEL_W,
-                     bg=BG, fg=C_STYLE["text_primary"], anchor="w").grid(
-                row=row, column=col, sticky="w",
-                padx=(0, C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0), **kw)
+        def _lbl(pr, i18n_key, row, col=0, **kw):
+            lbl = tk.Label(pr, text=self.tr(i18n_key), font=C_STYLE["font_body"],
+                           width=LABEL_W, bg=BG, fg=C_STYLE["text_primary"], anchor="w")
+            lbl.grid(row=row, column=col, sticky="w",
+                     padx=(0, C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0), **kw)
+            self._register_i18n_widget(lbl, i18n_key)
+            return lbl
 
         frame = tk.Frame(parent, bg=BG)
         frame.pack(fill=tk.X, pady=(0, C_STYLE["gap_sm"]))
@@ -1644,7 +1679,7 @@ class LLMBenchmarkApp:
 
         # ── Target Input Tokens ──
         self.target_input_tokens_var = tk.IntVar(value=self._target_input_tokens)
-        _lbl(frame, "Target Input Tokens", 0)
+        _lbl(frame, "calib.target_input_tokens", 0)
         _inp_frame = tk.Frame(frame, bg=BG)
         _inp_frame.grid(row=0, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
         ttk.Spinbox(_inp_frame, from_=64, to=32768, increment=64,
@@ -1656,7 +1691,7 @@ class LLMBenchmarkApp:
 
         # ── Target Output Tokens ──
         self.target_output_tokens_var = tk.IntVar(value=self._target_output_tokens)
-        _lbl(frame, "Target Output Tokens", 1)
+        _lbl(frame, "calib.target_output_tokens", 1)
         _out_frame = tk.Frame(frame, bg=BG)
         _out_frame.grid(row=1, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
         ttk.Spinbox(_out_frame, from_=64, to=32768, increment=64,
@@ -1668,7 +1703,7 @@ class LLMBenchmarkApp:
 
         # ── Prompt Mode ──
         self._prompt_mode_var = tk.StringVar(value="Fixed Prompt")
-        _lbl(frame, "Prompt Mode", 2)
+        _lbl(frame, "calib.prompt_mode", 2)
         ttk.Combobox(frame, textvariable=self._prompt_mode_var,
                      values=["Fixed Prompt", "Same-Length Variants", "Synthetic Random"],
                      width=22, state="readonly").grid(
@@ -1676,21 +1711,21 @@ class LLMBenchmarkApp:
 
         # ── Calibration Method ──
         self._calibration_method_var = tk.StringVar(value="服务端 usage 校准")
-        _lbl(frame, "校准方式 / Calibration Method", 3)
+        _lbl(frame, "calib.calibration_method", 3)
         ttk.Combobox(frame, textvariable=self._calibration_method_var,
                      values=["服务端 usage 校准", "本地 tokenizer 估算", "Manual"],
                      width=22, state="readonly").grid(
             row=3, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
 
-        # ── System Prompt (calibration local) ──
-        _lbl(frame, "System Prompt (校准用)", 4)
+        # ── System Prompt (calibration-local) ──
+        _lbl(frame, "calib.system_prompt", 4)
         self._calib_system_var = tk.StringVar(
             value="你是一个严谨、简洁、可靠的中文技术助手。")
         ttk.Entry(frame, textvariable=self._calib_system_var, width=44).grid(
             row=4, column=1, sticky="ew", pady=(C_STYLE["gap_sm"], 0))
 
         # ── User Prompt text area ──
-        _lbl(frame, "User Prompt", 5)
+        _lbl(frame, "calib.user_prompt", 5)
         _ta_frame = tk.Frame(frame, bg=BG)
         _ta_frame.grid(row=5, column=1, sticky="ew", pady=(C_STYLE["gap_sm"], 0))
         _ta_frame.columnconfigure(0, weight=1)
@@ -1705,20 +1740,33 @@ class LLMBenchmarkApp:
         self._calib_prompt_text.configure(yscrollcommand=_ta_sb.set)
         self._calib_prompt_text.insert("1.0", "请详细介绍机器学习的基本原理、常见算法以及在工业界的典型应用场景。")
 
-        # ── Buttons row ──
+        # ── Buttons row — all i18n-registered ──
         btn_row = tk.Frame(parent, bg=BG)
         btn_row.pack(fill=tk.X, pady=(C_STYLE["gap_sm"], 0))
-        ttk.Button(btn_row, text="自动生成输入",
-                   command=self._on_generate_input).pack(side=tk.LEFT)
-        ttk.Button(btn_row, text="校准输入 Token",
-                   command=self._on_calibrate_input_token).pack(side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
-        ttk.Button(btn_row, text="验证 Token 用量",
-                   command=self._on_verify_token_usage).pack(side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
-        ttk.Button(btn_row, text="应用到测试参数",
-                   command=self._on_apply_calibration_to_test).pack(side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
+        self._register_i18n_widget(
+            ttk.Button(btn_row, text=self.tr("button.generate_input"),
+                       command=self._on_generate_input),
+            "button.generate_input"
+        ).pack(side=tk.LEFT)
+        self._register_i18n_widget(
+            ttk.Button(btn_row, text=self.tr("button.calibrate_input"),
+                       command=self._on_calibrate_input_token),
+            "button.calibrate_input"
+        ).pack(side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
+        self._register_i18n_widget(
+            ttk.Button(btn_row, text=self.tr("button.verify_token_usage"),
+                       command=self._on_verify_token_usage),
+            "button.verify_token_usage"
+        ).pack(side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
+        self._register_i18n_widget(
+            ttk.Button(btn_row, text=self.tr("button.apply_to_benchmark"),
+                       command=self._on_apply_calibration_to_test),
+            "button.apply_to_benchmark"
+        ).pack(side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
 
         # ── Status label ──
-        self._calib_status_var = tk.StringVar(value="尚未校准 — 点击「校准输入 Token」开始")
+        self._calib_status_var = tk.StringVar(
+            value=self.tr("calib.status_not_calibrated"))
         tk.Label(parent, textvariable=self._calib_status_var,
                  font=C_STYLE["font_small"], bg=BG,
                  fg=C_STYLE["text_secondary"], anchor="w",
@@ -2004,32 +2052,65 @@ class LLMBenchmarkApp:
                     f"验证异常: {exc}"))
         threading.Thread(target=_do_verify, daemon=True).start()
 
+    def _update_text_field(self, var: tk.StringVar, widget, value: str):
+        """Update a StringVar AND its associated tk.Text widget (Text has no textvariable).
+
+        Args:
+            var:    The StringVar bound to the field
+            widget: The tk.Text widget (or None if not available)
+            value:  New text value
+        """
+        var.set(value)
+        if widget is not None:
+            try:
+                widget.delete("1.0", tk.END)
+                widget.insert("1.0", value)
+            except Exception:
+                pass
+
     def _on_apply_calibration_to_test(self):
-        """Apply calibrated prompt + target tokens to main test settings.
+        """Apply calibrated prompt + target tokens to API config and test settings.
 
         Sets:
-          - User Prompt  ← calibrated prompt
-          - Max Tokens   ← Target Output Tokens
-          - Output Length Mode ← Fixed (required for token-defined workload)
-          - System Prompt ← calibration system prompt (if different)
+          - API System Prompt  ← calibrated_system_prompt
+          - API User Prompt    ← calibrated_user_prompt
+          - Max Tokens         ← target_output_tokens
+          - Output Length Mode ← Fixed Output (required for token-defined workload)
+
+        The API config text widgets (tk.Text) are updated directly because they
+        do not support textvariable — StringVar.set() alone is not sufficient.
         """
         if not self._calibrated_user_prompt:
-            self._calib_status_var.set("请先执行「校准输入 Token」")
+            # Guard: calibration hasn't been run or failed
+            self._calib_status_var.set(self.tr("calib.apply_no_result"))
             return
-        self.prompt_var.set(self._calibrated_user_prompt)
-        self.max_tokens_var.set(self._target_output_tokens)
-        # Apply to System Prompt if calibration section has a value
+
+        # ── Update API User Prompt ──
+        self._update_text_field(
+            self.prompt_var,
+            getattr(self, "_api_user_prompt_widget", None),
+            self._calibrated_user_prompt)
+
+        # ── Update API System Prompt ──
         sys_calib = self._get_calib_system_prompt()
         if sys_calib:
-            self.system_var.set(sys_calib)
-        # Force Output Length Mode = fixed (required for token-defined workload)
+            self._update_text_field(
+                self.system_var,
+                getattr(self, "_api_system_prompt_widget", None),
+                sys_calib)
+
+        # ── Update Max Tokens ──
+        self.max_tokens_var.set(self._target_output_tokens)
+
+        # ── Force Output Length Mode = fixed ──
         if hasattr(self, "output_length_mode_var"):
             self.output_length_mode_var.set("fixed")
-        self._calib_status_var.set(
-            f"已应用: prompt 已更新 ({len(self._calibrated_user_prompt)} 字符)  "
-            f"max_tokens={self._target_output_tokens}  output_length_mode=fixed  "
-            f"actual_prompt_tokens={self._actual_prompt_tokens}  "
-            f"calibration_method={self._calibration_method}")
+
+        # ── Update internal state ──
+        self._target_input_tokens = self.target_input_tokens_var.get()
+        self._target_output_tokens = self.target_output_tokens_var.get()
+
+        self._calib_status_var.set(self.tr("calib.apply_success"))
 
     def _build_results_tab(self):
         bf = self.bench_frame
