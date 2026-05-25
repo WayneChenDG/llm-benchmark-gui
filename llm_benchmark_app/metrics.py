@@ -415,6 +415,21 @@ def aggregate_results(results: list[dict], duration: float, config: dict) -> dic
         "total_output_tokens": total_output_tokens,
         "total_tokens": total_tokens,
 
+        # ── per-request token stats (for token calibration validation) ──
+        "actual_completion_tokens_avg": round(total_output_tokens / num_ok, 2) if num_ok else 0,
+        "actual_completion_tokens_min": min((r.get("completion_tokens", 0) for r in ok_results), default=0),
+        "actual_completion_tokens_max": max((r.get("completion_tokens", 0) for r in ok_results), default=0),
+        "actual_prompt_tokens_avg": round(total_input_tokens / num_ok, 2) if num_ok else 0,
+        "actual_prompt_tokens_min": min((r.get("prompt_tokens", 0) for r in ok_results), default=0),
+        "actual_prompt_tokens_max": max((r.get("prompt_tokens", 0) for r in ok_results), default=0),
+
+        # token calibration metadata (populated from config if present)
+        "target_input_tokens": config.get("target_input_tokens"),
+        "target_output_tokens": config.get("target_output_tokens"),
+        "calibration_method": config.get("calibration_method"),
+        "prompt_mode": config.get("prompt_mode"),
+        "token_tolerance": config.get("token_tolerance", 8),
+
         # throughput
         "request_throughput_rps": round(request_throughput_rps, 2),
         "system_output_tps": round(system_output_tps, 1),
@@ -451,6 +466,16 @@ def aggregate_results(results: list[dict], duration: float, config: dict) -> dic
         summary["fixed_output_avg_completion_tokens"] = None
         summary["fixed_output_validation_passed"] = None
         summary["fixed_output_validation_warning"] = ""
+
+    # ── input token validation (if target_input_tokens provided in config) ──
+    tgt_in = config.get("target_input_tokens")
+    tol = config.get("token_tolerance", 8)
+    if tgt_in and num_ok > 0:
+        avg_prompt = total_input_tokens / num_ok
+        summary["input_token_validation_passed"] = abs(avg_prompt - tgt_in) <= tol
+    else:
+        summary["input_token_validation_passed"] = None
+
     summary["metric_warnings"] = metric_warnings
 
     # ── parser_profile: stream capability profile from per-request results ──

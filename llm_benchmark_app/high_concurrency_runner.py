@@ -5,19 +5,34 @@ Extracted from llm_benchmark.py (TASK-LLM-BENCHMARK-MODULE-SPLIT-TOKEN-HC-001-v1
 Updated in TASK-LLM-BENCHMARK-TOKEN-CALIBRATION-HIGH-CONCURRENCY-001-v1:
   - Added connection_reset to failure taxonomy
   - Windows WinError 10054 → connection_reset (connection reset by peer)
-  - Windows WinError 10060 → connect_error (connection attempt timed out)
+  - Windows WinError 10060 → connect_timeout (WSAETIMEDOUT, connection attempt timed out)
+Updated in TASK-LLM-BENCHMARK-TOKEN-CALIBRATION-HC-RUNNER-001-v1:
+  - Taxonomy extended: connect_timeout as separate category from timeout
+  - WinError 10060 corrected to connect_timeout (was connect_error)
 """
 from __future__ import annotations
 
 
 def _hc_classify_error(exc: Exception) -> str:
     """Classify an exception into a failure taxonomy string.
-    Taxonomy: timeout, connect_error, connection_reset, read_error,
-              server_5xx, server_4xx, json_parse_error, stream_parse_error,
-              cancelled, client_resource_error, unknown.
+
+    Taxonomy:
+      timeout            — request/read timed out (generic)
+      connect_error      — could not connect (DNS, refused, etc.)
+      connect_timeout    — connection attempt timed out (separate from read timeout)
+      connection_reset   — peer reset the connection mid-flight
+      read_error         — server disconnected during response read
+      server_5xx         — server returned 5xx status
+      server_4xx         — server returned 4xx status
+      json_parse_error   — response JSON could not be parsed
+      stream_parse_error — SSE/stream parsing error
+      client_resource_error — OS resource exhaustion (too many files, etc.)
+      cancelled          — asyncio task cancelled
+      unknown            — unclassified
+
     Windows error codes:
-      WinError 10054 → connection_reset (WSAECONNRESET, connection reset by peer)
-      WinError 10060 → connect_error    (WSAETIMEDOUT, connection attempt timed out)
+      WinError 10054 → connection_reset  (WSAECONNRESET, peer reset the connection)
+      WinError 10060 → connect_timeout   (WSAETIMEDOUT, connection attempt timed out)
     """
     exc_str = str(exc)
     name = type(exc).__name__.lower()
@@ -26,21 +41,26 @@ def _hc_classify_error(exc: Exception) -> str:
     if "WinError 10054" in exc_str or "winerror 10054" in exc_str:
         return "connection_reset"
     if "WinError 10060" in exc_str or "winerror 10060" in exc_str:
-        return "connect_error"
-    # Generic patterns
+        return "connect_timeout"
+    # Generic patterns (order matters: more specific checks first)
+    if "connecttimeout" in name or "connect_timeout" in msg or "wsaetimedout" in msg:
+        return "connect_timeout"
     if "timeout" in name or "timeout" in msg:
         return "timeout"
     if "reset" in msg or "connection_reset" in msg:
         return "connection_reset"
-    if "connector" in name or "connect" in msg:
+    # disconnect must be checked before connect (disconnect contains "connect")
+    if "disconnect" in name or "disconnect" in msg:
+        return "read_error"
+    if "connector" in name or ("connect" in msg and "disconnect" not in msg):
         return "connect_error"
-    if "disconnect" in name or "read" in name:
+    if "read" in name:
         return "read_error"
     if "oserror" in name or "connectionerror" in name:
         return "client_resource_error"
     if "json" in name or "json" in msg:
         return "json_parse_error"
-    if "cancel" in name:
+    if "cancel" in name or "cancel" in msg:
         return "cancelled"
     return "unknown"
 
