@@ -481,4 +481,11 @@ def aggregate_results(results: list[dict], duration: float, config: dict) -> dic
     # ── parser_profile: stream capability profile from per-request results ──
     summary["parser_profile"] = _build_parser_profile(ok_results, config)
 
+    # ── customer-facing fields (benchmark_objective, benchmark_mode, workload, …) ──
+    try:
+        from .customer_metrics import augment_summary_with_customer_fields
+        augment_summary_with_customer_fields(summary, config)
+    except Exception:
+        pass  # never break existing benchmarks due to new fields
+
     return summary

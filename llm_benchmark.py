@@ -104,7 +104,19 @@ BENCHMARK_PRESETS = {
     "标准基线 — C8/N80（默认）": {"concurrency": 8,  "total": 80,  "desc": "标准并发基线测试，默认推荐"},
     "中高并发 — C16/N160":      {"concurrency": 16, "total": 160, "desc": "中高并发，验证服务端排队行为"},
     "压力测试 — C32/N320":      {"concurrency": 32, "total": 320, "desc": "压力测试，接近服务端上限（需确认）"},
-    "客户验收 — 单用户 1024/2048": {"concurrency": 1, "total": 5,  "desc": "客户验收单用户 1024in/2048out tokens"},
+    # ── 客户验收正式预设 ──
+    "单会话最大生成速度 — C1/N5":    {
+        "concurrency": 1, "total": 5,
+        "desc": "单会话最大生成速度测试 (C1/N5/I1024/O2048, stream, fixed-output)",
+        "benchmark_objective": "single_session_decode_speed",
+        "benchmark_mode":      "real_api_experience",
+    },
+    "客户验收 — 单用户 1024/2048": {
+        "concurrency": 1, "total": 5,
+        "desc": "客户验收单用户 1024in/2048out tokens",
+        "benchmark_objective": "single_session_decode_speed",
+        "benchmark_mode":      "real_api_experience",
+    },
     "自定义":                    {"concurrency": 64, "total": 640, "desc": "自定义并发与请求数，可手动修改"},
 }
 DEFAULT_PRESET_KEY = "标准基线 — C8/N80（默认）"
@@ -112,6 +124,27 @@ DEFAULT_PRESET_KEY = "标准基线 — C8/N80（默认）"
 # ---------- 并发扫测预设 ----------
 SWEEP_PRESETS = {
     "自定义": None,
+    # ── 客户验收正式预设 ──
+    "峰值吞吐扫描 — 1024/2048": {
+        "concurrency_levels": "1,2,4,8,16,24,32",
+        "max_tokens": 2048,
+        "output_length_mode": "fixed",
+        "temperature": 0.0,
+        "stream": True,
+        "request_rule": "x5",
+        "benchmark_objective": "peak_throughput_sweep",
+        "benchmark_mode":      "real_api_experience",
+    },
+    "峰值吞吐扫描（扩展）— 1024/2048": {
+        "concurrency_levels": "1,2,4,8,16,24,32,48,64",
+        "max_tokens": 2048,
+        "output_length_mode": "fixed",
+        "temperature": 0.0,
+        "stream": True,
+        "request_rule": "x5",
+        "benchmark_objective": "peak_throughput_sweep",
+        "benchmark_mode":      "real_api_experience",
+    },
     "客户验收峰值吞吐 — 1024/2048": {
         "concurrency_levels": "1,2,4,8,16,32,64,128,256,512,768,1024",
         "max_tokens": 2048,
@@ -119,6 +152,8 @@ SWEEP_PRESETS = {
         "temperature": 0.0,
         "stream": True,
         "request_rule": "x2",
+        "benchmark_objective": "peak_throughput_sweep",
+        "benchmark_mode":      "real_api_experience",
     },
 }
 
@@ -1555,6 +1590,54 @@ class LLMBenchmarkApp:
             value="fixed")
         fixed_radio.pack(side=tk.LEFT, padx=(C_STYLE["pad_lg"], 0))
         self._register_i18n_widget(fixed_radio, "label.output_mode_fixed")
+
+        # ═══ Group 1b: 测试目标与模式（客户验收） ═══
+        obj_frame = ttk.LabelFrame(parent, text="测试目标与模式", padding=C_STYLE["pad_md"])
+        obj_frame.pack(fill=tk.X, pady=(0, C_STYLE["gap_md"]))
+        obj_frame.columnconfigure(1, weight=1)
+
+        # Benchmark Objective
+        tk.Label(obj_frame, text="测试目标", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
+            row=0, column=0, sticky="w", padx=(0, C_STYLE["pad_sm"]),
+            pady=(C_STYLE["gap_sm"], 0))
+        from llm_benchmark_app.customer_metrics import (
+            OBJECTIVE_SINGLE_SESSION, OBJECTIVE_PEAK_THROUGHPUT,
+            MODE_REAL_API, MODE_ENGINE_CORE,
+        )
+        self._benchmark_objective_var = tk.StringVar(value=OBJECTIVE_SINGLE_SESSION)
+        obj_combo = ttk.Combobox(
+            obj_frame, textvariable=self._benchmark_objective_var,
+            values=[
+                OBJECTIVE_SINGLE_SESSION,
+                OBJECTIVE_PEAK_THROUGHPUT,
+            ],
+            width=34, state="readonly")
+        obj_combo.grid(row=0, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
+        tk.Label(obj_frame,
+                 text="单会话最大生成速度 / 峰值吞吐扫描",
+                 font=C_STYLE["font_small"], bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["text_muted"]).grid(
+            row=0, column=2, sticky="w", padx=(C_STYLE["pad_sm"], 0),
+            pady=(C_STYLE["gap_sm"], 0))
+
+        # Benchmark Mode
+        tk.Label(obj_frame, text="测试模式", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
+            row=1, column=0, sticky="w", padx=(0, C_STYLE["pad_sm"]),
+            pady=(C_STYLE["gap_sm"], 0))
+        self._benchmark_mode_var = tk.StringVar(value=MODE_REAL_API)
+        mode_combo = ttk.Combobox(
+            obj_frame, textvariable=self._benchmark_mode_var,
+            values=[MODE_REAL_API, MODE_ENGINE_CORE],
+            width=34, state="readonly")
+        mode_combo.grid(row=1, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
+        tk.Label(obj_frame,
+                 text="真实 API 体验 / 引擎核心性能",
+                 font=C_STYLE["font_small"], bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["text_muted"]).grid(
+            row=1, column=2, sticky="w", padx=(C_STYLE["pad_sm"], 0),
+            pady=(C_STYLE["gap_sm"], 0))
 
         # ═══ Group 2: 负载参数 ═══
         load = ttk.LabelFrame(parent, text="负载参数", padding=C_STYLE["pad_md"])
@@ -3267,6 +3350,11 @@ class LLMBenchmarkApp:
             text="正在执行压力测试...", fg=C_STYLE["accent"]))
         self.root.after(0, lambda: self.progress.configure(maximum=total))
 
+        _bench_objective = getattr(self, "_benchmark_objective_var",
+                                    None) and self._benchmark_objective_var.get()
+        _bench_mode      = getattr(self, "_benchmark_mode_var",
+                                    None) and self._benchmark_mode_var.get()
+
         def _done_with_warmup(s):
             s["warmup_requests"] = warmup
             # Inject token calibration fields if calibration was applied
@@ -3281,6 +3369,11 @@ class LLMBenchmarkApp:
             if self._prompt_mode:
                 s["prompt_mode"] = self._prompt_mode
             s["token_tolerance"] = 8
+            # ── Customer-facing fields ──
+            if _bench_objective:
+                s["benchmark_objective"] = _bench_objective
+            if _bench_mode:
+                s["benchmark_mode"] = _bench_mode
             self._on_done(s)
 
         run_benchmark(api_url, api_key, model, messages, max_tokens, temperature,
@@ -3810,6 +3903,25 @@ class LLMBenchmarkApp:
             r.extend(diag)
         else:
             r.append("  (无特殊建议)")
+
+        # ── ★ 客户验收指标 / Customer Acceptance Metrics ──
+        try:
+            from llm_benchmark_app.customer_metrics import (
+                generate_customer_acceptance_section,
+                OBJECTIVE_SINGLE_SESSION, OBJECTIVE_PEAK_THROUGHPUT,
+                MODE_REAL_API,
+            )
+            objective  = summary.get("benchmark_objective", OBJECTIVE_SINGLE_SESSION)
+            bench_mode = summary.get("benchmark_mode", MODE_REAL_API)
+            workload   = summary.get("workload")
+            cust_section = generate_customer_acceptance_section(
+                summary, objective, bench_mode,
+                sweep_peak_summary=None,
+                workload_label=workload,
+            )
+            r.append(cust_section)
+        except Exception:
+            pass  # never break existing report
 
         r.append("")
         r.append("=" * 60)
@@ -5251,18 +5363,58 @@ class LLMBenchmarkApp:
             self.stream_var.set("是" if preset.get("stream", True) else "否")
         except Exception:
             pass
-        # Show info dialog about the preset
-        info = (
-            "已应用「客户验收峰值吞吐」预设:\n\n"
-            "• 并发级别: 1,2,4,8,16,32,64,128,256,512,768,1024\n"
-            "• Max Tokens: 2048\n"
-            "• 输出模式: 固定输出模式\n"
-            "• Temperature: 0.0\n"
-            "• 请求规则: × 2\n\n"
-            "请求数计算: 每个并发档位 = 并发数 × 2\n"
-            "C1024 档位将发送 2048 个请求。\n\n"
-            "正式验收可将请求规则改为 × 5。"
-        )
+        # ── Apply benchmark objective/mode from preset ──
+        try:
+            if preset.get("benchmark_objective") and hasattr(self, "_benchmark_objective_var"):
+                self._benchmark_objective_var.set(preset["benchmark_objective"])
+        except Exception:
+            pass
+        try:
+            if preset.get("benchmark_mode") and hasattr(self, "_benchmark_mode_var"):
+                self._benchmark_mode_var.set(preset["benchmark_mode"])
+        except Exception:
+            pass
+        # Show info dialog about the preset (dynamic, based on name and preset data)
+        conc_levels  = preset.get("concurrency_levels", "—")
+        max_toks     = preset.get("max_tokens", "—")
+        out_mode_raw = preset.get("output_length_mode", "normal")
+        out_mode_str = "固定输出模式" if out_mode_raw == "fixed" else "普通模式"
+        temperature  = preset.get("temperature", 0.0)
+        req_rule     = preset.get("request_rule", "x2")
+        req_rule_str = req_rule.replace("x", "× ")
+        obj_raw      = preset.get("benchmark_objective", "")
+        mode_raw     = preset.get("benchmark_mode", "")
+        # Build the info text
+        lines = [f"已应用「{name}」预设:\n"]
+        lines.append(f"• 并发级别: {conc_levels}")
+        lines.append(f"• Max Tokens: {max_toks}")
+        lines.append(f"• 输出模式: {out_mode_str}")
+        lines.append(f"• Temperature: {temperature}")
+        lines.append(f"• 请求规则: {req_rule_str}")
+        if obj_raw:
+            from llm_benchmark_app.customer_metrics import (
+                OBJECTIVE_SINGLE_SESSION, OBJECTIVE_PEAK_THROUGHPUT)
+            obj_label = {
+                OBJECTIVE_SINGLE_SESSION:  "单会话最大生成速度",
+                OBJECTIVE_PEAK_THROUGHPUT: "峰值吞吐扫描",
+            }.get(obj_raw, obj_raw)
+            lines.append(f"• 测试目标: {obj_label}")
+        if mode_raw:
+            from llm_benchmark_app.customer_metrics import MODE_REAL_API, MODE_ENGINE_CORE
+            mode_label = {
+                MODE_REAL_API:    "真实 API 体验 (real_api_experience)",
+                MODE_ENGINE_CORE: "引擎核心 (engine_core)",
+            }.get(mode_raw, mode_raw)
+            lines.append(f"• 测试模式: {mode_label}")
+        # Request count estimate for highest concurrency level
+        try:
+            max_c = max(int(c.strip()) for c in conc_levels.split(",") if c.strip())
+            rule_mult = int(req_rule.lstrip("x"))
+            lines.append(f"\n请求数计算: 每个并发档位 = 并发数 × {rule_mult}")
+            lines.append(f"最高 C{max_c} 档位将发送 {max_c * rule_mult} 个请求。")
+        except Exception:
+            pass
+        info = "\n".join(lines)
         messagebox.showinfo("预设已应用", info)
 
     def _parse_concurrency_levels(self, text: str) -> list[int]:
@@ -6102,6 +6254,38 @@ class LLMBenchmarkApp:
             md.append(f"{i}. {step}")
         md.append("")
 
+        # ── ★ 客户验收指标 / Customer Acceptance Metrics ──
+        try:
+            from llm_benchmark_app.customer_metrics import (
+                generate_customer_acceptance_section,
+                OBJECTIVE_PEAK_THROUGHPUT, MODE_REAL_API,
+            )
+            _peak_s = sweep_result.get("peak_throughput_summary")
+            _obj  = sweep_result.get("benchmark_objective", OBJECTIVE_PEAK_THROUGHPUT)
+            _mode = sweep_result.get("benchmark_mode", MODE_REAL_API)
+            if _peak_s is None:
+                from llm_benchmark_app.customer_metrics import compute_peak_throughput_summary
+                _peak_s = compute_peak_throughput_summary(cases)
+            # Use C1 case as single-session summary if available
+            _c1_cases = [ca for ca in cases if ca["concurrency"] == 1]
+            _single_s = _c1_cases[0]["benchmark_summary"] if _c1_cases else (s[0] if s else {})
+            cust_text = generate_customer_acceptance_section(
+                _single_s, _obj, _mode,
+                sweep_peak_summary=_peak_s,
+                workload_label=f"W1_C{_single_s.get('concurrency', '?')}_I1024_O2048",
+            )
+            # Convert to Markdown by wrapping in code block for alignment
+            md.append("---")
+            md.append("")
+            md.append("## ★ 客户验收指标 / Customer Acceptance Metrics")
+            md.append("")
+            md.append("```")
+            md.append(cust_text)
+            md.append("```")
+            md.append("")
+        except Exception:
+            pass
+
         return "\n".join(md)
 
     def _start_sweep(self):
@@ -6456,12 +6640,26 @@ class LLMBenchmarkApp:
             "non_monotonic_anomalies": self._detect_non_monotonic_sweep_anomalies(cases),
             "recommendation": self._recommend_sweep_concurrency_range(cases),
         }
+
+        # ── Customer-facing peak throughput summary ──
+        _sweep_obj  = getattr(self, "_benchmark_objective_var", None)
+        _sweep_mode = getattr(self, "_benchmark_mode_var", None)
+        _bench_objective = _sweep_obj.get() if _sweep_obj else "peak_throughput_sweep"
+        _bench_mode      = _sweep_mode.get() if _sweep_mode else "real_api_experience"
+        try:
+            from llm_benchmark_app.customer_metrics import compute_peak_throughput_summary
+            _peak_summary = compute_peak_throughput_summary(cases)
+        except Exception:
+            _peak_summary = {}
+
         sweep_result = {
             "sweep_id": sweep_id,
             "started_at": started_at,
             "finished_at": finished_at,
             "api_url": api_url,
             "model": model,
+            "benchmark_objective": _bench_objective,
+            "benchmark_mode":      _bench_mode,
             "concurrency_levels": concurrency_levels,
             "requests_multiplier": multiplier,
             "output_length_mode": output_length_mode,
@@ -6473,6 +6671,12 @@ class LLMBenchmarkApp:
             "analysis_summary": analysis_summary,
             "sweep_diagnostics": sweep_diagnostics,
             "hc_peak_metrics": self._compute_hc_peak_metrics(cases, concurrency_levels),
+            # ── customer acceptance fields ──
+            "peak_throughput_summary": _peak_summary,
+            "peak_output_throughput":  _peak_summary.get("peak_output_throughput"),
+            "peak_total_token_throughput": _peak_summary.get("peak_total_token_throughput"),
+            "recommended_production_concurrency": _peak_summary.get(
+                "recommended_production_concurrency"),
         }
         self._sweep_result = sweep_result
 
@@ -6682,12 +6886,25 @@ class LLMBenchmarkApp:
                         default=None)
         hc_peak_metrics = self._compute_hc_peak_metrics(cases, concurrency_levels)
 
+        # ── Customer-facing peak throughput summary (HC path) ──
+        _hc_obj  = getattr(self, "_benchmark_objective_var", None)
+        _hc_mode = getattr(self, "_benchmark_mode_var", None)
+        _hc_bench_objective = _hc_obj.get() if _hc_obj else "peak_throughput_sweep"
+        _hc_bench_mode      = _hc_mode.get() if _hc_mode else "real_api_experience"
+        try:
+            from llm_benchmark_app.customer_metrics import compute_peak_throughput_summary
+            _hc_peak_summary = compute_peak_throughput_summary(cases)
+        except Exception:
+            _hc_peak_summary = {}
+
         sweep_result = {
             "sweep_id": sweep_id,
             "started_at": started_at,
             "finished_at": finished_at,
             "api_url": api_url,
             "model": model,
+            "benchmark_objective": _hc_bench_objective,
+            "benchmark_mode":      _hc_bench_mode,
             "concurrency_levels": concurrency_levels,
             "requests_multiplier": request_rule,
             "output_length_mode": output_length_mode,
@@ -6700,6 +6917,12 @@ class LLMBenchmarkApp:
             "analysis_summary": analysis_summary,
             "sweep_diagnostics": sweep_diagnostics,
             "hc_peak_metrics": hc_peak_metrics,
+            # ── customer acceptance fields ──
+            "peak_throughput_summary": _hc_peak_summary,
+            "peak_output_throughput":  _hc_peak_summary.get("peak_output_throughput"),
+            "peak_total_token_throughput": _hc_peak_summary.get("peak_total_token_throughput"),
+            "recommended_production_concurrency": _hc_peak_summary.get(
+                "recommended_production_concurrency"),
         }
         self._sweep_result = sweep_result
 
