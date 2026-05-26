@@ -209,6 +209,10 @@ SWEEP_TIER_LABELS_ZH = {
     "quick": "快速", "formal": "正式", "extended": "深度", "custom": "自定义",
 }
 
+# Ordered code lists for index-based combo lookup (language-independent)
+_SCALE_CODES = ["small", "medium", "large", "extreme", "custom"]
+_TIER_CODES  = ["quick", "formal", "extended", "custom"]
+
 # ---------- 字体自动检测 ----------
 def _detect_font_family() -> str:
     """Detect the best available font for CJK + Latin rendering.
@@ -497,6 +501,34 @@ I18N = {
         "calib.status_not_calibrated": "尚未校准 — 点击「校准输入 Token 数」开始",
         "calib.apply_no_result": "当前没有有效的输入 Token 校准结果，未应用到测试参数。",
         "calib.apply_success": "已将输入 Token 校准结果应用到测试参数。",
+        # ── Sweep Scale / Tier preset system (TASK-BENCHMARK-SWEEP-PRESETS-SIMPLIFY-001-v2) ──
+        "sweep.scale_label":         "扫测规模",
+        "sweep.tier_label":          "扫测档次",
+        "sweep.conc_list_label":     "并发列表",
+        "sweep.conc_list_hint":      "支持最大 C1024，可手动编辑（编辑后标记为自定义修改）",
+        "sweep.fixed_total_hint":    "（所有并发档位使用相同总请求数）",
+        "sweep.scale.small":         "小型",
+        "sweep.scale.medium":        "中型",
+        "sweep.scale.large":         "大型",
+        "sweep.scale.extreme":       "极限",
+        "sweep.scale.custom":        "自定义",
+        "sweep.scale.desc.small":    "适用于单卡、小模型、快速验证。",
+        "sweep.scale.desc.medium":   "适用于双卡/四卡 PCIe 工作站和常规多卡测试。",
+        "sweep.scale.desc.large":    "适用于多卡大模型服务器、H200/B200/B300 整机的正式验收。",
+        "sweep.scale.desc.extreme":  "适用于 NVLink / NVSwitch 整机和峰值吞吐深度压测。",
+        "sweep.scale.desc.custom":   "手动指定并发列表和请求数规则。",
+        "sweep.tier.quick":          "快速",
+        "sweep.tier.formal":         "正式",
+        "sweep.tier.extended":       "深度",
+        "sweep.tier.custom":         "自定义",
+        "sweep.tier_formula_prefix": "每档请求数 = ",
+        "sweep.preset_status.applied":     "已应用: {scale} + {tier}",
+        "sweep.preset_status.modified":    "自定义修改（基于 {src_scale} + {src_tier}）",
+        "sweep.preset_status.full_custom": "完全自定义",
+        "sweep.custom_rule.x2":    "× 2",
+        "sweep.custom_rule.x5":    "× 5（正式）",
+        "sweep.custom_rule.x10":   "× 10",
+        "sweep.custom_rule.fixed": "固定总请求数",
     },
     "en_US": {
         "app.title": "JISUMAN LLM Benchmark GUI",
@@ -747,6 +779,34 @@ I18N = {
         "calib.status_not_calibrated": "Not calibrated — click Calibrate Input Tokens to start",
         "calib.apply_no_result": "No valid input-token calibration result is available. Benchmark settings were not updated.",
         "calib.apply_success": "Input-token calibration result has been applied to benchmark settings.",
+        # ── Sweep Scale / Tier preset system (TASK-BENCHMARK-SWEEP-PRESETS-SIMPLIFY-001-v2) ──
+        "sweep.scale_label":         "Sweep Scale",
+        "sweep.tier_label":          "Sweep Tier",
+        "sweep.conc_list_label":     "Concurrency List",
+        "sweep.conc_list_hint":      "Max C1024. Editable — manual edits mark the preset as modified.",
+        "sweep.fixed_total_hint":    "(Same count for all concurrency levels)",
+        "sweep.scale.small":         "Small",
+        "sweep.scale.medium":        "Medium",
+        "sweep.scale.large":         "Large",
+        "sweep.scale.extreme":       "Extreme",
+        "sweep.scale.custom":        "Custom",
+        "sweep.scale.desc.small":    "Single GPU, small model, quick validation.",
+        "sweep.scale.desc.medium":   "Dual/quad PCIe GPU workstation or standard multi-GPU tests.",
+        "sweep.scale.desc.large":    "Multi-GPU servers, H200/B200/B300 formal acceptance testing.",
+        "sweep.scale.desc.extreme":  "NVLink/NVSwitch full-system deep peak throughput tests.",
+        "sweep.scale.desc.custom":   "Manually specify concurrency list and request count rule.",
+        "sweep.tier.quick":          "Quick",
+        "sweep.tier.formal":         "Formal",
+        "sweep.tier.extended":       "Extended",
+        "sweep.tier.custom":         "Custom",
+        "sweep.tier_formula_prefix": "Requests per concurrency = ",
+        "sweep.preset_status.applied":     "Applied: {scale} + {tier}",
+        "sweep.preset_status.modified":    "Modified from preset ({src_scale} + {src_tier})",
+        "sweep.preset_status.full_custom": "Fully custom",
+        "sweep.custom_rule.x2":    "× 2",
+        "sweep.custom_rule.x5":    "× 5 (formal)",
+        "sweep.custom_rule.x10":   "× 10",
+        "sweep.custom_rule.fixed": "Fixed Total",
     },
 }
 
@@ -800,6 +860,8 @@ C_STYLE = {
     "info": "#3B82F6",           # blue
     "info_bg": "#EFF6FF",
     "info_text": "#1E40AF",
+    # ── semantic aliases (backward-compat) ──
+    "text_accent": "#533AFD",   # alias for accent — used in sweep preset status label
     # ── fonts: 10→12→13→15→18→26 (Segoe UI, proportional scale) ──
     "font_title": (FONT_FAMILY, 18, "bold"),
     "font_subtitle": (FONT_FAMILY, 12),
@@ -5197,54 +5259,53 @@ class LLMBenchmarkApp:
         cfg = config_card.content
         cfg.grid_columnconfigure(1, weight=1)
 
-        # ── Row 0: Sweep Scale selector ──
-        tk.Label(cfg, text="扫测规模", font=C_STYLE["font_body"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
-            row=0, column=0, sticky="w", padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
+        # ── Row 0: Sweep Scale + Tier selectors (i18n) ──
+        _scale_lbl = tk.Label(cfg, text=self.tr("sweep.scale_label"),
+                              font=C_STYLE["font_body"],
+                              bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"])
+        _scale_lbl.grid(row=0, column=0, sticky="w",
+                        padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
+        self._register_i18n_widget(_scale_lbl, "sweep.scale_label")
         scale_row = tk.Frame(cfg, bg=C_STYLE["bg_card"])
         scale_row.grid(row=0, column=1, columnspan=2, sticky="ew", pady=(0, C_STYLE["gap_sm"]))
+
+        # Internal code StringVars (always hold English code like "medium", "formal")
         self._sweep_scale_var = tk.StringVar(value="medium")
-        _scale_display = [
-            ("Small 小型",    "small"),
-            ("Medium 中型",   "medium"),
-            ("Large 大型",    "large"),
-            ("Extreme 极限",  "extreme"),
-            ("Custom 自定义", "custom"),
-        ]
-        _scale_display_vals = [lbl for lbl, _ in _scale_display]
-        _scale_code_map     = {lbl: code for lbl, code in _scale_display}
-        _scale_code_rev_map = {code: lbl  for lbl, code in _scale_display}
-        self._scale_code_map     = _scale_code_map
-        self._scale_code_rev_map = _scale_code_rev_map
-        self._sweep_scale_display_var = tk.StringVar(value=_scale_code_rev_map["medium"])
-        scale_combo = ttk.Combobox(scale_row, textvariable=self._sweep_scale_display_var,
-                                   values=_scale_display_vals, width=16, state="readonly")
-        scale_combo.pack(side=tk.LEFT)
-        tk.Label(scale_row, text="  扫测档次", font=C_STYLE["font_body"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).pack(side=tk.LEFT)
-        self._sweep_tier_var = tk.StringVar(value="formal")
-        _tier_display = [
-            ("Quick 快速",    "quick"),
-            ("Formal 正式",   "formal"),
-            ("Extended 深度", "extended"),
-            ("Custom 自定义", "custom"),
-        ]
-        _tier_display_vals  = [lbl for lbl, _ in _tier_display]
-        _tier_code_map      = {lbl: code for lbl, code in _tier_display}
-        _tier_code_rev_map  = {code: lbl  for lbl, code in _tier_display}
-        self._tier_code_map     = _tier_code_map
-        self._tier_code_rev_map = _tier_code_rev_map
-        self._sweep_tier_display_var = tk.StringVar(value=_tier_code_rev_map["formal"])
-        tier_combo = ttk.Combobox(scale_row, textvariable=self._sweep_tier_display_var,
-                                  values=_tier_display_vals, width=16, state="readonly")
-        tier_combo.pack(side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
-        # Bind change events
-        scale_combo.bind("<<ComboboxSelected>>", lambda e: self._on_sweep_scale_tier_change())
-        tier_combo.bind("<<ComboboxSelected>>",  lambda e: self._on_sweep_scale_tier_change())
+        self._sweep_tier_var  = tk.StringVar(value="formal")
+
+        # Display StringVars (hold the localized label shown in combo)
+        self._sweep_scale_display_var = tk.StringVar(value=self.tr("sweep.scale.medium"))
+        self._sweep_tier_display_var  = tk.StringVar(value=self.tr("sweep.tier.formal"))
+
+        # Scale combobox — values rebuilt on language switch via i18n callback
+        self._scale_combo = ttk.Combobox(scale_row, textvariable=self._sweep_scale_display_var,
+                                         values=[self.tr(f"sweep.scale.{c}") for c in _SCALE_CODES],
+                                         width=16, state="readonly")
+        self._scale_combo.pack(side=tk.LEFT)
+
+        _tier_sep_lbl = tk.Label(scale_row, text=f"  {self.tr('sweep.tier_label')}",
+                                  font=C_STYLE["font_body"],
+                                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"])
+        _tier_sep_lbl.pack(side=tk.LEFT)
+        self._register_i18n_widget(_tier_sep_lbl, "sweep.tier_label",
+                                   attr="text")  # prefix space handled in callback
+
+        # Tier combobox — values rebuilt on language switch via i18n callback
+        self._tier_combo = ttk.Combobox(scale_row, textvariable=self._sweep_tier_display_var,
+                                        values=[self.tr(f"sweep.tier.{c}") for c in _TIER_CODES],
+                                        width=16, state="readonly")
+        self._tier_combo.pack(side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
+
+        # Bind change events (index-based lookup — language independent)
+        self._scale_combo.bind("<<ComboboxSelected>>", lambda e: self._on_sweep_scale_tier_change())
+        self._tier_combo.bind("<<ComboboxSelected>>",  lambda e: self._on_sweep_scale_tier_change())
 
         # ── Row 0b: Scale description + preset status ──
-        self._sweep_desc_var   = tk.StringVar(value=SWEEP_SCALE_DEFS["medium"]["description_zh"])
-        self._sweep_preset_status_var = tk.StringVar(value="已应用: 中型 + 正式")
+        self._sweep_desc_var          = tk.StringVar(value=self.tr("sweep.scale.desc.medium"))
+        self._sweep_preset_status_var = tk.StringVar(
+            value=self.tr("sweep.preset_status.applied").format(
+                scale=self.tr("sweep.scale.medium"),
+                tier=self.tr("sweep.tier.formal")))
         desc_row = tk.Frame(cfg, bg=C_STYLE["bg_card"])
         desc_row.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, C_STYLE["gap_sm"]))
         tk.Label(desc_row, textvariable=self._sweep_desc_var, font=C_STYLE["font_small"],
@@ -5253,13 +5314,17 @@ class LLMBenchmarkApp:
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"]).pack(side=tk.LEFT)
         self._sweep_status_lbl = tk.Label(desc_row, textvariable=self._sweep_preset_status_var,
                                           font=C_STYLE["font_small"],
-                                          bg=C_STYLE["bg_card"], fg=C_STYLE["text_accent"])
+                                          bg=C_STYLE["bg_card"],
+                                          fg=C_STYLE.get("text_accent", C_STYLE["accent"]))
         self._sweep_status_lbl.pack(side=tk.LEFT)
 
         # ── Row 2: Concurrency list (auto-generated, editable) ──
-        tk.Label(cfg, text="并发列表", font=C_STYLE["font_body"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
-            row=2, column=0, sticky="w", padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
+        _conc_lbl = tk.Label(cfg, text=self.tr("sweep.conc_list_label"),
+                             font=C_STYLE["font_body"],
+                             bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"])
+        _conc_lbl.grid(row=2, column=0, sticky="w",
+                       padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
+        self._register_i18n_widget(_conc_lbl, "sweep.conc_list_label")
         # Initialize with medium+formal preset
         _medium_formal = SWEEP_SCALE_DEFS["medium"]["formal"]
         self.sweep_conc_var = tk.StringVar(value=",".join(str(c) for c in _medium_formal))
@@ -5271,35 +5336,48 @@ class LLMBenchmarkApp:
         self.sweep_conc_var.trace_add("write", self._on_sweep_conc_var_changed)
         ttk.Entry(cfg, textvariable=self.sweep_conc_var, width=40).grid(
             row=2, column=1, sticky="ew", pady=(0, C_STYLE["gap_sm"]))
-        tk.Label(cfg, text="支持最大 C1024，可手动编辑（编辑后变为自定义修改）",
-                 font=C_STYLE["font_small"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"]).grid(
-            row=2, column=2, sticky="w", padx=(C_STYLE["pad_sm"], 0), pady=(0, C_STYLE["gap_sm"]))
+        _conc_hint_lbl = tk.Label(cfg, text=self.tr("sweep.conc_list_hint"),
+                                   font=C_STYLE["font_small"],
+                                   bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"])
+        _conc_hint_lbl.grid(row=2, column=2, sticky="w",
+                             padx=(C_STYLE["pad_sm"], 0), pady=(0, C_STYLE["gap_sm"]))
+        self._register_i18n_widget(_conc_hint_lbl, "sweep.conc_list_hint")
 
         # ── Row 3: Request count rule ──
-        tk.Label(cfg, text="请求规则", font=C_STYLE["font_body"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
-            row=3, column=0, sticky="w", padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
+        _rule_lbl = tk.Label(cfg, text=self.tr("sweep.request_rule_label"),
+                             font=C_STYLE["font_body"],
+                             bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"])
+        _rule_lbl.grid(row=3, column=0, sticky="w",
+                       padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
+        self._register_i18n_widget(_rule_lbl, "sweep.request_rule_label")
         # Tier formula label (shown when tier != custom)
         self._sweep_tier_formula_var = tk.StringVar(
-            value=f"每档请求数 = {SWEEP_TIER_DEFS['formal']['formula']}")
+            value=self.tr("sweep.tier_formula_prefix") + SWEEP_TIER_DEFS["formal"]["formula"])
         self._sweep_tier_rule_lbl_frame = tk.Frame(cfg, bg=C_STYLE["bg_card"])
         self._sweep_tier_rule_lbl_frame.grid(row=3, column=1, columnspan=2, sticky="ew",
                                               pady=(0, C_STYLE["gap_sm"]))
         tk.Label(self._sweep_tier_rule_lbl_frame, textvariable=self._sweep_tier_formula_var,
                  font=C_STYLE["font_body"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).pack(side=tk.LEFT)
-        # Custom rule radio buttons (shown when tier == custom)
+        # Custom rule radio buttons (shown when tier == custom, i18n labels)
         self.sweep_request_rule_var = tk.StringVar(value="formal")  # default = formal tier
         self._sweep_custom_rule_frame = tk.Frame(cfg, bg=C_STYLE["bg_card"])
         self._sweep_custom_rule_frame.grid(row=3, column=1, columnspan=2, sticky="ew",
                                            pady=(0, C_STYLE["gap_sm"]))
-        rule_options = [("× 2", "x2"), ("× 5（正式）", "x5"), ("× 10", "x10"), ("固定总请求数", "fixed")]
-        for lbl, val in rule_options:
-            rb = ttk.Radiobutton(self._sweep_custom_rule_frame, text=lbl,
+        # Store radio button refs for i18n refresh
+        self._sweep_custom_rule_rbs = []
+        _custom_rule_opts = [
+            ("sweep.custom_rule.x2",    "x2"),
+            ("sweep.custom_rule.x5",    "x5"),
+            ("sweep.custom_rule.x10",   "x10"),
+            ("sweep.custom_rule.fixed", "fixed"),
+        ]
+        for i18n_key, val in _custom_rule_opts:
+            rb = ttk.Radiobutton(self._sweep_custom_rule_frame, text=self.tr(i18n_key),
                                  variable=self.sweep_request_rule_var,
                                  value=val, command=self._on_request_rule_change)
             rb.pack(side=tk.LEFT, padx=(0, C_STYLE["pad_sm"]))
+            self._sweep_custom_rule_rbs.append((rb, i18n_key))
         self._sweep_custom_rule_frame.grid_remove()  # hidden when tier != custom
 
         # Fixed total entry (shown only for custom tier + "fixed" rule)
@@ -5307,15 +5385,22 @@ class LLMBenchmarkApp:
         self._sweep_fixed_total_frame = tk.Frame(cfg, bg=C_STYLE["bg_card"])
         self._sweep_fixed_total_frame.grid(row=4, column=0, columnspan=3, sticky="w",
                                            pady=(0, C_STYLE["gap_sm"]))
-        tk.Label(self._sweep_fixed_total_frame, text="固定请求总数:", font=C_STYLE["font_body"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).pack(side=tk.LEFT,
-                 padx=(0, C_STYLE["pad_sm"]))
+        _ftl = tk.Label(self._sweep_fixed_total_frame, text=self.tr("sweep.fixed_total_label"),
+                        font=C_STYLE["font_body"],
+                        bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"])
+        _ftl.pack(side=tk.LEFT, padx=(0, C_STYLE["pad_sm"]))
+        self._register_i18n_widget(_ftl, "sweep.fixed_total_label")
         ttk.Spinbox(self._sweep_fixed_total_frame, from_=1, to=99999, increment=10,
                     textvariable=self.sweep_fixed_total_var, width=8).pack(side=tk.LEFT)
-        tk.Label(self._sweep_fixed_total_frame, text="(所有并发档位使用相同总请求数)",
-                 font=C_STYLE["font_small"], bg=C_STYLE["bg_card"],
-                 fg=C_STYLE["text_muted"]).pack(side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
+        _fth = tk.Label(self._sweep_fixed_total_frame, text=self.tr("sweep.fixed_total_hint"),
+                        font=C_STYLE["font_small"], bg=C_STYLE["bg_card"],
+                        fg=C_STYLE["text_muted"])
+        _fth.pack(side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
+        self._register_i18n_widget(_fth, "sweep.fixed_total_hint")
         self._sweep_fixed_total_frame.grid_remove()  # hidden by default
+
+        # Register i18n callback to rebuild combo options + status on language switch
+        self._register_i18n_callback(self._refresh_sweep_scale_tier_i18n)
 
         # Keep sweep_mult_var for backward compatibility
         self.sweep_mult_var = tk.IntVar(value=2)
@@ -5463,12 +5548,14 @@ class LLMBenchmarkApp:
 
     def _on_sweep_scale_tier_change(self, *_):
         """Apply the selected scale+tier preset to concurrency list and request rule."""
-        scale_disp = getattr(self, "_sweep_scale_display_var", None)
-        tier_disp  = getattr(self, "_sweep_tier_display_var",  None)
-        if scale_disp is None or tier_disp is None:
+        scale_combo = getattr(self, "_scale_combo", None)
+        tier_combo  = getattr(self, "_tier_combo",  None)
+        if scale_combo is None or tier_combo is None:
             return
-        scale = self._scale_code_map.get(scale_disp.get(), "medium")
-        tier  = self._tier_code_map.get(tier_disp.get(), "formal")
+        scale_idx = scale_combo.current()
+        tier_idx  = tier_combo.current()
+        scale = _SCALE_CODES[scale_idx] if 0 <= scale_idx < len(_SCALE_CODES) else "medium"
+        tier  = _TIER_CODES[tier_idx]   if 0 <= tier_idx  < len(_TIER_CODES)  else "formal"
         self._sweep_scale_var.set(scale)
         self._sweep_tier_var.set(tier)
 
@@ -5488,10 +5575,9 @@ class LLMBenchmarkApp:
             self._sweep_source_scale = scale
             self._sweep_source_tier  = tier if tier != "custom" else "formal"
 
-        # Update description label
-        desc = SWEEP_SCALE_DEFS.get(scale, {}).get("description_zh", "")
+        # Update description label (i18n)
         if hasattr(self, "_sweep_desc_var"):
-            self._sweep_desc_var.set(desc)
+            self._sweep_desc_var.set(self.tr(f"sweep.scale.desc.{scale}"))
 
         # Update request rule display
         self._update_sweep_tier_rule_ui(tier)
@@ -5517,14 +5603,14 @@ class LLMBenchmarkApp:
                 self._sweep_fixed_total_frame.grid_remove()
             formula = SWEEP_TIER_DEFS.get(tier, {}).get("formula", "")
             if hasattr(self, "_sweep_tier_formula_var"):
-                self._sweep_tier_formula_var.set(f"每档请求数 = {formula}")
+                self._sweep_tier_formula_var.set(self.tr("sweep.tier_formula_prefix") + formula)
             if hasattr(self, "_sweep_tier_rule_lbl_frame"):
                 self._sweep_tier_rule_lbl_frame.grid()
             # Set the internal rule variable to the tier name
             self.sweep_request_rule_var.set(tier)
 
     def _update_sweep_preset_status_label(self):
-        """Update the preset status label text."""
+        """Update the preset status label text (i18n-aware)."""
         if not hasattr(self, "_sweep_preset_status_var"):
             return
         scale = getattr(self, "_sweep_scale_var", None)
@@ -5534,23 +5620,22 @@ class LLMBenchmarkApp:
         modified = getattr(self, "_sweep_preset_modified", None)
         modified = modified.get() if modified else False
 
-        scale_lbl = SWEEP_SCALE_LABELS_ZH.get(scale, scale)
-        tier_lbl  = SWEEP_TIER_LABELS_ZH.get(tier, tier)
-
         if modified:
             src_s_code = getattr(self, "_sweep_source_scale", scale)
             src_t_code = getattr(self, "_sweep_source_tier",  tier)
-            src_s = SWEEP_SCALE_LABELS_ZH.get(src_s_code, src_s_code)
-            src_t = SWEEP_TIER_LABELS_ZH.get(src_t_code,  src_t_code)
-            status = f"自定义修改（基于 {src_s} + {src_t}）"
+            status = self.tr("sweep.preset_status.modified").format(
+                src_scale=self.tr(f"sweep.scale.{src_s_code}"),
+                src_tier=self.tr(f"sweep.tier.{src_t_code}"))
             if hasattr(self, "_sweep_status_lbl"):
                 self._sweep_status_lbl.config(fg=C_STYLE.get("warning", "#E8A000"))
         elif scale == "custom" and tier == "custom":
-            status = "完全自定义（手动输入并发列表和请求规则）"
+            status = self.tr("sweep.preset_status.full_custom")
             if hasattr(self, "_sweep_status_lbl"):
                 self._sweep_status_lbl.config(fg=C_STYLE.get("text_muted", "#888"))
         else:
-            status = f"已应用: {scale_lbl} + {tier_lbl}"
+            status = self.tr("sweep.preset_status.applied").format(
+                scale=self.tr(f"sweep.scale.{scale}"),
+                tier=self.tr(f"sweep.tier.{tier}"))
             if hasattr(self, "_sweep_status_lbl"):
                 self._sweep_status_lbl.config(fg=C_STYLE.get("text_accent", "#4A90E2"))
         self._sweep_preset_status_var.set(status)
@@ -5558,6 +5643,46 @@ class LLMBenchmarkApp:
     def _apply_sweep_preset(self):
         """Legacy method stub — kept for backward compatibility only."""
         pass  # old single-dropdown preset logic removed; replaced by _on_sweep_scale_tier_change
+
+    def _refresh_sweep_scale_tier_i18n(self):
+        """Refresh all sweep scale/tier UI text after a language switch (i18n callback)."""
+        scale_code = self._sweep_scale_var.get() if hasattr(self, "_sweep_scale_var") else "medium"
+        tier_code  = self._sweep_tier_var.get()  if hasattr(self, "_sweep_tier_var")  else "formal"
+
+        # Rebuild combo values in new language, re-select current index
+        scale_vals = [self.tr(f"sweep.scale.{c}") for c in _SCALE_CODES]
+        tier_vals  = [self.tr(f"sweep.tier.{c}")  for c in _TIER_CODES]
+        if hasattr(self, "_scale_combo"):
+            self._scale_combo.configure(values=scale_vals)
+            try:
+                self._scale_combo.current(_SCALE_CODES.index(scale_code))
+            except ValueError:
+                self._scale_combo.current(1)  # fallback: medium
+        if hasattr(self, "_tier_combo"):
+            self._tier_combo.configure(values=tier_vals)
+            try:
+                self._tier_combo.current(_TIER_CODES.index(tier_code))
+            except ValueError:
+                self._tier_combo.current(1)  # fallback: formal
+
+        # Update description label
+        if hasattr(self, "_sweep_desc_var"):
+            self._sweep_desc_var.set(self.tr(f"sweep.scale.desc.{scale_code}"))
+
+        # Update tier formula label (only shown when tier != custom)
+        if hasattr(self, "_sweep_tier_formula_var") and tier_code != "custom":
+            formula = SWEEP_TIER_DEFS.get(tier_code, {}).get("formula", "")
+            self._sweep_tier_formula_var.set(self.tr("sweep.tier_formula_prefix") + formula)
+
+        # Update custom rule radio button labels
+        for rb, i18n_key in getattr(self, "_sweep_custom_rule_rbs", []):
+            try:
+                rb.configure(text=self.tr(i18n_key))
+            except Exception:
+                pass
+
+        # Update status label
+        self._update_sweep_preset_status_label()
 
     def _parse_concurrency_levels(self, text: str) -> list[int]:
         """Parse comma-separated concurrency levels. Returns sorted unique ints.
