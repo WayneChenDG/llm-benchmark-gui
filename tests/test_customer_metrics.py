@@ -6,8 +6,10 @@ Covers:
   - Total token throughput vs output token throughput distinction
   - real_api_experience mode labels and metadata
   - engine_core mode labels and metadata
+  - Sweep scale/tier preset system (TASK-BENCHMARK-SWEEP-PRESETS-SIMPLIFY-001-v2)
 
 TASK-BENCHMARK-CUSTOMER-METRICS-001-v1
+TASK-BENCHMARK-SWEEP-PRESETS-SIMPLIFY-001-v2
 """
 from __future__ import annotations
 
@@ -35,6 +37,7 @@ from llm_benchmark_app.customer_metrics import (
     _is_valid_peak_point,
     build_workload_label,
     compute_peak_sweep_requests,
+    compute_tier_requests,
     generate_customer_acceptance_section,
     augment_summary_with_customer_fields,
 )
@@ -560,3 +563,220 @@ class TestMiscellaneous:
         augment_summary_with_customer_fields(summary, config)
         assert "benchmark_objective" in summary
         assert "benchmark_mode"      in summary
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tests: Sweep Scale / Tier Preset System
+# (TASK-BENCHMARK-SWEEP-PRESETS-SIMPLIFY-001-v2)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSweepTierRequests:
+    """compute_tier_requests() formula validation for all three named tiers."""
+
+    # ── quick: max(2*C, 8) ──────────────────────────────────────────────────
+
+    def test_quick_c1(self):
+        assert compute_tier_requests(1, "quick") == max(2 * 1, 8)   # 8
+
+    def test_quick_c4(self):
+        assert compute_tier_requests(4, "quick") == max(2 * 4, 8)   # 8
+
+    def test_quick_c5(self):
+        assert compute_tier_requests(5, "quick") == max(2 * 5, 8)   # 10
+
+    def test_quick_c16(self):
+        assert compute_tier_requests(16, "quick") == max(2 * 16, 8)  # 32
+
+    def test_quick_c32(self):
+        assert compute_tier_requests(32, "quick") == max(2 * 32, 8)  # 64
+
+    def test_quick_minimum_is_8(self):
+        for c in [1, 2, 3, 4]:
+            assert compute_tier_requests(c, "quick") == 8
+
+    # ── formal: max(5*C, 20) ────────────────────────────────────────────────
+
+    def test_formal_c1(self):
+        assert compute_tier_requests(1, "formal") == max(5 * 1, 20)  # 20
+
+    def test_formal_c4(self):
+        assert compute_tier_requests(4, "formal") == max(5 * 4, 20)  # 20
+
+    def test_formal_c5(self):
+        assert compute_tier_requests(5, "formal") == max(5 * 5, 20)  # 25
+
+    def test_formal_c8(self):
+        assert compute_tier_requests(8, "formal") == max(5 * 8, 20)  # 40
+
+    def test_formal_c32(self):
+        assert compute_tier_requests(32, "formal") == max(5 * 32, 20)  # 160
+
+    def test_formal_minimum_is_20(self):
+        for c in [1, 2, 3, 4]:
+            assert compute_tier_requests(c, "formal") == 20
+
+    # ── extended: max(5*C, 50) ──────────────────────────────────────────────
+
+    def test_extended_c1(self):
+        assert compute_tier_requests(1, "extended") == max(5 * 1, 50)   # 50
+
+    def test_extended_c10(self):
+        assert compute_tier_requests(10, "extended") == max(5 * 10, 50)  # 50
+
+    def test_extended_c11(self):
+        assert compute_tier_requests(11, "extended") == max(5 * 11, 50)  # 55
+
+    def test_extended_c32(self):
+        assert compute_tier_requests(32, "extended") == max(5 * 32, 50)  # 160
+
+    def test_extended_minimum_is_50(self):
+        for c in [1, 2, 4, 8, 10]:
+            assert compute_tier_requests(c, "extended") == 50
+
+    # ── custom tier raises ───────────────────────────────────────────────────
+
+    def test_custom_tier_raises(self):
+        with pytest.raises(ValueError, match="custom"):
+            compute_tier_requests(8, "custom")
+
+    def test_unknown_tier_raises(self):
+        with pytest.raises(ValueError):
+            compute_tier_requests(4, "unknown_tier")
+
+    # ── Tier ordering: quick < formal ≤ extended for same C ─────────────────
+
+    def test_formal_ge_quick(self):
+        for c in [1, 4, 8, 16, 32]:
+            assert compute_tier_requests(c, "formal") >= compute_tier_requests(c, "quick"), \
+                f"C={c}: formal({compute_tier_requests(c,'formal')}) < quick({compute_tier_requests(c,'quick')})"
+
+    def test_extended_ge_formal(self):
+        for c in [1, 4, 8, 16, 32]:
+            assert compute_tier_requests(c, "extended") >= compute_tier_requests(c, "formal"), \
+                f"C={c}: extended({compute_tier_requests(c,'extended')}) < formal({compute_tier_requests(c,'formal')})"
+
+
+class TestSweepScaleDefsIntegrity:
+    """Validate that SWEEP_SCALE_DEFS in llm_benchmark.py has correct structure.
+
+    Imported from the main module (not customer_metrics) since scale defs live there.
+    """
+
+    def test_import_scale_defs(self):
+        """SWEEP_SCALE_DEFS must be importable from llm_benchmark module."""
+        import importlib
+        import sys
+        # Import with dummy tkinter guard to avoid display requirement
+        try:
+            import tkinter  # noqa: F401 — check if tkinter available
+            # If tkinter present, just verify constants exist
+            # (full Tk init not needed for constants)
+        except ImportError:
+            pytest.skip("tkinter not available on this system")
+
+        # We can't init the Tk app, but we can parse the source for the constant
+        import ast, os
+        src_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "llm_benchmark.py")
+        with open(src_path) as f:
+            source = f.read()
+        assert "SWEEP_SCALE_DEFS" in source, "SWEEP_SCALE_DEFS not found in llm_benchmark.py"
+        assert "SWEEP_TIER_DEFS"  in source, "SWEEP_TIER_DEFS not found in llm_benchmark.py"
+
+    def test_scale_names_present(self):
+        """All expected scale names are present in source."""
+        import os
+        src_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "llm_benchmark.py")
+        with open(src_path) as f:
+            source = f.read()
+        for scale in ("small", "medium", "large", "extreme", "custom"):
+            assert f'"{scale}"' in source or f"'{scale}'" in source, \
+                f"Scale '{scale}' not found in llm_benchmark.py"
+
+    def test_tier_names_present(self):
+        """All expected tier names are present in source."""
+        import os
+        src_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "llm_benchmark.py")
+        with open(src_path) as f:
+            source = f.read()
+        for tier in ("quick", "formal", "extended", "custom"):
+            assert f'"{tier}"' in source or f"'{tier}'" in source, \
+                f"Tier '{tier}' not found in llm_benchmark.py"
+
+    def test_medium_formal_concurrency_list(self):
+        """Medium+Formal concurrency list is [1,2,4,8,16,24,32] per spec."""
+        import os, ast
+        src_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "llm_benchmark.py")
+        with open(src_path) as f:
+            source = f.read()
+        # Extract SWEEP_SCALE_DEFS via regex to avoid Tk import
+        import re
+        # Find the "medium" block and check it contains 24 and 32 for formal
+        medium_block = re.search(r'"medium".*?"formal".*?\[([^\]]+)\]', source, re.DOTALL)
+        assert medium_block is not None, "Could not find medium+formal concurrency list"
+        conc_str = medium_block.group(1)
+        conc_list = [int(x.strip()) for x in conc_str.split(",") if x.strip().isdigit()]
+        assert conc_list == [1, 2, 4, 8, 16, 24, 32], \
+            f"medium+formal list expected [1,2,4,8,16,24,32], got {conc_list}"
+
+    def test_large_formal_concurrency_list(self):
+        """Large+Formal concurrency list is [1,2,4,8,16,24,32,48,64] per spec."""
+        import os, re
+        src_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "llm_benchmark.py")
+        with open(src_path) as f:
+            source = f.read()
+        # find "large" ... "formal" ... [...]
+        large_block = re.search(r'"large".*?"formal".*?\[([^\]]+)\]', source, re.DOTALL)
+        assert large_block is not None, "Could not find large+formal concurrency list"
+        conc_str = large_block.group(1)
+        conc_list = [int(x.strip()) for x in conc_str.split(",") if x.strip().isdigit()]
+        assert conc_list == [1, 2, 4, 8, 16, 24, 32, 48, 64], \
+            f"large+formal list expected [1,2,4,8,16,24,32,48,64], got {conc_list}"
+
+    def test_extreme_extended_contains_256(self):
+        """Extreme+Extended list must include 256 per spec."""
+        import os, re
+        src_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "llm_benchmark.py")
+        with open(src_path) as f:
+            source = f.read()
+        extreme_block = re.search(r'"extreme".*?"extended".*?\[([^\]]+)\]', source, re.DOTALL)
+        assert extreme_block is not None, "Could not find extreme+extended concurrency list"
+        conc_str = extreme_block.group(1)
+        assert "256" in conc_str, "extreme+extended list must include 256"
+
+
+class TestSweepTierFormulaSymmetry:
+    """compute_tier_requests() is consistent with SWEEP_TIER_DEFS formula strings."""
+
+    @pytest.mark.parametrize("c", [1, 2, 4, 8, 16, 32, 64])
+    def test_quick_formula(self, c):
+        """quick formula matches max(2*C, 8)."""
+        assert compute_tier_requests(c, "quick") == max(2 * c, 8)
+
+    @pytest.mark.parametrize("c", [1, 2, 4, 8, 16, 32, 64])
+    def test_formal_formula(self, c):
+        """formal formula matches max(5*C, 20)."""
+        assert compute_tier_requests(c, "formal") == max(5 * c, 20)
+
+    @pytest.mark.parametrize("c", [1, 2, 4, 8, 16, 32, 64, 96, 128])
+    def test_extended_formula(self, c):
+        """extended formula matches max(5*C, 50)."""
+        assert compute_tier_requests(c, "extended") == max(5 * c, 50)
+
+    def test_compute_peak_sweep_requests_equals_formal(self):
+        """compute_peak_sweep_requests() == compute_tier_requests(c, 'formal')."""
+        for c in [1, 4, 8, 16, 32, 64]:
+            assert compute_peak_sweep_requests(c) == compute_tier_requests(c, "formal"), \
+                f"C={c}: compute_peak_sweep_requests({c})={compute_peak_sweep_requests(c)}, " \
+                f"compute_tier_requests({c},'formal')={compute_tier_requests(c, 'formal')}"

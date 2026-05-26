@@ -107,6 +107,32 @@ def compute_peak_sweep_requests(concurrency: int, quick_mode: bool = False) -> i
     return max(5 * concurrency, 20)
 
 
+def compute_tier_requests(concurrency: int, tier: str) -> int:
+    """Compute the request count for a concurrency level given a sweep tier name.
+
+    Tier rules:
+      quick    → max(2 * concurrency,  8)
+      formal   → max(5 * concurrency, 20)
+      extended → max(5 * concurrency, 50)
+      custom   → raises ValueError (no built-in rule for custom tier)
+
+    Args:
+        concurrency: number of concurrent requests
+        tier:        "quick" | "formal" | "extended" | "custom"
+
+    Returns:
+        int: total request count for this concurrency level
+    """
+    if tier == "quick":
+        return max(2 * concurrency, 8)
+    if tier == "formal":
+        return max(5 * concurrency, 20)
+    if tier == "extended":
+        return max(5 * concurrency, 50)
+    raise ValueError(f"No built-in request count rule for tier={tier!r}. "
+                     "Custom tier requires a user-defined rule.")
+
+
 # ── Single-session decode speed ───────────────────────────────────────────────
 
 def compute_single_session_metrics(summary: dict) -> dict:

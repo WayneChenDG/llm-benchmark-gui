@@ -157,6 +157,58 @@ SWEEP_PRESETS = {
     },
 }
 
+# ── Sweep Scale / Tier preset tables ─────────────────────────────────────────
+# Scale defines concurrency levels per tier; tier defines request count rule.
+SWEEP_SCALE_DEFS = {
+    "small": {
+        "label_zh":       "小型扫测",
+        "description_zh": "适用于单卡、小模型、快速验证。",
+        "quick":    [1, 2, 4, 8],
+        "formal":   [1, 2, 4, 8, 16],
+        "extended": [1, 2, 4, 8, 16, 24, 32],
+    },
+    "medium": {
+        "label_zh":       "中型扫测",
+        "description_zh": "适用于双卡/四卡 PCIe 工作站和常规多卡测试。",
+        "quick":    [1, 2, 4, 8, 16],
+        "formal":   [1, 2, 4, 8, 16, 24, 32],
+        "extended": [1, 2, 4, 8, 16, 24, 32, 48, 64],
+    },
+    "large": {
+        "label_zh":       "大型扫测",
+        "description_zh": "适用于多卡大模型服务器、H200/B200/B300 整机的正式验收。",
+        "quick":    [1, 2, 4, 8, 16, 32],
+        "formal":   [1, 2, 4, 8, 16, 24, 32, 48, 64],
+        "extended": [1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128],
+    },
+    "extreme": {
+        "label_zh":       "极限扫测",
+        "description_zh": "适用于 NVLink / NVSwitch 整机和峰值吞吐深度压测。",
+        "quick":    [1, 2, 4, 8, 16, 32, 64],
+        "formal":   [1, 2, 4, 8, 16, 32, 64, 96, 128],
+        "extended": [1, 2, 4, 8, 16, 32, 64, 96, 128, 192, 256],
+    },
+    "custom": {
+        "label_zh":       "自定义扫测",
+        "description_zh": "手动指定并发列表和请求数规则。",
+    },
+}
+
+SWEEP_TIER_DEFS = {
+    "quick":    {"label_zh": "快速",   "formula": "max(2 × C,  8)",  "rule_key": "quick"},
+    "formal":   {"label_zh": "正式",   "formula": "max(5 × C, 20)",  "rule_key": "formal"},
+    "extended": {"label_zh": "深度",   "formula": "max(5 × C, 50)",  "rule_key": "extended"},
+    "custom":   {"label_zh": "自定义", "formula": "",                 "rule_key": "custom"},
+}
+
+SWEEP_SCALE_LABELS_ZH = {
+    "small":   "小型", "medium": "中型", "large": "大型",
+    "extreme": "极限", "custom": "自定义",
+}
+SWEEP_TIER_LABELS_ZH = {
+    "quick": "快速", "formal": "正式", "extended": "深度", "custom": "自定义",
+}
+
 # ---------- 字体自动检测 ----------
 def _detect_font_family() -> str:
     """Detect the best available font for CJK + Latin rendering.
@@ -5145,49 +5197,115 @@ class LLMBenchmarkApp:
         cfg = config_card.content
         cfg.grid_columnconfigure(1, weight=1)
 
-        # Row 0: Preset selector
-        tk.Label(cfg, text="预设", font=C_STYLE["font_body"],
+        # ── Row 0: Sweep Scale selector ──
+        tk.Label(cfg, text="扫测规模", font=C_STYLE["font_body"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
             row=0, column=0, sticky="w", padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
-        preset_names = list(SWEEP_PRESETS.keys())
-        self.sweep_preset_var = tk.StringVar(value=preset_names[0])
-        preset_combo = ttk.Combobox(cfg, textvariable=self.sweep_preset_var,
-                                    values=preset_names, width=36, state="readonly")
-        preset_combo.grid(row=0, column=1, sticky="ew", pady=(0, C_STYLE["gap_sm"]))
-        preset_combo.bind("<<ComboboxSelected>>", lambda e: self._apply_sweep_preset())
-        tk.Label(cfg, text="高并发验收建议选「客户验收峰值吞吐」", font=C_STYLE["font_small"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"]).grid(
-            row=0, column=2, sticky="w", padx=(C_STYLE["pad_sm"], 0), pady=(0, C_STYLE["gap_sm"]))
+        scale_row = tk.Frame(cfg, bg=C_STYLE["bg_card"])
+        scale_row.grid(row=0, column=1, columnspan=2, sticky="ew", pady=(0, C_STYLE["gap_sm"]))
+        self._sweep_scale_var = tk.StringVar(value="medium")
+        _scale_display = [
+            ("Small 小型",    "small"),
+            ("Medium 中型",   "medium"),
+            ("Large 大型",    "large"),
+            ("Extreme 极限",  "extreme"),
+            ("Custom 自定义", "custom"),
+        ]
+        _scale_display_vals = [lbl for lbl, _ in _scale_display]
+        _scale_code_map     = {lbl: code for lbl, code in _scale_display}
+        _scale_code_rev_map = {code: lbl  for lbl, code in _scale_display}
+        self._scale_code_map     = _scale_code_map
+        self._scale_code_rev_map = _scale_code_rev_map
+        self._sweep_scale_display_var = tk.StringVar(value=_scale_code_rev_map["medium"])
+        scale_combo = ttk.Combobox(scale_row, textvariable=self._sweep_scale_display_var,
+                                   values=_scale_display_vals, width=16, state="readonly")
+        scale_combo.pack(side=tk.LEFT)
+        tk.Label(scale_row, text="  扫测档次", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).pack(side=tk.LEFT)
+        self._sweep_tier_var = tk.StringVar(value="formal")
+        _tier_display = [
+            ("Quick 快速",    "quick"),
+            ("Formal 正式",   "formal"),
+            ("Extended 深度", "extended"),
+            ("Custom 自定义", "custom"),
+        ]
+        _tier_display_vals  = [lbl for lbl, _ in _tier_display]
+        _tier_code_map      = {lbl: code for lbl, code in _tier_display}
+        _tier_code_rev_map  = {code: lbl  for lbl, code in _tier_display}
+        self._tier_code_map     = _tier_code_map
+        self._tier_code_rev_map = _tier_code_rev_map
+        self._sweep_tier_display_var = tk.StringVar(value=_tier_code_rev_map["formal"])
+        tier_combo = ttk.Combobox(scale_row, textvariable=self._sweep_tier_display_var,
+                                  values=_tier_display_vals, width=16, state="readonly")
+        tier_combo.pack(side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
+        # Bind change events
+        scale_combo.bind("<<ComboboxSelected>>", lambda e: self._on_sweep_scale_tier_change())
+        tier_combo.bind("<<ComboboxSelected>>",  lambda e: self._on_sweep_scale_tier_change())
 
-        # Row 1: Concurrency levels
-        tk.Label(cfg, text="并发级别", font=C_STYLE["font_body"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
-            row=1, column=0, sticky="w", padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
-        self.sweep_conc_var = tk.StringVar(value="1,4,8,16,32,64")
-        ttk.Entry(cfg, textvariable=self.sweep_conc_var, width=40).grid(
-            row=1, column=1, sticky="ew", pady=(0, C_STYLE["gap_sm"]))
-        tk.Label(cfg, text="支持最大 C1024，例如: 1,2,4,8,16,32,64,128,256,512,768,1024",
-                 font=C_STYLE["font_small"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"]).grid(
-            row=1, column=2, sticky="w", padx=(C_STYLE["pad_sm"], 0), pady=(0, C_STYLE["gap_sm"]))
+        # ── Row 0b: Scale description + preset status ──
+        self._sweep_desc_var   = tk.StringVar(value=SWEEP_SCALE_DEFS["medium"]["description_zh"])
+        self._sweep_preset_status_var = tk.StringVar(value="已应用: 中型 + 正式")
+        desc_row = tk.Frame(cfg, bg=C_STYLE["bg_card"])
+        desc_row.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, C_STYLE["gap_sm"]))
+        tk.Label(desc_row, textvariable=self._sweep_desc_var, font=C_STYLE["font_small"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"]).pack(side=tk.LEFT)
+        tk.Label(desc_row, text="  |  ", font=C_STYLE["font_small"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"]).pack(side=tk.LEFT)
+        self._sweep_status_lbl = tk.Label(desc_row, textvariable=self._sweep_preset_status_var,
+                                          font=C_STYLE["font_small"],
+                                          bg=C_STYLE["bg_card"], fg=C_STYLE["text_accent"])
+        self._sweep_status_lbl.pack(side=tk.LEFT)
 
-        # Row 2: Request count rule
-        tk.Label(cfg, text="请求规则", font=C_STYLE["font_body"],
+        # ── Row 2: Concurrency list (auto-generated, editable) ──
+        tk.Label(cfg, text="并发列表", font=C_STYLE["font_body"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
             row=2, column=0, sticky="w", padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
-        rule_frame = tk.Frame(cfg, bg=C_STYLE["bg_card"])
-        rule_frame.grid(row=2, column=1, columnspan=2, sticky="ew", pady=(0, C_STYLE["gap_sm"]))
-        self.sweep_request_rule_var = tk.StringVar(value="x2")
-        rule_options = [("× 1", "x1"), ("× 2（推荐）", "x2"), ("× 5", "x5"),
-                        ("× 10", "x10"), ("固定总请求数", "fixed")]
-        for label, val in rule_options:
-            rb = ttk.Radiobutton(rule_frame, text=label, variable=self.sweep_request_rule_var,
+        # Initialize with medium+formal preset
+        _medium_formal = SWEEP_SCALE_DEFS["medium"]["formal"]
+        self.sweep_conc_var = tk.StringVar(value=",".join(str(c) for c in _medium_formal))
+        # Track programmatic vs manual edits
+        self._applying_sweep_preset = False
+        self._sweep_preset_modified = tk.BooleanVar(value=False)
+        self._sweep_source_scale    = "medium"
+        self._sweep_source_tier     = "formal"
+        self.sweep_conc_var.trace_add("write", self._on_sweep_conc_var_changed)
+        ttk.Entry(cfg, textvariable=self.sweep_conc_var, width=40).grid(
+            row=2, column=1, sticky="ew", pady=(0, C_STYLE["gap_sm"]))
+        tk.Label(cfg, text="支持最大 C1024，可手动编辑（编辑后变为自定义修改）",
+                 font=C_STYLE["font_small"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"]).grid(
+            row=2, column=2, sticky="w", padx=(C_STYLE["pad_sm"], 0), pady=(0, C_STYLE["gap_sm"]))
+
+        # ── Row 3: Request count rule ──
+        tk.Label(cfg, text="请求规则", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
+            row=3, column=0, sticky="w", padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
+        # Tier formula label (shown when tier != custom)
+        self._sweep_tier_formula_var = tk.StringVar(
+            value=f"每档请求数 = {SWEEP_TIER_DEFS['formal']['formula']}")
+        self._sweep_tier_rule_lbl_frame = tk.Frame(cfg, bg=C_STYLE["bg_card"])
+        self._sweep_tier_rule_lbl_frame.grid(row=3, column=1, columnspan=2, sticky="ew",
+                                              pady=(0, C_STYLE["gap_sm"]))
+        tk.Label(self._sweep_tier_rule_lbl_frame, textvariable=self._sweep_tier_formula_var,
+                 font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).pack(side=tk.LEFT)
+        # Custom rule radio buttons (shown when tier == custom)
+        self.sweep_request_rule_var = tk.StringVar(value="formal")  # default = formal tier
+        self._sweep_custom_rule_frame = tk.Frame(cfg, bg=C_STYLE["bg_card"])
+        self._sweep_custom_rule_frame.grid(row=3, column=1, columnspan=2, sticky="ew",
+                                           pady=(0, C_STYLE["gap_sm"]))
+        rule_options = [("× 2", "x2"), ("× 5（正式）", "x5"), ("× 10", "x10"), ("固定总请求数", "fixed")]
+        for lbl, val in rule_options:
+            rb = ttk.Radiobutton(self._sweep_custom_rule_frame, text=lbl,
+                                 variable=self.sweep_request_rule_var,
                                  value=val, command=self._on_request_rule_change)
             rb.pack(side=tk.LEFT, padx=(0, C_STYLE["pad_sm"]))
-        # Fixed total entry (hidden by default)
+        self._sweep_custom_rule_frame.grid_remove()  # hidden when tier != custom
+
+        # Fixed total entry (shown only for custom tier + "fixed" rule)
         self.sweep_fixed_total_var = tk.IntVar(value=100)
         self._sweep_fixed_total_frame = tk.Frame(cfg, bg=C_STYLE["bg_card"])
-        self._sweep_fixed_total_frame.grid(row=3, column=0, columnspan=3, sticky="w",
+        self._sweep_fixed_total_frame.grid(row=4, column=0, columnspan=3, sticky="w",
                                            pady=(0, C_STYLE["gap_sm"]))
         tk.Label(self._sweep_fixed_total_frame, text="固定请求总数:", font=C_STYLE["font_body"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).pack(side=tk.LEFT,
@@ -5199,30 +5317,30 @@ class LLMBenchmarkApp:
                  fg=C_STYLE["text_muted"]).pack(side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
         self._sweep_fixed_total_frame.grid_remove()  # hidden by default
 
-        # Keep sweep_mult_var for backward compatibility (used when rule=fixed-old)
+        # Keep sweep_mult_var for backward compatibility
         self.sweep_mult_var = tk.IntVar(value=2)
 
-        # Row 4: Resource mode (always disabled for MVP)
+        # Row 5: Resource mode (always disabled for MVP)
         tk.Label(cfg, text="资源监测", font=C_STYLE["font_body"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
-            row=4, column=0, sticky="w", padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
+            row=5, column=0, sticky="w", padx=(0, C_STYLE["pad_sm"]), pady=(0, C_STYLE["gap_sm"]))
         self.sweep_resource_var = tk.StringVar(value="disabled")
         res_combo = ttk.Combobox(cfg, textvariable=self.sweep_resource_var,
                                  values=["disabled"], width=12, state="readonly")
-        res_combo.grid(row=4, column=1, sticky="w", pady=(0, C_STYLE["gap_sm"]))
+        res_combo.grid(row=5, column=1, sticky="w", pady=(0, C_STYLE["gap_sm"]))
         res_combo.current(0)
         tk.Label(cfg, text="MVP 阶段资源监测暂不可用",
                  font=C_STYLE["font_small"],
                  bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"]).grid(
-            row=4, column=2, sticky="w", padx=(C_STYLE["pad_sm"], 0), pady=(0, C_STYLE["gap_sm"]))
+            row=5, column=2, sticky="w", padx=(C_STYLE["pad_sm"], 0), pady=(0, C_STYLE["gap_sm"]))
 
-        # Row 5: Save options
+        # Row 6: Save options
         save_lbl = tk.Label(cfg, text="保存选项", font=C_STYLE["font_body"],
                             bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"])
-        save_lbl.grid(row=5, column=0, sticky="w",
+        save_lbl.grid(row=6, column=0, sticky="w",
                       padx=(0, C_STYLE["pad_sm"]), pady=(C_STYLE["gap_sm"], 0))
         save_row = tk.Frame(cfg, bg=C_STYLE["bg_card"])
-        save_row.grid(row=5, column=1, columnspan=2, sticky="ew",
+        save_row.grid(row=6, column=1, columnspan=2, sticky="ew",
                       pady=(C_STYLE["gap_sm"], 0))
         self.sweep_save_json_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(save_row, text="保存扫测数据 JSON",
@@ -5240,9 +5358,9 @@ class LLMBenchmarkApp:
                         variable=self.sweep_save_history_var).pack(side=tk.LEFT,
                         padx=(C_STYLE["pad_sm"], 0))
 
-        # Row 6: Start button
+        # Row 7: Start button
         btn_row = tk.Frame(cfg, bg=C_STYLE["bg_card"])
-        btn_row.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(C_STYLE["gap_sm"], 0))
+        btn_row.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(C_STYLE["gap_sm"], 0))
         self.sweep_start_btn = ttk.Button(btn_row, text="开始扫测",
                                           style="Primary.TButton",
                                           command=self._start_sweep)
@@ -5328,94 +5446,118 @@ class LLMBenchmarkApp:
         self._expert_text.pack(fill=tk.X)
 
     def _on_request_rule_change(self):
-        """Show/hide the fixed-total-requests entry based on selected rule."""
+        """Show/hide the fixed-total-requests entry based on selected rule (custom tier only)."""
         if self.sweep_request_rule_var.get() == "fixed":
             self._sweep_fixed_total_frame.grid()
         else:
             self._sweep_fixed_total_frame.grid_remove()
 
+    def _on_sweep_conc_var_changed(self, *_):
+        """Detect manual edits to sweep_conc_var and mark preset as modified."""
+        if getattr(self, "_applying_sweep_preset", False):
+            return  # programmatic update — not a user edit
+        if not hasattr(self, "_sweep_preset_modified"):
+            return
+        self._sweep_preset_modified.set(True)
+        self._update_sweep_preset_status_label()
+
+    def _on_sweep_scale_tier_change(self, *_):
+        """Apply the selected scale+tier preset to concurrency list and request rule."""
+        scale_disp = getattr(self, "_sweep_scale_display_var", None)
+        tier_disp  = getattr(self, "_sweep_tier_display_var",  None)
+        if scale_disp is None or tier_disp is None:
+            return
+        scale = self._scale_code_map.get(scale_disp.get(), "medium")
+        tier  = self._tier_code_map.get(tier_disp.get(), "formal")
+        self._sweep_scale_var.set(scale)
+        self._sweep_tier_var.set(tier)
+
+        # Auto-generate concurrency list when scale != custom
+        if scale != "custom":
+            scale_def = SWEEP_SCALE_DEFS.get(scale, {})
+            # Use tier concurrency if tier is named; else fall back to formal
+            tier_key  = tier if tier in ("quick", "formal", "extended") else "formal"
+            conc_list = scale_def.get(tier_key, [])
+            if conc_list:
+                self._applying_sweep_preset = True
+                try:
+                    self.sweep_conc_var.set(",".join(str(c) for c in conc_list))
+                finally:
+                    self._applying_sweep_preset = False
+            # Track source preset
+            self._sweep_source_scale = scale
+            self._sweep_source_tier  = tier if tier != "custom" else "formal"
+
+        # Update description label
+        desc = SWEEP_SCALE_DEFS.get(scale, {}).get("description_zh", "")
+        if hasattr(self, "_sweep_desc_var"):
+            self._sweep_desc_var.set(desc)
+
+        # Update request rule display
+        self._update_sweep_tier_rule_ui(tier)
+
+        # Reset modified flag (fresh preset applied)
+        self._sweep_preset_modified.set(False)
+        self._update_sweep_preset_status_label()
+
+    def _update_sweep_tier_rule_ui(self, tier: str):
+        """Show tier formula label or custom rule radio buttons."""
+        if tier == "custom":
+            # Hide formula label, show custom radio buttons
+            if hasattr(self, "_sweep_tier_rule_lbl_frame"):
+                self._sweep_tier_rule_lbl_frame.grid_remove()
+            if hasattr(self, "_sweep_custom_rule_frame"):
+                self._sweep_custom_rule_frame.grid()
+            # Don't overwrite sweep_request_rule_var — keep whatever user chose
+        else:
+            # Show formula label, hide custom radio buttons
+            if hasattr(self, "_sweep_custom_rule_frame"):
+                self._sweep_custom_rule_frame.grid_remove()
+            if hasattr(self, "_sweep_fixed_total_frame"):
+                self._sweep_fixed_total_frame.grid_remove()
+            formula = SWEEP_TIER_DEFS.get(tier, {}).get("formula", "")
+            if hasattr(self, "_sweep_tier_formula_var"):
+                self._sweep_tier_formula_var.set(f"每档请求数 = {formula}")
+            if hasattr(self, "_sweep_tier_rule_lbl_frame"):
+                self._sweep_tier_rule_lbl_frame.grid()
+            # Set the internal rule variable to the tier name
+            self.sweep_request_rule_var.set(tier)
+
+    def _update_sweep_preset_status_label(self):
+        """Update the preset status label text."""
+        if not hasattr(self, "_sweep_preset_status_var"):
+            return
+        scale = getattr(self, "_sweep_scale_var", None)
+        scale = scale.get() if scale else "custom"
+        tier  = getattr(self, "_sweep_tier_var", None)
+        tier  = tier.get() if tier else "custom"
+        modified = getattr(self, "_sweep_preset_modified", None)
+        modified = modified.get() if modified else False
+
+        scale_lbl = SWEEP_SCALE_LABELS_ZH.get(scale, scale)
+        tier_lbl  = SWEEP_TIER_LABELS_ZH.get(tier, tier)
+
+        if modified:
+            src_s_code = getattr(self, "_sweep_source_scale", scale)
+            src_t_code = getattr(self, "_sweep_source_tier",  tier)
+            src_s = SWEEP_SCALE_LABELS_ZH.get(src_s_code, src_s_code)
+            src_t = SWEEP_TIER_LABELS_ZH.get(src_t_code,  src_t_code)
+            status = f"自定义修改（基于 {src_s} + {src_t}）"
+            if hasattr(self, "_sweep_status_lbl"):
+                self._sweep_status_lbl.config(fg=C_STYLE.get("warning", "#E8A000"))
+        elif scale == "custom" and tier == "custom":
+            status = "完全自定义（手动输入并发列表和请求规则）"
+            if hasattr(self, "_sweep_status_lbl"):
+                self._sweep_status_lbl.config(fg=C_STYLE.get("text_muted", "#888"))
+        else:
+            status = f"已应用: {scale_lbl} + {tier_lbl}"
+            if hasattr(self, "_sweep_status_lbl"):
+                self._sweep_status_lbl.config(fg=C_STYLE.get("text_accent", "#4A90E2"))
+        self._sweep_preset_status_var.set(status)
+
     def _apply_sweep_preset(self):
-        """Apply a sweep preset to the UI fields."""
-        name = self.sweep_preset_var.get()
-        preset = SWEEP_PRESETS.get(name)
-        if not preset:
-            return  # "自定义" — keep current values
-        # Apply concurrency list
-        self.sweep_conc_var.set(preset["concurrency_levels"])
-        # Apply request rule
-        self.sweep_request_rule_var.set(preset.get("request_rule", "x2"))
-        self._on_request_rule_change()
-        # Apply generation params from Settings tab
-        try:
-            self.max_tokens_var.set(preset["max_tokens"])
-        except Exception:
-            pass
-        try:
-            mode = preset.get("output_length_mode", "normal")
-            self.output_length_mode_var.set("fixed" if mode == "fixed" else "normal")
-        except Exception:
-            pass
-        try:
-            self.temp_var.set(float(preset.get("temperature", 0.0)))
-        except Exception:
-            pass
-        try:
-            self.stream_var.set("是" if preset.get("stream", True) else "否")
-        except Exception:
-            pass
-        # ── Apply benchmark objective/mode from preset ──
-        try:
-            if preset.get("benchmark_objective") and hasattr(self, "_benchmark_objective_var"):
-                self._benchmark_objective_var.set(preset["benchmark_objective"])
-        except Exception:
-            pass
-        try:
-            if preset.get("benchmark_mode") and hasattr(self, "_benchmark_mode_var"):
-                self._benchmark_mode_var.set(preset["benchmark_mode"])
-        except Exception:
-            pass
-        # Show info dialog about the preset (dynamic, based on name and preset data)
-        conc_levels  = preset.get("concurrency_levels", "—")
-        max_toks     = preset.get("max_tokens", "—")
-        out_mode_raw = preset.get("output_length_mode", "normal")
-        out_mode_str = "固定输出模式" if out_mode_raw == "fixed" else "普通模式"
-        temperature  = preset.get("temperature", 0.0)
-        req_rule     = preset.get("request_rule", "x2")
-        req_rule_str = req_rule.replace("x", "× ")
-        obj_raw      = preset.get("benchmark_objective", "")
-        mode_raw     = preset.get("benchmark_mode", "")
-        # Build the info text
-        lines = [f"已应用「{name}」预设:\n"]
-        lines.append(f"• 并发级别: {conc_levels}")
-        lines.append(f"• Max Tokens: {max_toks}")
-        lines.append(f"• 输出模式: {out_mode_str}")
-        lines.append(f"• Temperature: {temperature}")
-        lines.append(f"• 请求规则: {req_rule_str}")
-        if obj_raw:
-            from llm_benchmark_app.customer_metrics import (
-                OBJECTIVE_SINGLE_SESSION, OBJECTIVE_PEAK_THROUGHPUT)
-            obj_label = {
-                OBJECTIVE_SINGLE_SESSION:  "单会话最大生成速度",
-                OBJECTIVE_PEAK_THROUGHPUT: "峰值吞吐扫描",
-            }.get(obj_raw, obj_raw)
-            lines.append(f"• 测试目标: {obj_label}")
-        if mode_raw:
-            from llm_benchmark_app.customer_metrics import MODE_REAL_API, MODE_ENGINE_CORE
-            mode_label = {
-                MODE_REAL_API:    "真实 API 体验 (real_api_experience)",
-                MODE_ENGINE_CORE: "引擎核心 (engine_core)",
-            }.get(mode_raw, mode_raw)
-            lines.append(f"• 测试模式: {mode_label}")
-        # Request count estimate for highest concurrency level
-        try:
-            max_c = max(int(c.strip()) for c in conc_levels.split(",") if c.strip())
-            rule_mult = int(req_rule.lstrip("x"))
-            lines.append(f"\n请求数计算: 每个并发档位 = 并发数 × {rule_mult}")
-            lines.append(f"最高 C{max_c} 档位将发送 {max_c * rule_mult} 个请求。")
-        except Exception:
-            pass
-        info = "\n".join(lines)
-        messagebox.showinfo("预设已应用", info)
+        """Legacy method stub — kept for backward compatibility only."""
+        pass  # old single-dropdown preset logic removed; replaced by _on_sweep_scale_tier_change
 
     def _parse_concurrency_levels(self, text: str) -> list[int]:
         """Parse comma-separated concurrency levels. Returns sorted unique ints.
@@ -6023,7 +6165,40 @@ class LLMBenchmarkApp:
         md.append(f"- **API URL**: `{sweep_result.get('api_url', 'N/A')}`")
         md.append(f"- **Model**: `{sweep_result.get('model', 'N/A')}`")
         md.append(f"- **并发档位**: {concurrency_levels}")
-        md.append(f"- **每档请求规则**: 总请求数 = 并发数 × {sweep_result.get('requests_multiplier', 10)}")
+        # ── Sweep Scale / Tier metadata (new fields) ──
+        _rpt_scale = sweep_result.get("sweep_scale")
+        _rpt_tier  = sweep_result.get("sweep_tier")
+        if _rpt_scale:
+            _rpt_scale_lbl = sweep_result.get("sweep_scale_label",
+                                              SWEEP_SCALE_LABELS_ZH.get(_rpt_scale, _rpt_scale))
+            md.append(f"- **扫测规模 (Sweep Scale)**: {_rpt_scale_lbl} (`{_rpt_scale}`)")
+        if _rpt_tier:
+            _rpt_tier_lbl = sweep_result.get("sweep_tier_label",
+                                             SWEEP_TIER_LABELS_ZH.get(_rpt_tier, _rpt_tier))
+            md.append(f"- **扫测档次 (Sweep Tier)**: {_rpt_tier_lbl} (`{_rpt_tier}`)")
+        _rpt_modified = sweep_result.get("preset_modified", False)
+        if _rpt_modified:
+            _src_s = sweep_result.get("source_preset_scale") or ""
+            _src_t = sweep_result.get("source_preset_tier")  or ""
+            _src_s_lbl = SWEEP_SCALE_LABELS_ZH.get(_src_s, _src_s)
+            _src_t_lbl = SWEEP_TIER_LABELS_ZH.get(_src_t,  _src_t)
+            md.append(f"- **预设已修改 (Preset Modified)**: Yes")
+            if _src_s or _src_t:
+                md.append(f"- **来源预设 (Source Preset)**: {_src_s_lbl} + {_src_t_lbl}")
+        else:
+            if _rpt_scale or _rpt_tier:
+                md.append(f"- **预设已修改 (Preset Modified)**: No")
+        _rpt_rule = sweep_result.get("request_count_rule")
+        if _rpt_rule:
+            _rpt_rule_type = sweep_result.get("request_count_rule_type", "")
+            md.append(f"- **请求数规则 (Request Count Rule)**: `{_rpt_rule}`  _{_rpt_rule_type}_")
+        _rpt_req_map = sweep_result.get("request_counts_by_concurrency")
+        if _rpt_req_map:
+            _rpt_req_str = "  ".join(f"C{c}={n}" for c, n in sorted(
+                _rpt_req_map.items(), key=lambda kv: int(kv[0])))
+            md.append(f"- **各档位请求数**: {_rpt_req_str}")
+        else:
+            md.append(f"- **每档请求规则**: 总请求数 = 并发数 × {sweep_result.get('requests_multiplier', 10)}")
         md.append(f"- **Max Tokens**: {s[0].get('max_tokens', 'N/A')}")
         output_mode = sweep_result.get("output_length_mode", s[0].get("output_length_mode", "normal"))
         output_mode_label = (
@@ -6317,7 +6492,7 @@ class LLMBenchmarkApp:
 
         # Request count rule
         request_rule = getattr(self, "sweep_request_rule_var",
-                               tk.StringVar(value="x2")).get()
+                               tk.StringVar(value="formal")).get()
         fixed_total = 0
         try:
             fixed_total = int(self.sweep_fixed_total_var.get())
@@ -6326,6 +6501,58 @@ class LLMBenchmarkApp:
         if request_rule == "fixed" and fixed_total < 1:
             messagebox.showerror(self.tr("msg.input_error"), "固定请求总数必须大于 0")
             return
+
+        # ── Collect sweep scale/tier metadata ──
+        _sw_scale    = getattr(self, "_sweep_scale_var", None)
+        _sw_tier     = getattr(self, "_sweep_tier_var",  None)
+        _sw_modified = getattr(self, "_sweep_preset_modified", None)
+        sweep_scale    = _sw_scale.get()    if _sw_scale    else "custom"
+        sweep_tier     = _sw_tier.get()     if _sw_tier     else "custom"
+        sweep_modified = _sw_modified.get() if _sw_modified else False
+        src_scale = getattr(self, "_sweep_source_scale", sweep_scale if sweep_scale != "custom" else None)
+        src_tier  = getattr(self, "_sweep_source_tier",  sweep_tier  if sweep_tier  != "custom" else None)
+        # If scale or tier is "custom" and was never set from a preset, src stays None
+        if sweep_scale == "custom":
+            src_scale = None
+        if sweep_tier == "custom":
+            src_tier = None
+
+        # Request count rule metadata
+        _tier_rules = {"quick", "formal", "extended"}
+        if request_rule in _tier_rules:
+            rct_type = "multiplier_rule"
+            rct_formula = SWEEP_TIER_DEFS.get(request_rule, {}).get("formula", "")
+        elif request_rule == "fixed":
+            rct_type = "fixed_per_point"
+            rct_formula = f"固定 {fixed_total} 个请求"
+        elif request_rule in ("x1", "x2", "x5", "x10"):
+            mult = request_rule.lstrip("x")
+            rct_type = "multiplier_rule"
+            rct_formula = f"{mult} × C"
+        else:
+            rct_type = "multiplier_rule"
+            rct_formula = request_rule
+
+        # Pre-compute request counts for every concurrency level
+        request_counts_by_concurrency = {
+            str(c): self._compute_num_requests(c, request_rule, fixed_total)
+            for c in concurrency_levels
+        }
+
+        # Store on self so background threads can access it
+        self._current_sweep_meta = {
+            "sweep_scale":       sweep_scale,
+            "sweep_scale_label": SWEEP_SCALE_DEFS.get(sweep_scale, {}).get("label_zh", sweep_scale),
+            "sweep_tier":        sweep_tier,
+            "sweep_tier_label":  SWEEP_TIER_DEFS.get(sweep_tier,  {}).get("label_zh", sweep_tier),
+            "source_preset_scale": src_scale,
+            "source_preset_tier":  src_tier,
+            "preset_modified":     sweep_modified,
+            "concurrency_list":    concurrency_levels,
+            "request_count_rule_type":           rct_type,
+            "request_count_rule":                rct_formula,
+            "request_counts_by_concurrency":     request_counts_by_concurrency,
+        }
 
         # High-concurrency warning: max >= 512
         if max(concurrency_levels) >= 512:
@@ -6501,19 +6728,36 @@ class LLMBenchmarkApp:
     # ─────────────────────────────────────────────────────────────────────────────
 
     def _compute_num_requests(self, c: int, rule: str, fixed_total: int) -> int:
-        """Compute number of requests for a given concurrency level and rule."""
+        """Compute number of requests for a given concurrency level and rule.
+
+        Tier-named rules (from SWEEP_TIER_DEFS):
+          quick    → max(2 * c,  8)
+          formal   → max(5 * c, 20)
+          extended → max(5 * c, 50)
+
+        Legacy multiplier rules:
+          x1/x2/x5/x10 → c * multiplier
+          fixed         → fixed_total
+        """
+        # Tier-named rules
+        if rule == "quick":
+            return max(2 * c, 8)
+        if rule == "formal":
+            return max(5 * c, 20)
+        if rule == "extended":
+            return max(5 * c, 50)
+        # Legacy multiplier rules
         rule_map = {"x1": 1, "x2": 2, "x5": 5, "x10": 10}
         if rule in rule_map:
             return c * rule_map[rule]
-        elif rule == "fixed":
+        if rule == "fixed":
             return max(1, fixed_total)
-        else:
-            # Legacy: treat rule as multiplier string or fallback to ×2
-            try:
-                mult = int(rule)
-                return c * mult
-            except (ValueError, TypeError):
-                return c * 2
+        # Legacy: treat rule as multiplier string or fallback to ×2
+        try:
+            mult = int(rule)
+            return c * mult
+        except (ValueError, TypeError):
+            return c * 2
 
     def _run_sweep(self, api_url, api_key, model, messages,
                    max_tokens, temperature,
@@ -6652,6 +6896,7 @@ class LLMBenchmarkApp:
         except Exception:
             _peak_summary = {}
 
+        _sweep_meta = getattr(self, "_current_sweep_meta", {})
         sweep_result = {
             "sweep_id": sweep_id,
             "started_at": started_at,
@@ -6677,6 +6922,8 @@ class LLMBenchmarkApp:
             "peak_total_token_throughput": _peak_summary.get("peak_total_token_throughput"),
             "recommended_production_concurrency": _peak_summary.get(
                 "recommended_production_concurrency"),
+            # ── sweep scale/tier metadata ──
+            **_sweep_meta,
         }
         self._sweep_result = sweep_result
 
@@ -6897,6 +7144,7 @@ class LLMBenchmarkApp:
         except Exception:
             _hc_peak_summary = {}
 
+        _hc_sweep_meta = getattr(self, "_current_sweep_meta", {})
         sweep_result = {
             "sweep_id": sweep_id,
             "started_at": started_at,
@@ -6923,6 +7171,8 @@ class LLMBenchmarkApp:
             "peak_total_token_throughput": _hc_peak_summary.get("peak_total_token_throughput"),
             "recommended_production_concurrency": _hc_peak_summary.get(
                 "recommended_production_concurrency"),
+            # ── sweep scale/tier metadata ──
+            **_hc_sweep_meta,
         }
         self._sweep_result = sweep_result
 
