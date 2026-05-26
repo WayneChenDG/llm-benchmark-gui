@@ -86,6 +86,12 @@ from llm_benchmark_app.result_db import (
     _result_db_delete_profile, _make_slug, _make_run_dir, _BENCHMARK_RUN_COLUMNS,
     _test_result_db_schema,
 )
+from llm_benchmark_app.result_store import (
+    rs_save_single_run, rs_save_sweep_run, rs_list_runs,
+    rs_load_report, rs_load_result, rs_load_summary,
+    rs_get_e2e_histogram_png, rs_regenerate_report, rs_regenerate_chart,
+    rs_compare_runs, RESULTS_ROOT as RS_RESULTS_ROOT,
+)
 # ── end module imports ────────────────────────────────────────────────────────
 def setup_logging():
     logging.basicConfig(
@@ -3578,14 +3584,43 @@ class LLMBenchmarkApp:
         except Exception as e:
             if DEBUG_MODE:
                 logging.warning("save to db failed: %s", e)
-        report = self._generate_report(summary)
         env_info = self._get_active_env_info()
-        env_summary = self._format_env_summary(env_info)
-        report = env_summary + report
-        # Save to result DB
+        report = self._generate_report_v2(summary, env_info)
+        # Append failure analysis if present
+        fail_detail = summary.get("fail_detail", [])
+        if fail_detail:
+            error_summary, advice = self._analyze_failures(fail_detail)
+            report += "\n\n  ═══════════ 失败请求分析 ═══════════\n\n"
+            report += error_summary + "\n\n"
+            report += advice
+
+        # ── Auto-save to ResultStore (always) ──
+        results_root = (getattr(self, "results_root_var", None) or
+                        tk.StringVar(value=RESULTS_ROOT)).get() or RESULTS_ROOT
+        _rs_run_dir = ""
+        try:
+            e2e_lats = self._get_success_e2e_latencies(summary)
+            _rs_out = rs_save_single_run(
+                results_root, summary, report, report,
+                e2e_lats, env_info,
+                config={"concurrency": summary.get("concurrency"),
+                        "total_requests": summary.get("total"),
+                        "max_tokens": summary.get("max_tokens"),
+                        "temperature": summary.get("temperature"),
+                        "stream_mode": summary.get("stream_mode"),
+                        "output_length_mode": summary.get("output_length_mode"),
+                        "api_url": summary.get("api_url"),
+                        "model": summary.get("model")}
+            )
+            _rs_run_dir = _rs_out.get("run_dir", "")
+            setattr(self, "_last_single_run_dir", _rs_run_dir)
+            logging.info("ResultStore saved to: %s", _rs_run_dir)
+        except Exception as _rs_err:
+            logging.warning("ResultStore save failed: %s", _rs_err)
+
+        # ── Legacy result DB save ──
         try:
             db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
-            results_root = getattr(self, "results_root_var", tk.StringVar(value=RESULTS_ROOT)).get() or RESULTS_ROOT
             hw = env_info.get("hw", {})
             sw = env_info.get("sw", {})
             gpu_slug = _make_slug(hw.get("gpu_model") or hw.get("gpu_model_custom") or "unknown")
@@ -3597,38 +3632,35 @@ class LLMBenchmarkApp:
             mt = summary.get("max_tokens", 0)
             mode = summary.get("output_length_mode", "normal")
             params_slug = f"C{conc}-N{total}__out{mt}-{_make_slug(mode)}"
-            run_dir = _make_run_dir(results_root, "single", model_slug, backend_slug,
-                                    gpu_slug, str(gpu_count), params_slug)
+            _legacy_run_dir = (_rs_run_dir or
+                               _make_run_dir(results_root, "single", model_slug, backend_slug,
+                                             gpu_slug, str(gpu_count), params_slug))
             _result_db_save_benchmark_run(
                 db_path, summary,
                 env_info.get("env_profile_id"),
                 env_info.get("hw_profile_id"),
                 env_info.get("sw_profile_id"),
                 env_info.get("model_profile_id"),
-                run_dir,
+                _legacy_run_dir,
                 snapshots=env_info.get("snapshots", {}),
                 applied_info={
                     "applied_environment_params": self._applied_environment_params,
                     "applied_fields_json":        self._applied_fields_json,
                     "overridden_fields_json":     self._overridden_fields_json,
                 })
-            # Save report to run_dir
-            if self.save_report_var.get() == "是":
-                try:
-                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    report_path = os.path.join(run_dir, f"report_{ts}.txt")
-                    with open(report_path, "w", encoding="utf-8") as f:
-                        f.write(report)
-                except Exception:
-                    pass
         except Exception as e:
             logging.warning("result DB save failed: %s", e)
-        fail_detail = summary.get("fail_detail", [])
-        if fail_detail:
-            error_summary, advice = self._analyze_failures(fail_detail)
-            report += "\n\n  ═══════════ 失败请求分析 ═══════════\n\n"
-            report += error_summary + "\n\n"
-            report += advice
+
+        # ── Legacy per-run report file (if "save report" enabled) ──
+        if self.save_report_var.get() == "是":
+            try:
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                report_path = os.path.join(_SCRIPT_DIR, f"llm_benchmark_report_{ts}.txt")
+                with open(report_path, "w", encoding="utf-8") as f:
+                    f.write(report)
+            except Exception:
+                pass
+
         self.result_text.config(state=tk.NORMAL)
         self.result_text.delete("1.0", tk.END)
         self.result_text.insert(tk.END, report)
@@ -3639,18 +3671,6 @@ class LLMBenchmarkApp:
             self._report_card.content.grid()
             self._report_card.title_lbl.config(text="▼ 详细报告")
             self._report_collapsed = False
-        # save report to file if enabled
-        if self.save_report_var.get() == "是":
-            try:
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                report_path = os.path.join(_SCRIPT_DIR, f"llm_benchmark_report_{ts}.txt")
-                with open(report_path, "w", encoding="utf-8") as f:
-                    f.write(report)
-                if DEBUG_MODE:
-                    logging.info("report saved to %s", report_path)
-            except Exception as e:
-                if DEBUG_MODE:
-                    logging.warning("failed to save report: %s", e)
         self._draw_histogram(summary)
         self._refresh_history()
     def _diagnose(self, summary: dict) -> list[str]:
@@ -4040,6 +4060,325 @@ class LLMBenchmarkApp:
         r.append("")
         r.append("=" * 60)
         return "\n".join(r)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    def _generate_report_v2(self, summary: dict, env_info: dict | None = None) -> str:
+        """Generate a v2 structured text report.
+
+        Structure:
+          0. Header (run_id, time, standard)
+          1. 摘要结论 (Executive Summary)
+          2. 被测环境 (Environment)
+          3. 测试配置 (Config)
+          4. 成功 / 失败
+          5. 客户验收指标 (Customer Acceptance Metrics)
+          6. 延迟指标 (Compact latency table)
+          7. Token 统计
+          8. 吞吐指标
+          9. 图表路径
+         10. 诊断建议
+        [附录] 指标定义
+        """
+        if env_info is None:
+            env_info = {}
+        from llm_benchmark_app.customer_metrics import (
+            generate_customer_acceptance_section,
+            OBJECTIVE_SINGLE_SESSION, OBJECTIVE_PEAK_THROUGHPUT,
+            MODE_REAL_API, MODE_ENGINE_CORE,
+        )
+
+        total = max(summary.get("total", 1), 1)
+        success = summary.get("success", 0)
+        fail    = summary.get("fail", 0)
+        success_rate = summary.get("success_rate", success / total * 100)
+        stream_mode  = summary.get("stream_mode", False)
+        conc  = summary.get("concurrency", 0)
+        n     = summary.get("total", 0)
+        i_avg = int((summary.get("total_input_tokens",  0) or 0) / total)
+        o_avg = int((summary.get("total_output_tokens", 0) or 0) / total)
+        workload_str = f"C{conc} / N{n} / I{i_avg} / O{o_avg}"
+        objective  = summary.get("benchmark_objective", OBJECTIVE_SINGLE_SESSION)
+        bench_mode = summary.get("benchmark_mode", MODE_REAL_API)
+
+        run_id  = getattr(self, "_last_single_run_dir", "")
+        results_root = (getattr(self, "results_root_var", None) or
+                        tk.StringVar(value=RESULTS_ROOT)).get() or RESULTS_ROOT
+        sep_h = "─" * 60  # section header
+        sep_t = "─" * 58  # table rule
+
+        r = []
+        # ── 0. Header ──────────────────────────────────────────────────────
+        r.append("=" * 62)
+        r.append("  LLM Benchmark Report  /  LLM 性能测试报告")
+        r.append("=" * 62)
+        r.append(f"  Time:    {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        r.append(f"  Version: Report {summary.get('report_version', 'v2')} | "
+                 f"Standard: {summary.get('metric_standard', 'JISUMAN LLM Benchmark v1')}")
+        result_dir = getattr(self, "_last_single_run_dir", "") or results_root
+        r.append(f"  Results: {result_dir}")
+        r.append("")
+
+        # ── 1. 摘要结论 ───────────────────────────────────────────────────
+        r.append(sep_h)
+        r.append("  一、摘要结论 / Executive Summary")
+        r.append(sep_h)
+        model_str = summary.get("model", "-")
+        mode_zh = "真实 API 体验测试" if bench_mode != MODE_ENGINE_CORE else "引擎核心性能测试"
+        obj_zh  = ("单会话最大生成速度"
+                   if objective == OBJECTIVE_SINGLE_SESSION else "峰值吞吐扫描")
+        r.append(f"  模型:    {model_str}")
+        r.append(f"  测试:    {mode_zh} / {obj_zh}")
+        r.append(f"  负载:    {workload_str}")
+        r.append(f"  成功率:  {success_rate:.1f}%  (成功 {success} / 失败 {fail} / 共 {n})")
+        r.append("")
+        tpot_avg   = summary.get("tpot_avg", 0) or 0
+        tpot_ms    = tpot_avg * 1000
+        decode_tps = (1000.0 / tpot_ms) if tpot_ms > 0 else None
+        out_tps    = summary.get("system_output_tps", 0) or 0
+        total_tps  = summary.get("system_total_tps", 0) or 0
+        ttft_avg   = summary.get("ttft_avg", 0) or 0
+        e2e_avg    = summary.get("e2e_latency_avg", 0) or 0
+        if decode_tps is not None and stream_mode:
+            r.append(f"  ● 单会话最大生成速度:  {decode_tps:.1f} tok/s  (= 1000 / TPOT)")
+        r.append(f"  ● 输出 Token 吞吐:     {out_tps:.1f} tok/s")
+        r.append(f"  ● 总 Token 吞吐:       {total_tps:.1f} tok/s")
+        if stream_mode and ttft_avg > 0:
+            r.append(f"  ● 平均 TTFT:           {ttft_avg:.3f}s ({ttft_avg*1000:.0f}ms)")
+        if stream_mode and tpot_ms > 0:
+            r.append(f"  ● 平均 TPOT:           {tpot_ms:.1f} ms/tok")
+        r.append(f"  ● 平均 E2E 延迟:       {e2e_avg:.3f}s")
+        # warn if objective mismatch
+        if objective == OBJECTIVE_SINGLE_SESSION and conc > 1:
+            r.append("")
+            r.append(f"  ⚠ 当前并发 C{conc} > 1，非标准单会话测试。")
+            r.append(f"    '单会话最大生成速度' 为按每请求 TPOT 推导的参考值，不代表严格 C1 测试。")
+        r.append("")
+
+        # ── 2. 被测环境 ───────────────────────────────────────────────────
+        r.append(sep_h)
+        r.append("  二、被测环境 / Environment")
+        r.append(sep_h)
+        hw    = env_info.get("hw", {})
+        sw    = env_info.get("sw", {})
+        model = env_info.get("model", {})
+        env_name = env_info.get("env_name") or ""
+        if not env_name:
+            r.append("  ⚠ 未绑定环境档案，本次结果不建议用于长期横向对比。")
+        else:
+            r.append(f"  环境档案: {env_name}")
+        if hw:
+            gpu = hw.get("gpu_model") or hw.get("gpu_model_custom") or "-"
+            gc  = hw.get("gpu_count") or hw.get("gpu_count_custom") or "-"
+            r.append(f"  GPU:      {gpu}  × {gc}")
+        if sw:
+            be  = sw.get("backend") or sw.get("backend_custom") or "-"
+            bev = sw.get("backend_version") or ""
+            r.append(f"  Backend:  {be} {bev}".rstrip())
+        if model:
+            q  = model.get("quantization") or model.get("quantization_custom") or "-"
+            mp = model.get("profile_name", "-")
+            r.append(f"  Model:    {mp}  (Quant: {q})")
+        r.append(f"  API URL:  {summary.get('api_url', '-')}")
+        r.append("")
+
+        # ── 3. 测试配置 ───────────────────────────────────────────────────
+        r.append(sep_h)
+        r.append("  三、测试配置 / Test Configuration")
+        r.append(sep_h)
+        r.append(f"  模型 (model):        {summary.get('model', '-')}")
+        r.append(f"  并发 (concurrency):  C{conc}")
+        r.append(f"  总请求数:            N{n}")
+        r.append(f"  Max Tokens:          {summary.get('max_tokens', '-')}")
+        output_mode = summary.get("output_length_mode", "normal")
+        output_mode_label = (
+            self.tr("label.output_mode_fixed_short") if output_mode == "fixed"
+            else self.tr("label.output_mode_normal_short")
+        )
+        r.append(f"  {self.tr('label.output_length_mode')}: {output_mode_label}")
+        if output_mode == "fixed":
+            r.append(f"  Fixed Output Tokens: {summary.get('fixed_output_tokens', 'N/A')}")
+            r.append(f"  ignore_eos:          {str(summary.get('ignore_eos', False)).lower()}")
+        r.append(f"  Temperature:         {summary.get('temperature', '-')}")
+        r.append(f"  Stream:              {'流式 (stream=True)' if stream_mode else '非流式 (stream=False)'}")
+        preset = summary.get("benchmark_preset_name", "")
+        if preset:
+            r.append(f"  Benchmark Preset:    {preset}")
+        warmup_r = summary.get("warmup_requests", 0)
+        if warmup_r:
+            r.append(f"  Warmup Requests:     {warmup_r}")
+        r.append(f"  测试目标:            {obj_zh}")
+        r.append(f"  测试模式:            {mode_zh}")
+        r.append("")
+
+        # ── 4. 成功 / 失败 ────────────────────────────────────────────────
+        r.append(sep_h)
+        r.append("  四、成功 / 失败")
+        r.append(sep_h)
+        r.append(f"  成功: {success}   失败: {fail}   成功率: {success_rate:.1f}%")
+        fail_detail = summary.get("fail_detail", [])
+        if fail_detail:
+            from collections import Counter
+            error_types = Counter(req.get("error_type", "unknown") for req in fail_detail)
+            r.append("  错误类型:")
+            for et, count in error_types.most_common():
+                r.append(f"    - {et}: {count}")
+        r.append("")
+
+        # ── 5. 客户验收指标 ───────────────────────────────────────────────
+        r.append(sep_h)
+        r.append("  五、客户验收指标 / Customer Acceptance Metrics")
+        r.append(sep_h)
+        if bench_mode == MODE_ENGINE_CORE:
+            r.append("  ⚠ 引擎核心性能测试：结果代表硬件/框架核心能力，")
+            r.append("    不应作为客户 API 体验指标呈现。")
+        else:
+            r.append("  ✓ 真实 API 体验测试：结果代表客户实际 API 调用体验。")
+        r.append("")
+        try:
+            cust_section = generate_customer_acceptance_section(
+                summary, objective, bench_mode,
+                sweep_peak_summary=None,
+                workload_label=workload_str,
+            )
+            r.append(cust_section)
+        except Exception:
+            pass  # never break existing report
+        r.append("")
+
+        # ── 6. 延迟指标 ───────────────────────────────────────────────────
+        r.append(sep_h)
+        r.append("  六、延迟指标 / Latency Metrics")
+        r.append(sep_h)
+        if stream_mode:
+            # Compact table
+            r.append(f"  {'指标':<28} {'avg':>10} {'p50':>10} {'p95':>10} {'p99':>10}")
+            r.append("  " + sep_t)
+            def _fmt_ms(v, unit="s"):
+                if v is None or v == 0:
+                    return "—"
+                return f"{v:.3f}{unit}" if unit == "s" else f"{v*1000:.1f}ms"
+            def _row(label, key_prefix, unit="s"):
+                avg = summary.get(f"{key_prefix}_avg", 0) or 0
+                p50 = summary.get(f"{key_prefix}_p50", 0) or 0
+                p95 = summary.get(f"{key_prefix}_p95", 0) or 0
+                p99 = summary.get(f"{key_prefix}_p99", 0) or 0
+                if avg == 0:
+                    return None
+                if unit == "ms":
+                    return (f"  {label:<28} {avg*1000:>10.1f}ms {p50*1000:>9.1f}ms"
+                            f" {p95*1000:>9.1f}ms {p99*1000:>9.1f}ms")
+                return (f"  {label:<28} {avg:>10.3f}s {p50:>9.3f}s"
+                        f" {p95:>9.3f}s {p99:>9.3f}s")
+
+            _e2e_row = _row("E2E Latency (e2el)", "e2e_latency")
+            if _e2e_row: r.append(_e2e_row)
+
+            _ttft_row = _row("TTFT / First Stream Chunk", "ttft")
+            if _ttft_row: r.append(_ttft_row)
+
+            _fgt = summary.get("first_generated_token_avg")
+            if _fgt:
+                _fgt_row = _row("First Generated Token", "first_generated_token")
+                if _fgt_row: r.append(_fgt_row)
+
+            _fat = summary.get("first_answer_token_avg")
+            if _fat:
+                _fat_row = _row("First Answer Token", "first_answer_token")
+                if _fat_row: r.append(_fat_row)
+
+            _frt = summary.get("first_reasoning_token_avg")
+            if _frt:
+                _frt_row = _row("First Reasoning Token", "first_reasoning_token")
+                if _frt_row: r.append(_frt_row)
+
+            _tpot_row = _row("TPOT (Time per Output Token)", "tpot", "ms")
+            if _tpot_row: r.append(_tpot_row)
+
+            _itl_row = _row("ITL (Inter-Token Latency)", "itl", "ms")
+            if _itl_row: r.append(_itl_row)
+        else:
+            r.append(f"  E2E avg: {e2e_avg:.3f}s  "
+                     f"p50: {summary.get('e2e_latency_p50', 0):.3f}s  "
+                     f"p95: {summary.get('e2e_latency_p95', 0):.3f}s  "
+                     f"p99: {summary.get('e2e_latency_p99', 0):.3f}s")
+            r.append("  TTFT / TPOT / ITL: N/A（非流式模式）")
+        r.append("")
+
+        # ── 7. Token 统计 ──────────────────────────────────────────────────
+        r.append(sep_h)
+        r.append("  七、Token 统计 / Token Counts")
+        r.append(sep_h)
+        in_tok  = summary.get("total_input_tokens",  0) or 0
+        out_tok = summary.get("total_output_tokens", 0) or 0
+        tot_tok = summary.get("total_tokens", 0) or 0
+        r.append(f"  Input:   {in_tok:>8}  (avg {i_avg}/req)")
+        r.append(f"  Output:  {out_tok:>8}  (avg {o_avg}/req)")
+        r.append(f"  Total:   {tot_tok:>8}")
+        has_output = out_tok > 0
+        r.append(f"  Source:  {'usage (服务端返回)' if has_output else '⚠ 服务端未返回 usage，token 数不可信'}")
+        r.append("")
+
+        # ── 8. 吞吐指标 ───────────────────────────────────────────────────
+        r.append(sep_h)
+        r.append("  八、吞吐指标 / Throughput")
+        r.append(sep_h)
+        rps = summary.get("request_throughput_rps", 0) or 0
+        per_req_avg = summary.get("per_request_output_tps_avg", 0) or 0
+        per_req_p50 = summary.get("per_request_output_tps_p50", 0) or 0
+        per_req_p95 = summary.get("per_request_output_tps_p95", 0) or 0
+        r.append(f"  请求吞吐 (RPS):              {rps:.2f} req/s")
+        r.append(f"  输出 Token 吞吐:             {out_tps:.1f} tok/s  (= output_tokens / duration)")
+        r.append(f"  总 Token 吞吐:               {total_tps:.1f} tok/s  (= total_tokens / duration)")
+        r.append(f"  单请求输出 Token 速率 avg:   {per_req_avg:.2f} tok/s")
+        r.append(f"    p50: {per_req_p50:.2f}  p95: {per_req_p95:.2f}")
+        r.append("")
+
+        # ── 9. 图表 ────────────────────────────────────────────────────────
+        last_dir = getattr(self, "_last_single_run_dir", "")
+        if last_dir:
+            hist_png = os.path.join(last_dir, "charts", "e2e_latency_histogram.png")
+            if os.path.isfile(hist_png):
+                r.append(sep_h)
+                r.append("  九、图表 / Charts")
+                r.append(sep_h)
+                r.append(f"  E2E Histogram: {hist_png}")
+                r.append("")
+
+        # ── 10. 诊断建议 ──────────────────────────────────────────────────
+        r.append(sep_h)
+        r.append("  十、诊断建议 / Diagnostics")
+        r.append(sep_h)
+        # Metric consistency
+        mw = summary.get("metric_warnings", [])
+        if mw:
+            r.append("  ⚠ 指标一致性警告:")
+            for w in mw:
+                r.append(f"    - {w}")
+        else:
+            r.append("  ✓ 指标一致性检查通过。")
+        diag = self._diagnose(summary)
+        if diag:
+            r.append("")
+            r.extend(diag)
+        r.append("")
+
+        # ── 附录. 指标定义 ─────────────────────────────────────────────────
+        r.append(sep_h)
+        r.append("  [附录] 指标定义 / Metric Definitions Appendix")
+        r.append(sep_h)
+        r.append("  (对齐 vLLM bench serve + NVIDIA GenAI-Perf / NIM)")
+        r.append("")
+        r.append("  TTFT  Time to First Token — 请求发出 → 首个 SSE JSON chunk 到达")
+        r.append("  TPOT  Time per Output Token — (E2E − TTFT) / (tokens − 1)")
+        r.append("  ITL   Inter-Token Latency — 相邻流式 chunk 间隔（chunk 级估算）")
+        r.append("  E2E   End-to-End Latency — 请求发出 → 完整响应结束")
+        r.append("  Output Token Throughput — total_output_tokens / duration_sec")
+        r.append("  Request Throughput (RPS) — success / duration_sec")
+        r.append("  Fixed Concurrency — 所有请求由固定数量并发 worker 发出")
+        r.append("")
+        r.append("=" * 62)
+        return "\n".join(r)
+
     def _draw_histogram(self, summary: dict):
         """Store E2E latencies and redraw after the histogram canvas is laid out."""
         self._latest_e2e_latencies = self._get_success_e2e_latencies(summary)
@@ -4202,6 +4541,8 @@ class LLMBenchmarkApp:
         self.history_type_filter = type_filter
         type_filter.pack(side=tk.LEFT)
         type_filter.bind("<<ComboboxSelected>>", lambda e: self._refresh_history())
+        ttk.Button(toolbar_inner, text="⇆ 对比选中", style="Secondary.TButton",
+                   command=self._compare_selected_runs).pack(side=tk.LEFT, padx=C_STYLE["pad_sm"])
         ttk.Button(toolbar_inner, text="✕ 清空记录", style="Secondary.TButton",
                    command=self._clear_history).pack(side=tk.LEFT, padx=C_STYLE["pad_sm"])
         self.history_status_var = tk.StringVar(value="")
@@ -4220,7 +4561,7 @@ class LLMBenchmarkApp:
         cols = ("id", "Time", "Type", "Model", "Environment",
                 "GPU", "Backend", "Quant", "Config", "Output TPS", "TTFT P95", "E2E P95", "Status")
         self.hist_tree = ttk.Treeview(table_card, columns=cols,
-                                      show="headings", selectmode="browse",
+                                      show="headings", selectmode="extended",
                                       style="App.Treeview")
         col_widths = {
             "id": 35, "Time": 130, "Type": 65, "Model": 120,
@@ -7720,11 +8061,27 @@ class LLMBenchmarkApp:
         # ── Render chart in GUI ──
         self._render_sweep_chart(sweep_result)
 
-        # Save to result DB
+        # ── Auto-save sweep to ResultStore (always) ──
+        env_info = self._get_active_env_info()
+        _rs_sweep_dir = ""
+        try:
+            _rs_results_root = (getattr(self, "results_root_var", None) or
+                                tk.StringVar(value=RESULTS_ROOT)).get() or RESULTS_ROOT
+            _sweep_report_md = sweep_result.get("report_md", "") or ""
+            if not _sweep_report_md:
+                _sweep_report_md = self._generate_sweep_markdown_report(sweep_result)
+            _rs_sweep_out = rs_save_sweep_run(
+                _rs_results_root, sweep_result, _sweep_report_md, env_info)
+            _rs_sweep_dir = _rs_sweep_out.get("run_dir", "")
+            setattr(self, "_last_sweep_run_dir", _rs_sweep_dir)
+            logging.info("ResultStore sweep saved to: %s", _rs_sweep_dir)
+        except Exception as _rs_sweep_err:
+            logging.warning("ResultStore sweep save failed: %s", _rs_sweep_err)
+
+        # ── Legacy result DB save ──
         try:
             db_path = getattr(self, "result_db_path_var", tk.StringVar(value=RESULT_DB_PATH)).get() or RESULT_DB_PATH
-            env_info = self._get_active_env_info()
-            run_dir = getattr(self, "_current_sweep_run_dir", "") or ""
+            run_dir = _rs_sweep_dir or getattr(self, "_current_sweep_run_dir", "") or ""
             _result_db_save_sweep_run(
                 db_path, sweep_result,
                 env_info.get("env_profile_id"),
@@ -8092,10 +8449,68 @@ class LLMBenchmarkApp:
         selected_filter = getattr(self, "history_type_filter_var",
                                   tk.StringVar(value="All")).get()
         visible_count = 0
-
-        # ── New result DB rows (newest first) ──
-        result_rows = self._load_result_db_runs()
         _seen_run_ids: set = set()
+
+        # ── ResultStore runs (results/runs/*/summary.json) — FIRST SOURCE ──
+        _rs_root = (getattr(self, "results_root_var", None) or
+                    tk.StringVar(value=RESULTS_ROOT)).get() or RESULTS_ROOT
+        try:
+            rs_runs = rs_list_runs(_rs_root)
+        except Exception:
+            rs_runs = []
+        for s in rs_runs:
+            run_type = s.get("run_type", "single")
+            if selected_filter == "Single" and run_type != "single":
+                continue
+            if selected_filter == "Sweep" and run_type != "sweep":
+                continue
+            run_id = s.get("run_id", "")
+            _seen_run_ids.add(run_id)
+            run_dir = s.get("run_dir", s.get("_run_dir", ""))
+            created = s.get("created_at", "")
+            model   = s.get("model", "-") or "-"
+            env_name = s.get("environment_profile_name") or "未指定环境"
+            hardware = s.get("hardware") or "-"
+            backend  = s.get("backend") or "-"
+            workload = s.get("workload", "")
+            out_tps  = s.get("output_token_throughput_tok_s") or s.get("peak_output_token_throughput_tok_s")
+            ttft_ms  = s.get("mean_ttft_ms")
+            e2e_ms   = s.get("p95_e2e_latency_ms")
+            if run_type == "sweep":
+                type_label = self.tr("history.sweep")
+                conc = s.get("concurrency", 0)
+                config = f"sweep / {conc} levels"
+            else:
+                type_label = self.tr("history.single")
+                config = workload or f"C{s.get('concurrency',0)}/N{s.get('total_requests',0)}"
+            iid = f"rs_{run_id}"
+            self.hist_tree.insert("", tk.END, iid=iid,
+                                  values=(
+                                      f"S:{run_id[-8:] if len(run_id) > 8 else run_id}",
+                                      created, type_label, model,
+                                      env_name, hardware, backend, "-",
+                                      config,
+                                      f"{out_tps:.1f}" if out_tps is not None else "-",
+                                      f"{ttft_ms:.0f}ms" if ttft_ms is not None else "-",
+                                      f"{e2e_ms:.0f}ms" if e2e_ms is not None else "-",
+                                      "completed",
+                                  ), tags=("result_store",))
+            _ref = {
+                "source": "result_store",
+                "run_id": run_id,
+                "run_dir": run_dir,
+                "run_type": run_type,
+                "index": len(self.history_display_refs),
+                "created_at": created,
+                "model": model,
+                "summary": s,
+            }
+            self.history_item_records[iid] = _ref
+            self.history_display_refs.append(_ref)
+            visible_count += 1
+
+        # ── Legacy result DB rows (newest first) ──
+        result_rows = self._load_result_db_runs()
         for row in result_rows:
             run_type = row.get("run_type") or "single"
             if selected_filter == "Single" and run_type != "single":
@@ -8220,6 +8635,39 @@ class LLMBenchmarkApp:
         iid = sel[0]
         tags = self.hist_tree.item(iid, "tags")
         values = self.hist_tree.item(iid, "values")
+
+        # ── ResultStore row — show report.txt directly ──
+        if "result_store" in tags:
+            ref = self.history_item_records.get(iid, {})
+            run_dir = ref.get("run_dir", "")
+            s = ref.get("summary", {})
+            lines = []
+            lines.append(f"Run ID:   {ref.get('run_id', '-')}")
+            lines.append(f"Time:     {ref.get('created_at', '-')}")
+            lines.append(f"Model:    {ref.get('model', '-')}")
+            lines.append(f"Workload: {s.get('workload', '-')}")
+            lines.append(f"Results:  {run_dir}")
+            out_tps = s.get("output_token_throughput_tok_s") or s.get("peak_output_token_throughput_tok_s")
+            if out_tps:
+                lines.append(f"Output TPS: {out_tps:.1f} tok/s")
+            lines.append("")
+            # Try to show report.txt
+            if run_dir:
+                try:
+                    rpt = rs_load_report(run_dir, preferred="txt")
+                    if rpt:
+                        # Truncate for preview panel (show first ~3500 chars)
+                        preview = rpt[:3500]
+                        if len(rpt) > 3500:
+                            preview += f"\n\n... [报告共 {len(rpt)} 字符，双击查看完整内容] ..."
+                        lines.append(preview)
+                    else:
+                        lines.append("⚠ 文本报告缺失，可从 result.json 重新生成。")
+                        lines.append("  双击该行后点击「重新生成报告」。")
+                except Exception:
+                    lines.append("⚠ 读取报告失败。")
+            self._set_history_detail_text("\n".join(lines))
+            return
 
         if "result_db" in tags:
             # ── Result DB row ──
@@ -8370,6 +8818,105 @@ class LLMBenchmarkApp:
         conn.commit()
         conn.close()
         self._refresh_history()
+
+    def _compare_selected_runs(self):
+        """Open a comparison popup for the 2+ selected history rows (ResultStore rows only)."""
+        zh = (self.lang_code == "zh_CN")
+        sel = self.hist_tree.selection()
+        # Collect ResultStore summaries for selected rows
+        summaries = []
+        labels    = []
+        for iid in sel:
+            ref = self.history_item_records.get(iid, {})
+            if ref.get("source") == "result_store":
+                s = ref.get("summary", {})
+                summaries.append(s)
+                labels.append(f"{s.get('created_at','')[:16]}  {s.get('model','-')[:20]}"
+                              f"  {s.get('workload','-')}")
+        if len(summaries) < 2:
+            messagebox.showinfo(
+                "提示" if zh else "Info",
+                "请在历史列表中选择 2 条或以上的 ResultStore 记录进行对比。\n"
+                "（按住 Ctrl/Shift 多选）"
+                if zh else
+                "Select 2 or more ResultStore runs (Ctrl/Shift+click) to compare."
+            )
+            return
+
+        compare_rows = rs_compare_runs(summaries)
+
+        win = tk.Toplevel(self.root)
+        win.title("性能对比" if zh else "Performance Comparison")
+        win.geometry("900x560")
+        win.configure(bg=C_STYLE["bg_main"])
+
+        hdr_frame = tk.Frame(win, bg=C_STYLE["bg_card"],
+                             highlightbackground=C_STYLE["border"],
+                             highlightthickness=1)
+        hdr_frame.pack(fill=tk.X, padx=C_STYLE["pad_lg"],
+                       pady=(C_STYLE["pad_lg"], C_STYLE["gap_sm"]))
+        tk.Label(hdr_frame,
+                 text=("对比说明:\n"
+                       f"  基准 (Baseline): {labels[0]}\n"
+                       f"  当前 (Current):  {labels[1]}"),
+                 justify=tk.LEFT, font=C_STYLE["font_small"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"],
+                 padx=C_STYLE["pad_md"], pady=C_STYLE["pad_sm"]).pack(anchor="w")
+
+        cols = ("指标" if zh else "Metric",
+                "基准" if zh else "Baseline",
+                "当前" if zh else "Current",
+                "变化" if zh else "Delta",
+                "变化%" if zh else "Δ%",
+                "趋势" if zh else "Trend")
+        tv = ttk.Treeview(win, columns=cols, show="headings",
+                          height=min(len(compare_rows), 14),
+                          style="App.Treeview")
+        cw = {
+            "指标" if zh else "Metric": 200,
+            "基准" if zh else "Baseline": 110,
+            "当前" if zh else "Current": 110,
+            "变化" if zh else "Delta": 100,
+            "变化%" if zh else "Δ%": 80,
+            "趋势" if zh else "Trend": 80,
+        }
+        for c in cols:
+            tv.heading(c, text=c)
+            tv.column(c, width=cw.get(c, 90), anchor="center")
+        tv.pack(fill=tk.BOTH, expand=True,
+                padx=C_STYLE["pad_lg"], pady=(C_STYLE["gap_sm"], C_STYLE["pad_lg"]))
+
+        for row in compare_rows:
+            unit = row.get("unit", "")
+            bv   = row.get("baseline")
+            cv   = row.get("current")
+            d    = row.get("delta")
+            pct  = row.get("pct_change")
+            dir_ = row.get("direction", "neutral")
+
+            def _fmt(v):
+                if v is None: return "—"
+                return f"{v:.2f} {unit}".rstrip()
+
+            trend = {"better": "✓ 改善" if zh else "✓ Better",
+                     "worse":  "✗ 退步" if zh else "✗ Worse",
+                     "neutral": "→ 持平" if zh else "→ Neutral"}.get(dir_, "—")
+            tag = dir_
+            tv.insert("", tk.END,
+                      values=(row["label"], _fmt(bv), _fmt(cv),
+                              _fmt(d), f"{pct:+.1f}%" if pct is not None else "—",
+                              trend),
+                      tags=(tag,))
+
+        tv.tag_configure("better",  foreground="#059669")  # green
+        tv.tag_configure("worse",   foreground="#DC2626")  # red
+        tv.tag_configure("neutral", foreground=C_STYLE["text_muted"])
+
+        ttk.Button(win, text="关闭" if zh else "Close",
+                   style="Secondary.TButton",
+                   command=win.destroy).pack(side=tk.BOTTOM,
+                                             pady=C_STYLE["pad_md"])
+
     def _draw_popup_histogram(self, canvas: tk.Canvas, latencies: list[float]):
         """Draw a latency distribution histogram on the given canvas."""
         canvas.delete("all")
@@ -8713,7 +9260,9 @@ class LLMBenchmarkApp:
         for w in self._hist_detail_center.winfo_children():
             w.destroy()
 
-        if ref["source"] == "result_db":
+        if ref["source"] == "result_store":
+            self._render_rs_detail(self._hist_detail_center, ref)
+        elif ref["source"] == "result_db":
             if ref["run_type"] == "sweep":
                 self._render_rdb_sweep_detail(self._hist_detail_center, ref)
             else:
@@ -8723,6 +9272,221 @@ class LLMBenchmarkApp:
                 self._render_legacy_sweep_detail(self._hist_detail_center, ref)
             else:
                 self._render_legacy_single_detail(self._hist_detail_center, ref)
+
+    # ── ResultStore detail (single + sweep) ──────────────────────────────
+    def _render_rs_detail(self, parent: tk.Frame, ref: dict):
+        """Render full detail for a ResultStore run (shows report.txt + histogram)."""
+        zh    = (self.lang_code == "zh_CN")
+        run_dir  = ref.get("run_dir", "")
+        run_id   = ref.get("run_id", "")
+        run_type = ref.get("run_type", "single")
+        s = ref.get("summary", {})
+
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(0, weight=1)
+        scroll = ScrollableFrame(parent, bg=C_STYLE["bg_main"])
+        scroll.grid(row=0, column=0, sticky="nsew")
+        inner = scroll.content
+        inner.configure(bg=C_STYLE["bg_main"])
+        inner.grid_columnconfigure(0, weight=1)
+        row_i = 0
+
+        # ── Action bar ──────────────────────────────────────────────────
+        act_card = SectionCard(inner, "操作" if zh else "Actions",
+                               collapsible=False, expanded=True)
+        act_card.grid(row=row_i, column=0, sticky="ew",
+                      padx=C_STYLE["pad_lg"], pady=(C_STYLE["pad_lg"], C_STYLE["gap_lg"]))
+        row_i += 1
+        btn_bar = tk.Frame(act_card.content, bg=C_STYLE["bg_card"])
+        btn_bar.pack(fill=tk.X, pady=(0, C_STYLE["pad_sm"]))
+
+        def _open_folder():
+            if run_dir and os.path.isdir(run_dir):
+                import subprocess, sys
+                if sys.platform == "win32":
+                    os.startfile(run_dir)
+                elif sys.platform == "darwin":
+                    subprocess.Popen(["open", run_dir])
+                else:
+                    subprocess.Popen(["xdg-open", run_dir])
+
+        def _regen_report():
+            if not run_dir:
+                messagebox.showwarning("提示" if zh else "Warning",
+                                       "result.json 路径未知，无法重新生成。")
+                return
+            def _gen_fn(result_dict):
+                return self._generate_report_v2(result_dict, {})
+            ok = rs_regenerate_report(run_dir, _gen_fn)
+            if ok:
+                _reload_report()
+                messagebox.showinfo("完成" if zh else "Done",
+                                    "报告已重新生成。" if zh else "Report regenerated.")
+            else:
+                messagebox.showerror("失败" if zh else "Error",
+                                     "重新生成失败，result.json 可能缺失。")
+
+        def _regen_chart():
+            if not run_dir:
+                return
+            p = rs_regenerate_chart(run_dir)
+            if p:
+                _reload_hist_image()
+                messagebox.showinfo("完成" if zh else "Done",
+                                    f"图表已重新生成:\n{p}" if zh else f"Chart regenerated:\n{p}")
+            else:
+                messagebox.showerror("失败" if zh else "Error",
+                                     "重新生成失败，可能缺少 matplotlib 或无成功请求数据。")
+
+        ttk.Button(btn_bar, text="📂 打开结果目录" if zh else "📂 Open Folder",
+                   style="Secondary.TButton", command=_open_folder).pack(
+                   side=tk.LEFT, padx=(0, C_STYLE["pad_sm"]))
+        ttk.Button(btn_bar, text="↻ 重新生成报告" if zh else "↻ Regen Report",
+                   style="Secondary.TButton", command=_regen_report).pack(
+                   side=tk.LEFT, padx=(0, C_STYLE["pad_sm"]))
+        ttk.Button(btn_bar, text="↻ 重新生成图表" if zh else "↻ Regen Chart",
+                   style="Secondary.TButton", command=_regen_chart).pack(
+                   side=tk.LEFT, padx=(0, C_STYLE["pad_sm"]))
+
+        dir_lbl = tk.Label(btn_bar, text=run_dir or "-",
+                           font=C_STYLE["font_small"],
+                           bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"],
+                           anchor="w", justify=tk.LEFT)
+        dir_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # ── Summary metrics ─────────────────────────────────────────────
+        sum_card = SectionCard(inner, "测试摘要" if zh else "Run Summary",
+                               collapsible=True, expanded=True)
+        sum_card.grid(row=row_i, column=0, sticky="ew",
+                      padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        row_i += 1
+        lines = [
+            f"Run ID:    {run_id}",
+            f"模型:      {s.get('model', '-')}",
+            f"负载:      {s.get('workload', '-')}",
+            f"成功率:    {s.get('success_rate', '-')}%",
+        ]
+        if run_type == "single":
+            decode_tps = s.get("single_session_decode_tok_s")
+            out_tps    = s.get("output_token_throughput_tok_s")
+            e2e_avg    = s.get("mean_e2e_latency_ms")
+            ttft_ms    = s.get("mean_ttft_ms")
+            tpot_ms    = s.get("mean_tpot_ms")
+            if decode_tps: lines.append(f"解码速度:  {decode_tps:.1f} tok/s")
+            if out_tps:    lines.append(f"输出 TPS:  {out_tps:.1f} tok/s")
+            if ttft_ms:    lines.append(f"TTFT avg:  {ttft_ms:.0f} ms")
+            if tpot_ms:    lines.append(f"TPOT avg:  {tpot_ms:.1f} ms")
+            if e2e_avg:    lines.append(f"E2E avg:   {e2e_avg:.0f} ms")
+        else:
+            peak_tps = s.get("peak_output_token_throughput_tok_s")
+            mc       = s.get("max_throughput_concurrency")
+            if peak_tps: lines.append(f"峰值 TPS:  {peak_tps:.1f} tok/s @ C{mc}")
+        tk.Label(sum_card.content, text="\n".join(lines),
+                 justify=tk.LEFT, anchor="w", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).pack(fill=tk.X)
+
+        # ── E2E Histogram (PNG or canvas fallback) ───────────────────────
+        hist_card = SectionCard(inner, "E2E Latency 分布" if zh else "E2E Latency Distribution",
+                                collapsible=True, expanded=True)
+        hist_card.grid(row=row_i, column=0, sticky="ew",
+                       padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        row_i += 1
+        hist_frame = tk.Frame(hist_card.content, bg=C_STYLE["bg_card"], height=240)
+        hist_frame.pack(fill=tk.BOTH, expand=True)
+        hist_frame.pack_propagate(False)
+        _hist_img_ref = [None]
+
+        def _reload_hist_image():
+            for w in hist_frame.winfo_children():
+                w.destroy()
+            _hist_img_ref[0] = None
+            png_path = rs_get_e2e_histogram_png(run_dir) if run_dir else None
+            if png_path:
+                try:
+                    from PIL import Image, ImageTk
+                    img = Image.open(png_path)
+                    img.thumbnail((900, 230), Image.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                    _hist_img_ref[0] = photo
+                    lbl = tk.Label(hist_frame, image=photo,
+                                   bg=C_STYLE["bg_card"])
+                    lbl.image = photo
+                    lbl.pack(fill=tk.BOTH, expand=True)
+                    return
+                except ImportError:
+                    pass  # PIL not available; fall through to canvas
+                except Exception:
+                    pass
+            # Fallback: draw via Tk canvas using result.json latencies
+            canvas = tk.Canvas(hist_frame, bg=C_STYLE["bg_card"],
+                                highlightthickness=0)
+            canvas.pack(fill=tk.BOTH, expand=True)
+            if run_dir:
+                result_data = rs_load_result(run_dir)
+                if result_data:
+                    lats = [
+                        float(r.get("e2e_latency", r.get("latency", 0)))
+                        for r in result_data.get("detail", [])
+                        if r.get("ok") and (r.get("e2e_latency", r.get("latency", 0)) or 0) > 0
+                    ]
+                    if lats:
+                        hist_frame.after(100, lambda: self._draw_popup_histogram(canvas, lats))
+                        return
+            # Nothing available
+            canvas.create_text(
+                380, 100,
+                text=("E2E 直方图缺失\n点击「重新生成图表」可从 result.json 重建"
+                      if zh else
+                      "E2E histogram not found.\nClick 'Regen Chart' to rebuild from result.json"),
+                fill=C_STYLE["text_muted"], font=C_STYLE["font_body"],
+                justify=tk.CENTER, width=500,
+            )
+
+        _reload_hist_image()
+
+        # ── Full report text ─────────────────────────────────────────────
+        rpt_card = SectionCard(inner,
+                               "测试报告" if zh else "Test Report",
+                               collapsible=True, expanded=True)
+        rpt_card.grid(row=row_i, column=0, sticky="ew",
+                      padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        row_i += 1
+
+        rpt_text = tk.Text(rpt_card.content, height=24, wrap=tk.WORD,
+                           font=C_STYLE["font_small"],
+                           bg=C_STYLE["bg_input"], fg=C_STYLE["text_primary"],
+                           relief=tk.FLAT, borderwidth=0)
+        rpt_scroll = ttk.Scrollbar(rpt_card.content, orient=tk.VERTICAL,
+                                   command=rpt_text.yview)
+        rpt_text.configure(yscrollcommand=rpt_scroll.set)
+        rpt_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        rpt_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def _reload_report():
+            rpt_text.config(state=tk.NORMAL)
+            rpt_text.delete("1.0", tk.END)
+            if run_dir:
+                rpt = rs_load_report(run_dir, preferred="txt")
+                if rpt:
+                    rpt_text.insert(tk.END, rpt)
+                else:
+                    rpt_text.insert(tk.END,
+                        "⚠ 文本报告缺失，可点击上方「重新生成报告」从 result.json 重建。"
+                        if zh else
+                        "⚠ report.txt not found. Click 'Regen Report' above to rebuild from result.json.")
+            else:
+                rpt_text.insert(tk.END, "⚠ 未找到结果目录。")
+            rpt_text.config(state=tk.DISABLED)
+
+        _reload_report()
+
+        # ── Close button ─────────────────────────────────────────────────
+        btn_row = tk.Frame(inner, bg=C_STYLE["bg_main"])
+        btn_row.grid(row=row_i, column=0, sticky="e",
+                     padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["pad_lg"]))
+        ttk.Button(btn_row, text="关闭" if zh else "Close",
+                   style="Secondary.TButton",
+                   command=self.history_detail_window.destroy).pack()
 
     # ── Result DB sweep detail ────────────────────────────────────────────
     def _render_rdb_sweep_detail(self, parent: tk.Frame, ref: dict):
