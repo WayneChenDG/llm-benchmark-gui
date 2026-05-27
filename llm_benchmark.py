@@ -73,7 +73,9 @@ from llm_benchmark_app.runner import (
     normalize_api_url, check_server_reachable, fetch_models,
 )
 import llm_benchmark_app.runner as _runner_module
-from llm_benchmark_app.high_concurrency_runner import _hc_classify_error, _hc_fail_result
+from llm_benchmark_app.high_concurrency_runner import (
+    _hc_classify_error, _hc_fail_result, run_async_clean,
+)
 from llm_benchmark_app.history_db import (
     _create_latest_schema, init_db, _ensure_history_columns,
     save_result, save_sweep_history, load_history,
@@ -7398,19 +7400,18 @@ class LLMBenchmarkApp:
                              max_tokens, temperature,
                              concurrency_levels, request_rule, fixed_total,
                              stream, warmup, output_length_mode):
-        """Entry point for HC runner: creates an asyncio event loop and runs HC sweep."""
-        loop = asyncio.new_event_loop()
-        try:
-            loop.run_until_complete(
-                self._run_sweep_hc_async(
-                    api_url, api_key, model, messages, max_tokens, temperature,
-                    concurrency_levels, request_rule, fixed_total,
-                    stream, warmup, output_length_mode))
-        finally:
-            try:
-                loop.close()
-            except Exception:
-                pass
+        """Entry point for HC runner: uses run_async_clean() for safe event-loop lifecycle.
+
+        run_async_clean() cancels pending tasks, drains async generators, and
+        shuts down the executor before closing the loop — preventing the
+        'RuntimeError: Event loop is closed' errors that arise from dangling
+        aiohttp async generators or semaphore waiters on Windows / Python 3.14.
+        """
+        run_async_clean(
+            self._run_sweep_hc_async(
+                api_url, api_key, model, messages, max_tokens, temperature,
+                concurrency_levels, request_rule, fixed_total,
+                stream, warmup, output_length_mode))
 
     async def _run_sweep_hc_async(self, api_url, api_key, model, messages,
                                    max_tokens, temperature,
@@ -7475,7 +7476,7 @@ class LLMBenchmarkApp:
                     f"[{idx + 1}/{total_levels}] 并发={c}, 请求数={num_requests}... ")
 
                 # Reset per-case counters in shared state
-                case_start_wall = asyncio.get_event_loop().time()
+                case_start_wall = asyncio.get_running_loop().time()
                 self.sweep_runtime_state.update({
                     "case_index": idx + 1,
                     "current_concurrency": c,
@@ -7644,52 +7645,87 @@ class LLMBenchmarkApp:
     async def _run_hc_case_async(self, session, api_url, body_dict_base, concurrency,
                                   num_requests, stream, case_start_wall):
         """Run all requests for one concurrency level asynchronously.
-        Returns (results_list, duration_sec, failure_counts_dict)."""
+        Returns (results_list, duration_sec, failure_counts_dict).
+
+        Task lifecycle (Python 3.10–3.14 safe):
+          - All coroutines are wrapped in asyncio.create_task() immediately so
+            the event loop owns their lifetime (no bare coroutine objects left
+            for the GC to close).
+          - gather(..., return_exceptions=True) waits for every task.
+          - The finally block cancels any task that survived (edge-case guard)
+            and re-awaits them so no task outlives this coroutine.
+        CancelledError:
+          - Propagates out of `async with sem` so the semaphore's __aexit__
+            runs while the loop is still alive (not after loop.close()).
+          - Caught outside the sem block and recorded as a failure result.
+        """
         results = []
         failure_counts: dict = {}
         state = self.sweep_runtime_state
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         sem = asyncio.Semaphore(concurrency)
 
         async def one_request():
-            async with sem:
-                try:
-                    result = await self._hc_call_one_async(
-                        session, api_url, body_dict_base, stream)
-                except asyncio.CancelledError:
-                    result = _hc_fail_result("cancelled", "cancelled")
-                except Exception as exc:
-                    exc_s = str(exc)
-                    # WinError inline check (WSAECONNRESET=10054, WSAETIMEDOUT=10060)
-                    if "WinError 10054" in exc_s or "winerror 10054" in exc_s:
-                        err_type = "connection_reset"
-                    elif "WinError 10060" in exc_s or "winerror 10060" in exc_s:
-                        err_type = "connect_timeout"
-                    else:
-                        err_type = _hc_classify_error(exc)
-                    result = _hc_fail_result(err_type, exc_s[:200])
+            _result = None
+            try:
+                async with sem:
+                    try:
+                        _result = await self._hc_call_one_async(
+                            session, api_url, body_dict_base, stream)
+                    except asyncio.CancelledError:
+                        # Re-raise so __aexit__ runs while loop is still alive,
+                        # then the outer except catches it for result recording.
+                        raise
+                    except Exception as exc:
+                        exc_s = str(exc)
+                        # WinError inline check (WSAECONNRESET=10054, WSAETIMEDOUT=10060)
+                        if "WinError 10054" in exc_s or "winerror 10054" in exc_s:
+                            err_type = "connection_reset"
+                        elif "WinError 10060" in exc_s or "winerror 10060" in exc_s:
+                            err_type = "connect_timeout"
+                        else:
+                            err_type = _hc_classify_error(exc)
+                        _result = _hc_fail_result(err_type, exc_s[:200])
+            except asyncio.CancelledError:
+                # Semaphore __aexit__ has already run (loop still open); record failure.
+                _result = _hc_fail_result("cancelled", "cancelled")
 
-                results.append(result)
+            if _result is None:
+                return  # Guard: should not happen with the structure above
+
+            results.append(_result)
+            try:
                 elapsed = loop.time() - case_start_wall
-                # Update shared state (asyncio single-threaded, no lock needed)
-                state["elapsed_sec"] = elapsed
-                state["completed_requests"] += 1
-                if result["ok"]:
-                    state["success"] += 1
-                    tok = result.get("completion_tokens", 0) or 0
-                    state["output_tokens"] += tok
-                    if elapsed > 0:
-                        state["rolling_output_tps"] = state["output_tokens"] / elapsed
-                        state["rolling_rps"] = state["success"] / elapsed
-                else:
-                    state["fail"] += 1
-                    err_type = result.get("error_type", "unknown")
-                    failure_counts[err_type] = failure_counts.get(err_type, 0) + 1
+            except RuntimeError:
+                elapsed = 0.0  # loop closed unexpectedly; best-effort
+            # Update shared state (asyncio single-threaded — no lock needed)
+            state["elapsed_sec"] = elapsed
+            state["completed_requests"] += 1
+            if _result["ok"]:
+                state["success"] += 1
+                tok = _result.get("completion_tokens", 0) or 0
+                state["output_tokens"] += tok
+                if elapsed > 0:
+                    state["rolling_output_tps"] = state["output_tokens"] / elapsed
+                    state["rolling_rps"] = state["success"] / elapsed
+            else:
+                state["fail"] += 1
+                _err_type = _result.get("error_type", "unknown")
+                failure_counts[_err_type] = failure_counts.get(_err_type, 0) + 1
 
         t0 = loop.time()
         tasks = [asyncio.create_task(one_request()) for _ in range(num_requests)]
-        await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            # Ensure no tasks outlive this coroutine (edge-case: early return/raise)
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            _lingering = [t for t in tasks if not t.done()]
+            if _lingering:
+                await asyncio.gather(*_lingering, return_exceptions=True)
         duration = loop.time() - t0
         return results, duration, dict(failure_counts)
 
@@ -7698,22 +7734,26 @@ class LLMBenchmarkApp:
         import aiohttp as _aio
         body_dict = dict(body_dict_base)
         body = json.dumps(body_dict).encode("utf-8")
-        t0 = asyncio.get_event_loop().time()
+        # get_running_loop() is always safe inside a coroutine (3.7+).
+        # Avoids the deprecated get_event_loop() which emits DeprecationWarning in 3.12+ and
+        # may behave differently under Python 3.14.
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
 
         try:
             async with session.post(api_url, data=body) as resp:
                 if resp.status >= 500:
                     text = await resp.text()
-                    e2e = asyncio.get_event_loop().time() - t0
+                    e2e = loop.time() - t0
                     return _hc_fail_result("server_5xx", text[:200], e2e)
                 if resp.status >= 400:
                     text = await resp.text()
-                    e2e = asyncio.get_event_loop().time() - t0
+                    e2e = loop.time() - t0
                     return _hc_fail_result("server_4xx", text[:200], e2e)
 
                 if not stream:
                     raw = await resp.read()
-                    e2e = asyncio.get_event_loop().time() - t0
+                    e2e = loop.time() - t0
                     try:
                         data = json.loads(raw)
                         choice = data.get("choices", [{}])[0]
@@ -7746,7 +7786,7 @@ class LLMBenchmarkApp:
                 finish_reason = "unknown"
 
                 async for raw_line in resp.content:
-                    now = asyncio.get_event_loop().time()
+                    now = loop.time()
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line or not line.startswith("data:"):
                         continue
@@ -7774,7 +7814,7 @@ class LLMBenchmarkApp:
                         # Approximate: count by whitespace (fast, good enough for HC)
                         completion_tokens += len((_chunk.generated_text or "").split())
 
-                e2e = asyncio.get_event_loop().time() - t0
+                e2e = loop.time() - t0
                 ttft = (first_data_line_time - t0) if first_data_line_time else None
                 per_req_tps = completion_tokens / e2e if e2e > 0 and completion_tokens > 0 else 0.0
                 tpot = None
@@ -7798,31 +7838,31 @@ class LLMBenchmarkApp:
 
         except asyncio.TimeoutError as exc:
             return _hc_fail_result("timeout", str(exc)[:200],
-                                   asyncio.get_event_loop().time() - t0)
+                                   loop.time() - t0)
         except _aio.ServerTimeoutError as exc:
             return _hc_fail_result("timeout", str(exc)[:200],
-                                   asyncio.get_event_loop().time() - t0)
+                                   loop.time() - t0)
         except _aio.ClientConnectorError as exc:
             return _hc_fail_result("connect_error", str(exc)[:200],
-                                   asyncio.get_event_loop().time() - t0)
+                                   loop.time() - t0)
         except _aio.ServerDisconnectedError as exc:
             return _hc_fail_result("read_error", str(exc)[:200],
-                                   asyncio.get_event_loop().time() - t0)
+                                   loop.time() - t0)
         except _aio.ClientResponseError as exc:
             err_type = ("server_5xx" if exc.status >= 500
                         else "server_4xx" if exc.status >= 400
                         else "read_error")
             return _hc_fail_result(err_type, str(exc)[:200],
-                                   asyncio.get_event_loop().time() - t0)
+                                   loop.time() - t0)
         except (OSError, ConnectionError) as exc:
             return _hc_fail_result("client_resource_error", str(exc)[:200],
-                                   asyncio.get_event_loop().time() - t0)
+                                   loop.time() - t0)
         except json.JSONDecodeError as exc:
             return _hc_fail_result("json_parse_error", str(exc)[:200],
-                                   asyncio.get_event_loop().time() - t0)
+                                   loop.time() - t0)
         except Exception as exc:
             return _hc_fail_result("unknown", str(exc)[:200],
-                                   asyncio.get_event_loop().time() - t0)
+                                   loop.time() - t0)
 
     def _compute_hc_peak_metrics(self, cases: list, concurrency_levels: list) -> dict:
         """Compute high-concurrency peak metrics for report."""

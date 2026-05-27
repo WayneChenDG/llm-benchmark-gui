@@ -9,8 +9,70 @@ Updated in TASK-LLM-BENCHMARK-TOKEN-CALIBRATION-HIGH-CONCURRENCY-001-v1:
 Updated in TASK-LLM-BENCHMARK-TOKEN-CALIBRATION-HC-RUNNER-001-v1:
   - Taxonomy extended: connect_timeout as separate category from timeout
   - WinError 10060 corrected to connect_timeout (was connect_error)
+Updated in TASK-LLM-BENCHMARK-HC-RUNNER-EVENT-LOOP-CLOSE-FIX-001-v1:
+  - Add run_async_clean() — safe async entry point with full event-loop lifecycle
+  - Cancel pending tasks, drain asyncgens, shutdown executor before loop.close()
+  - Windows: WindowsSelectorEventLoopPolicy applied inside runner (not globally forced)
+  - Compatible with Python 3.10 / 3.11 / 3.12 / 3.14
 """
 from __future__ import annotations
+
+
+def run_async_clean(coro):
+    """Run *coro* in a fresh event loop with full, safe cleanup on exit.
+
+    Replaces bare ``asyncio.run()`` or ``loop.run_until_complete()`` / ``loop.close()``
+    patterns that leave dangling async generators or pending tasks, causing
+    ``RuntimeError: Event loop is closed`` on Windows and Python 3.14.
+
+    Shutdown sequence (mirrors what asyncio.run() does internally):
+      1. Cancel all pending tasks in the loop
+      2. Await the cancelled tasks (return_exceptions=True)
+      3. loop.shutdown_asyncgens() — closes async-generator finalizers that
+         would otherwise call loop.call_soon on a closed loop
+      4. loop.shutdown_default_executor() — drains the thread pool
+      5. asyncio.set_event_loop(None) then loop.close()
+
+    Windows: sets WindowsSelectorEventLoopPolicy so that aiohttp's SSL/selector
+    requirements are satisfied without global side-effects.
+
+    Compatible with Python 3.10 / 3.11 / 3.12 / 3.14.
+    """
+    import asyncio
+    import sys
+
+    if sys.platform.startswith("win"):
+        try:
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        except Exception:
+            pass
+
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+    finally:
+        try:
+            # ── Step 1 & 2: cancel and drain every pending task ──────────
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True))
+            # ── Step 3: close async generators ──────────────────────────
+            # Prevents "RuntimeError: Event loop is closed" from generator
+            # __del__ or __aexit__ methods that call loop.call_soon/call_soon_threadsafe
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            # ── Step 4: drain default executor (thread pool) ─────────────
+            try:
+                loop.run_until_complete(loop.shutdown_default_executor())
+            except Exception:
+                pass  # not available on older Pythons; safe to skip
+        finally:
+            # ── Step 5: detach and close ─────────────────────────────────
+            asyncio.set_event_loop(None)
+            loop.close()
 
 
 def _hc_classify_error(exc: Exception) -> str:
