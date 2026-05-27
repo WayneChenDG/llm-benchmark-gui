@@ -1,0 +1,32 @@
+# ── JISUMAN LLM Benchmark GUI — runtime dependencies ─────────────────────────
+#
+# Install:
+#   pip install -r requirements.txt
+#
+# For token-calibration features (local tokenizer, optional / large):
+#   pip install -r requirements-tokenizer.txt
+#
+# System dependencies NOT installable via pip:
+#   LibreOffice   — DOCX → PDF conversion
+#   tkinter       — GUI (python3-tk on Debian/Ubuntu, python3-tkinter on RHEL)
+#   CJK fonts     — correct Chinese rendering in PDF/matplotlib charts
+#                   (fonts-noto-cjk / fonts-wqy-microhei on Debian/Ubuntu)
+
+# ── HTTP / async networking ───────────────────────────────────────────────────
+requests>=2.28
+aiohttp>=3.9
+
+# ── GUI / imaging ─────────────────────────────────────────────────────────────
+# tkinter is a system package — see scripts/install_deps_linux.sh
+Pillow>=9.0        # logo display, image thumbnails, PDF image embedding
+
+# ── Charts ───────────────────────────────────────────────────────────────────
+matplotlib>=3.5    # sweep charts, E2E latency histogram PNG
+
+# ── Customer acceptance report generation ────────────────────────────────────
+python-docx>=1.1   # DOCX report authoring
+reportlab>=3.6     # PDF rendering (fallback / supplementary)
+pypdf>=3.0         # PDF merge / page operations
+
+# ── Optional extras (uncomment to enable) ────────────────────────────────────
+# PyMuPDF>=1.23    # faster PDF rendering / page extraction (alternative to pypdf)

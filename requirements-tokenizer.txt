@@ -1,0 +1,17 @@
+# ── Token-calibration optional dependencies ───────────────────────────────────
+#
+# Required only for the "input token calibration" feature that uses a local
+# HuggingFace tokenizer to calculate exact prompt-token counts.
+#
+# WARNING: transformers pulls ~500 MB+ of transitive dependencies.
+# Install only when the calibration feature is needed:
+#
+#   pip install -r requirements-tokenizer.txt
+#
+# Includes base requirements:
+-r requirements.txt
+
+# ── Local tokenizer support ───────────────────────────────────────────────────
+transformers>=4.40
+sentencepiece>=0.1.99   # BPE tokenizers (LLaMA, Qwen, etc.)
+tiktoken>=0.6           # OpenAI-style tokenizers (GPT-4o, etc.)
