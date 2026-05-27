@@ -115,6 +115,57 @@ def open_directory(path: str) -> None:
         _sp.Popen(["xdg-open", path])
 
 
+def is_sweep_record(record: dict, result_payload: dict | None = None) -> bool:
+    """Determine whether a history record represents a sweep (multi-concurrency) run.
+
+    Decision rules — ANY matching condition returns True.  The test is
+    deliberately broad so that sweep records are never mis-routed to the
+    single-benchmark detail renderer.
+
+    IMPORTANT: the presence or absence of aggregated metrics such as
+    ``output_tps``, ``ttft_p95``, or ``e2e_p95`` MUST NOT influence this
+    decision.  Those fields are display-only and have no bearing on run type.
+
+    Positive indicators (checked in order):
+      1. ``record["run_type"]`` / ``record["type"]`` / ``record["record_type"]``
+         contains ``"sweep"`` or ``"并发扫测"``.
+      2. ``record["config"]`` / ``record["config_summary"]`` / ``record["workload"]``
+         starts with or contains ``"sweep /"`` or ``"sweep_"``.
+      3. ``record["run_id"]`` / ``record["rid"]`` contains ``"sweep"``.
+      4. *result_payload* (the loaded result.json) contains any of the keys:
+         ``cases``, ``sweep_results``, ``sweep_cases``, ``concurrency_results``,
+         ``concurrency_levels``, ``levels``
+         where the value is a non-empty list or dict.
+    """
+    # ── 1. Explicit type fields ───────────────────────────────────────────
+    for key in ("run_type", "type", "record_type"):
+        val = (record.get(key) or "").lower()
+        if "sweep" in val or "并发扫测" in val:
+            return True
+
+    # ── 2. Config / workload strings ──────────────────────────────────────
+    for key in ("config", "config_summary", "workload"):
+        val = (record.get(key) or "").lower()
+        if "sweep /" in val or "sweep_" in val or val.startswith("sweep"):
+            return True
+
+    # ── 3. Run ID ─────────────────────────────────────────────────────────
+    for key in ("run_id", "rid"):
+        val = (record.get(key) or "").lower()
+        if "sweep" in val:
+            return True
+
+    # ── 4. Result payload keys ────────────────────────────────────────────
+    if result_payload:
+        for key in ("cases", "sweep_results", "sweep_cases",
+                    "concurrency_results", "concurrency_levels", "levels"):
+            val = result_payload.get(key)
+            if isinstance(val, (list, dict)) and val:
+                return True
+
+    return False
+
+
 def setup_logging():
     logging.basicConfig(
         level=logging.DEBUG,
@@ -9296,7 +9347,23 @@ class LLMBenchmarkApp:
             w.destroy()
 
         if ref["source"] == "result_store":
-            self._render_rs_detail(self._hist_detail_center, ref)
+            # Hydrate result.json to confirm sweep vs single.
+            # is_sweep_record() checks type fields AND payload keys; it never
+            # uses metric columns (output_tps, ttft_p95, e2e_p95) as indicators.
+            _rs_arts   = self._resolve_history_artifacts(ref)
+            _rs_rjson  = _rs_arts.get("result_json") or ""
+            _rs_payload: dict = {}
+            if _rs_rjson and os.path.isfile(_rs_rjson):
+                try:
+                    with open(_rs_rjson, encoding="utf-8") as _f:
+                        _rs_payload = json.load(_f)
+                except Exception:
+                    pass
+            if is_sweep_record(ref, _rs_payload):
+                self._render_rs_sweep_detail(
+                    self._hist_detail_center, ref, _rs_payload, _rs_arts)
+            else:
+                self._render_rs_detail(self._hist_detail_center, ref)
         elif ref["source"] == "result_db":
             if ref["run_type"] == "sweep":
                 self._render_rdb_sweep_detail(self._hist_detail_center, ref)
@@ -9603,6 +9670,438 @@ class LLMBenchmarkApp:
         ttk.Button(btn_row, text="关闭" if zh else "Close",
                    style="Secondary.TButton",
                    command=self.history_detail_window.destroy).pack()
+
+    # ── ResultStore sweep detail ─────────────────────────────────────────
+    def _render_rs_sweep_detail(self, parent: tk.Frame, ref: dict,
+                                 payload: dict | None = None,
+                                 arts: dict | None = None):
+        """Render the full sweep detail for a ResultStore record.
+
+        Shows: action bar, sweep overview, concurrency case table,
+        2×2 sweep analysis chart (from result.json *cases* data), report
+        text, and output-files section.
+
+        Parameters
+        ----------
+        ref:
+            The history display ref dict (source="result_store").
+        payload:
+            Pre-loaded result.json dict (passed from
+            _render_history_detail_window so we don't re-read the file).
+            Falls back to loading from arts/run_dir if None.
+        arts:
+            Pre-resolved artifact paths dict from resolve_history_artifacts().
+            Falls back to calling _resolve_history_artifacts(ref) if None.
+        """
+        zh       = (self.lang_code == "zh_CN")
+        run_dir  = ref.get("run_dir", "")
+        run_id   = ref.get("run_id", "")
+        s        = ref.get("summary", {})
+
+        # ── Ensure we have artifacts and payload ─────────────────────────
+        if arts is None:
+            arts = self._resolve_history_artifacts(ref)
+        _rjson = arts.get("result_json") or ""
+        _rdir  = arts.get("report_dir") or run_dir
+
+        if payload is None:
+            payload = {}
+            if _rjson and os.path.isfile(_rjson):
+                try:
+                    with open(_rjson, encoding="utf-8") as _f:
+                        payload = json.load(_f)
+                except Exception:
+                    pass
+
+        cases = payload.get("cases", [])
+
+        # ── Scroll container ─────────────────────────────────────────────
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(0, weight=1)
+        scroll = ScrollableFrame(parent, bg=C_STYLE["bg_main"])
+        scroll.grid(row=0, column=0, sticky="nsew")
+        inner = scroll.content
+        inner.configure(bg=C_STYLE["bg_main"])
+        inner.grid_columnconfigure(0, weight=1)
+        row_i = 0
+
+        # ── Action bar ───────────────────────────────────────────────────
+        act_card = SectionCard(inner, "操作" if zh else "Actions",
+                               collapsible=False, expanded=True)
+        act_card.grid(row=row_i, column=0, sticky="ew",
+                      padx=C_STYLE["pad_lg"],
+                      pady=(C_STYLE["pad_lg"], C_STYLE["gap_lg"]))
+        row_i += 1
+        btn_bar = tk.Frame(act_card.content, bg=C_STYLE["bg_card"])
+        btn_bar.pack(fill=tk.X, pady=(0, C_STYLE["pad_sm"]))
+
+        def _open_folder():
+            _d = _rdir or run_dir
+            if _d and os.path.isdir(_d):
+                try:
+                    open_directory(_d)
+                except Exception as _e:
+                    messagebox.showerror("错误" if zh else "Error", str(_e))
+            else:
+                _checked = _d or ("未知" if zh else "unknown")
+                messagebox.showwarning(
+                    "提示" if zh else "Warning",
+                    (f"未找到结果目录。\n已检查路径：\n{_checked}"
+                     if zh else
+                     f"Directory not found.\nChecked path:\n{_checked}"),
+                )
+
+        def _regen_report_sweep():
+            if not _rjson or not os.path.isfile(_rjson):
+                _listing = "\n".join(_artifact_list_dir_brief(_rdir or ""))
+                messagebox.showerror(
+                    "失败" if zh else "Error",
+                    (f"重新生成报告失败：未找到 result JSON。\n\n"
+                     f"已检查目录：\n{_rdir}\n\n目录内容：\n{_listing}"
+                     if zh else
+                     f"Report regeneration failed: result JSON not found.\n\n"
+                     f"Checked directory:\n{_rdir}\n\nContents:\n{_listing}"),
+                )
+                return
+            _loaded = payload if payload else {}
+            if not _loaded:
+                messagebox.showerror("失败" if zh else "Error",
+                    "无法加载 result.json，报告生成中止。" if zh else
+                    "Cannot load result.json; report generation aborted.")
+                return
+            try:
+                report_text = self._generate_sweep_markdown_report(_loaded)
+                _txt_path = os.path.join(_rdir, "report.txt")
+                _md_path  = os.path.join(_rdir, "report.md")
+                with open(_txt_path, "w", encoding="utf-8") as _f:
+                    _f.write(report_text)
+                with open(_md_path, "w", encoding="utf-8") as _f:
+                    _f.write(report_text)
+                _reload_report()
+                messagebox.showinfo(
+                    "完成" if zh else "Done",
+                    "扫测报告已重新生成。" if zh else "Sweep report regenerated.",
+                )
+            except Exception as _e:
+                messagebox.showerror("失败" if zh else "Error", str(_e))
+
+        def _regen_chart_sweep():
+            if not _rjson or not os.path.isfile(_rjson):
+                messagebox.showerror(
+                    "失败" if zh else "Error",
+                    "未找到 result JSON，无法重新生成图表。" if zh else
+                    "result JSON not found; cannot regenerate chart.",
+                )
+                return
+            _loaded = payload if payload else {}
+            if not _loaded.get("cases"):
+                messagebox.showwarning(
+                    "提示" if zh else "Warning",
+                    ("result.json 中未找到 cases 数据，无法生成扫测图表。"
+                     if zh else
+                     "No sweep cases found in result.json; cannot regenerate chart."),
+                )
+                return
+            if not self._matplotlib_available():
+                messagebox.showwarning(
+                    "提示" if zh else "Warning",
+                    "matplotlib 未安装，无法生成图表。\npip install matplotlib"
+                    if zh else
+                    "matplotlib not installed.\npip install matplotlib",
+                )
+                return
+            try:
+                import matplotlib
+                matplotlib.use("Agg")
+                fig = self._build_sweep_analysis_figure(_loaded)
+                if fig is None:
+                    raise RuntimeError("图表生成返回空结果")
+                os.makedirs(os.path.join(_rdir, "charts"), exist_ok=True)
+                _png = os.path.join(_rdir, "charts", "sweep_analysis.png")
+                fig.savefig(_png, dpi=150, bbox_inches="tight")
+                import matplotlib.pyplot as plt
+                plt.close(fig)
+                _reload_chart(png_override=_png)
+                messagebox.showinfo(
+                    "完成" if zh else "Done",
+                    f"扫测图表已重新生成:\n{_png}" if zh else
+                    f"Sweep chart regenerated:\n{_png}",
+                )
+            except Exception as _e:
+                messagebox.showerror("失败" if zh else "Error", str(_e))
+
+        ttk.Button(btn_bar, text="📂 打开结果目录" if zh else "📂 Open Folder",
+                   style="Secondary.TButton",
+                   command=_open_folder).pack(side=tk.LEFT,
+                                              padx=(0, C_STYLE["pad_sm"]))
+        ttk.Button(btn_bar, text="↻ 重新生成报告" if zh else "↻ Regen Report",
+                   style="Secondary.TButton",
+                   command=_regen_report_sweep).pack(side=tk.LEFT,
+                                                     padx=(0, C_STYLE["pad_sm"]))
+        ttk.Button(btn_bar, text="↻ 重新生成图表" if zh else "↻ Regen Chart",
+                   style="Secondary.TButton",
+                   command=_regen_chart_sweep).pack(side=tk.LEFT,
+                                                    padx=(0, C_STYLE["pad_sm"]))
+        tk.Label(btn_bar, text=_rdir or run_dir or "-",
+                 font=C_STYLE["font_small"], bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["text_muted"], anchor="w",
+                 justify=tk.LEFT).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # ── Sweep overview ───────────────────────────────────────────────
+        ov_card = SectionCard(inner, "扫测概览" if zh else "Sweep Overview",
+                              collapsible=True, expanded=True)
+        ov_card.grid(row=row_i, column=0, sticky="ew",
+                     padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        row_i += 1
+        peak_tps = s.get("peak_output_token_throughput_tok_s")
+        mc       = s.get("max_throughput_concurrency")
+        levels   = (payload.get("concurrency_levels")
+                    or s.get("concurrency_list") or [])
+        ov_lines = [
+            f"Run ID: {run_id}",
+            f"模型:   {s.get('model') or payload.get('model') or '-'}",
+            f"API:    {payload.get('api_url') or s.get('api_url') or '-'}",
+            f"档位数: {len(cases)} 级",
+            f"并发级别: {levels}" if levels else "",
+            f"峰值 TPS: {peak_tps:.1f} tok/s @ C{mc}" if peak_tps else "",
+            f"Run Dir: {_rdir or run_dir or '-'}",
+        ]
+        tk.Label(ov_card.content, text="\n".join(l for l in ov_lines if l),
+                 justify=tk.LEFT, anchor="w", font=C_STYLE["font_body"],
+                 bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["text_primary"]).pack(fill=tk.X)
+
+        # ── Concurrency case table ───────────────────────────────────────
+        if cases:
+            tbl_card = SectionCard(
+                inner, "并发档位明细" if zh else "Concurrency Case Details",
+                collapsible=True, expanded=True)
+            tbl_card.grid(row=row_i, column=0, sticky="ew",
+                          padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+            row_i += 1
+            cols = ("C", "Req", "Success", "Fail", "Rate%",
+                    "E2E Avg(s)", "E2E P95(s)", "TTFT(s)", "Out TPS", "RPS")
+            tv = ttk.Treeview(tbl_card.content, columns=cols,
+                              show="headings",
+                              height=min(max(len(cases), 3), 10),
+                              style="App.Treeview")
+            for col in cols:
+                tv.heading(col, text=col)
+                tv.column(col, anchor="center", width=82)
+            for case in cases:
+                cs = case.get("benchmark_summary", {})
+                tv.insert("", tk.END, values=(
+                    case.get("concurrency", "-"),
+                    case.get("total_requests", "-"),
+                    cs.get("success", 0),
+                    cs.get("fail", 0),
+                    f"{cs.get('success_rate', 0) or 0:.1f}%",
+                    f"{cs.get('e2e_latency_avg', 0) or 0:.3f}",
+                    f"{cs.get('e2e_latency_p95', 0) or 0:.3f}",
+                    f"{cs.get('ttft_avg', 0) or 0:.3f}",
+                    f"{cs.get('system_output_tps', 0) or 0:.1f}",
+                    f"{cs.get('request_throughput_rps', 0) or 0:.2f}",
+                ))
+            tv.pack(fill=tk.X)
+
+        # ── Sweep analysis chart ─────────────────────────────────────────
+        chart_card = SectionCard(
+            inner, "图形分析" if zh else "Chart Analysis",
+            collapsible=True, expanded=True)
+        chart_card.grid(row=row_i, column=0, sticky="ew",
+                        padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        row_i += 1
+        chart_frame = tk.Frame(chart_card.content,
+                               bg=C_STYLE["bg_card"], height=460)
+        chart_frame.pack(fill=tk.BOTH, expand=True)
+        chart_frame.pack_propagate(False)
+
+        # Chart state — reloaded by _reload_chart()
+        _chart_canvas_ref = [None]
+        _chart_figure_ref = [None]
+
+        def _reload_chart(png_override: str | None = None):
+            """Display the sweep chart: PNG > live matplotlib > placeholder."""
+            # Destroy old canvas
+            if _chart_canvas_ref[0] is not None:
+                try:
+                    _chart_canvas_ref[0].get_tk_widget().destroy()
+                except Exception:
+                    pass
+                _chart_canvas_ref[0] = None
+            if _chart_figure_ref[0] is not None:
+                try:
+                    import matplotlib.pyplot as plt
+                    plt.close(_chart_figure_ref[0])
+                except Exception:
+                    pass
+                _chart_figure_ref[0] = None
+            for w in chart_frame.winfo_children():
+                w.destroy()
+
+            # 1. Try existing PNG (charts/sweep_analysis.png first, then any PNG)
+            _png_to_show = png_override or ""
+            if not _png_to_show:
+                for _candidate in (
+                    os.path.join(_rdir, "charts", "sweep_analysis.png"),
+                    arts.get("chart_png") or "",
+                ):
+                    if _candidate and os.path.isfile(_candidate):
+                        _png_to_show = _candidate
+                        break
+
+            if _png_to_show and os.path.isfile(_png_to_show):
+                try:
+                    from PIL import Image, ImageTk
+                    _img = Image.open(_png_to_show)
+                    _img.thumbnail((920, 450), Image.LANCZOS)
+                    _photo = ImageTk.PhotoImage(_img)
+                    _lbl = tk.Label(chart_frame, image=_photo,
+                                    bg=C_STYLE["bg_card"])
+                    _lbl.image = _photo  # keep reference
+                    _lbl.pack(fill=tk.BOTH, expand=True)
+                    return
+                except ImportError:
+                    pass  # Pillow unavailable — fall through to matplotlib
+                except Exception:
+                    pass
+
+            # 2. Live matplotlib from payload.cases
+            if cases and self._matplotlib_available():
+                try:
+                    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+                    _fig = self._build_sweep_analysis_figure(payload)
+                    if _fig is not None:
+                        _chart_figure_ref[0] = _fig
+                        _mpl = FigureCanvasTkAgg(_fig, master=chart_frame)
+                        _mpl.draw()
+                        _mpl.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+                        _chart_canvas_ref[0] = _mpl
+                        return
+                except Exception as _ce:
+                    tk.Label(chart_frame,
+                             text=f"图表渲染失败: {_ce}" if zh else f"Chart error: {_ce}",
+                             font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                             fg=C_STYLE["warning_text"],
+                             wraplength=700).pack(expand=True)
+                    return
+
+            # 3. Placeholder
+            _ph = tk.Canvas(chart_frame, bg=C_STYLE["bg_card"],
+                            highlightthickness=0)
+            _ph.pack(fill=tk.BOTH, expand=True)
+            _ph.after(50, lambda: _ph.create_text(
+                max(_ph.winfo_width() // 2, 380), 100,
+                text=(
+                    "扫测图表缺失。\n"
+                    "点击「重新生成图表」从 result.json 重建扫测趋势图。"
+                    if zh else
+                    "Sweep chart not found.\n"
+                    "Click 'Regen Chart' to rebuild from result.json."
+                ),
+                fill=C_STYLE["text_muted"], font=C_STYLE["font_body"],
+                justify=tk.CENTER, width=500,
+            ))
+
+        _reload_chart()
+
+        # ── Expert analysis ──────────────────────────────────────────────
+        if payload.get("analysis_summary") or cases:
+            expert_card = SectionCard(
+                inner, "专家分析简评" if zh else "Expert Summary",
+                collapsible=True, expanded=True)
+            expert_card.grid(row=row_i, column=0, sticky="ew",
+                             padx=C_STYLE["pad_lg"],
+                             pady=(0, C_STYLE["gap_lg"]))
+            row_i += 1
+            analysis_lines = payload.get("analysis_summary", [])
+            commentary = (self._generate_expert_commentary(cases, analysis_lines)
+                          if cases else "")
+            expert_txt = (
+                "\n".join([*analysis_lines, "", commentary]).strip()
+                or ("未生成专家分析。" if zh else "No expert analysis generated.")
+            )
+            tk.Label(expert_card.content, text=expert_txt,
+                     justify=tk.LEFT, anchor="w",
+                     font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                     fg=C_STYLE["text_primary"], wraplength=820).pack(fill=tk.X)
+
+        # ── Report text ──────────────────────────────────────────────────
+        rpt_card = SectionCard(
+            inner, "测试报告" if zh else "Test Report",
+            collapsible=True, expanded=True)
+        rpt_card.grid(row=row_i, column=0, sticky="ew",
+                      padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        row_i += 1
+        rpt_text = tk.Text(
+            rpt_card.content, height=20, wrap=tk.WORD,
+            font=C_STYLE["font_small"],
+            bg=C_STYLE["bg_input"], fg=C_STYLE["text_primary"],
+            relief=tk.FLAT, borderwidth=0)
+        rpt_scroll = ttk.Scrollbar(rpt_card.content, orient=tk.VERTICAL,
+                                   command=rpt_text.yview)
+        rpt_text.configure(yscrollcommand=rpt_scroll.set)
+        rpt_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        rpt_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def _reload_report():
+            rpt_text.config(state=tk.NORMAL)
+            rpt_text.delete("1.0", tk.END)
+            _loaded_rpt = None
+            if _rdir and os.path.isdir(_rdir):
+                _loaded_rpt = rs_load_report(_rdir, preferred="md")
+            if _loaded_rpt:
+                rpt_text.insert(tk.END, _loaded_rpt)
+            else:
+                rpt_text.insert(tk.END,
+                    "⚠ 扫测报告缺失，点击「重新生成报告」从 result.json 重建。"
+                    if zh else
+                    "⚠ Sweep report not found. Click 'Regen Report' to rebuild.")
+            rpt_text.config(state=tk.DISABLED)
+
+        _reload_report()
+
+        # ── Output files ─────────────────────────────────────────────────
+        files_card = SectionCard(
+            inner, "输出文件" if zh else "Output Files",
+            collapsible=True, expanded=False)
+        files_card.grid(row=row_i, column=0, sticky="ew",
+                        padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["gap_lg"]))
+        row_i += 1
+        _cust_pdf  = arts.get("customer_pdf", "")
+        _cust_docx = arts.get("customer_docx", "")
+        _files = [
+            f"Report Dir: {_rdir or '-'}",
+            f"result.json: {_rjson or '-'}",
+            f"report.md:   {arts.get('report_md') or '-'}",
+            f"report.txt:  {arts.get('report_txt') or '-'}",
+            f"chart PNG:   {arts.get('chart_png') or '-'}",
+        ]
+        if _cust_pdf:
+            _files.append(f"PDF 报告:  {_cust_pdf}")
+        if _cust_docx:
+            _files.append(f"DOCX 报告: {_cust_docx}")
+        tk.Label(files_card.content, text="\n".join(_files),
+                 justify=tk.LEFT, anchor="w",
+                 font=C_STYLE["font_body"], bg=C_STYLE["bg_card"],
+                 fg=C_STYLE["text_primary"]).pack(fill=tk.X)
+
+        # ── Bottom bar: generate customer report + close ─────────────────
+        btn_row = tk.Frame(inner, bg=C_STYLE["bg_main"])
+        btn_row.grid(row=row_i, column=0, sticky="e",
+                     padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["pad_lg"]))
+        pdf_btn_txt = "生成客户报告" if zh else "Generate Client Report"
+        _j = arts.get("result_json", "")
+        _m = arts.get("report_md", "") or arts.get("report_txt", "")
+        _p = arts.get("chart_png", "")
+        pdf_btn = ttk.Button(
+            btn_row, text=pdf_btn_txt, style="Primary.TButton",
+            command=lambda: self._generate_customer_report_for_history_record(
+                ref, {}, payload, _j, _m, _p, _rdir, btn_row))
+        pdf_btn.pack(side=tk.LEFT, padx=(0, C_STYLE["gap_md"]))
+        ttk.Button(btn_row, text="关闭" if zh else "Close",
+                   style="Secondary.TButton",
+                   command=self.history_detail_window.destroy).pack(side=tk.LEFT)
 
     # ── Result DB sweep detail ────────────────────────────────────────────
     def _render_rdb_sweep_detail(self, parent: tk.Frame, ref: dict):
