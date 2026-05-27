@@ -94,6 +94,10 @@ from llm_benchmark_app.result_store import (
     rs_get_e2e_histogram_png, rs_regenerate_report, rs_regenerate_chart,
     rs_compare_runs, RESULTS_ROOT as RS_RESULTS_ROOT,
 )
+from llm_benchmark_app.artifact_resolver import (
+    resolve_history_artifacts as _module_resolve_history_artifacts,
+    list_dir_brief as _artifact_list_dir_brief,
+)
 # ── end module imports ────────────────────────────────────────────────────────
 
 def open_directory(path: str) -> None:
@@ -9307,9 +9311,13 @@ class LLMBenchmarkApp:
         btn_bar = tk.Frame(act_card.content, bg=C_STYLE["bg_card"])
         btn_bar.pack(fill=tk.X, pady=(0, C_STYLE["pad_sm"]))
 
+        # ── Pre-resolve artifacts ONCE for this detail panel ──────────────
+        # All three action buttons share this resolved set so paths are
+        # consistent and we avoid redundant DB / filesystem queries.
+        _resolved_arts = self._resolve_history_artifacts(ref)
+
         def _open_folder():
-            _arts = self._resolve_history_artifacts(ref)
-            _rdir = _arts.get("report_dir") or run_dir
+            _rdir = _resolved_arts.get("report_dir") or run_dir
             if _rdir and os.path.isdir(_rdir):
                 try:
                     open_directory(_rdir)
@@ -9317,16 +9325,21 @@ class LLMBenchmarkApp:
                     messagebox.showerror("错误" if zh else "Error", str(_e))
             else:
                 _checked = _rdir or run_dir or ("未知" if zh else "unknown")
+                _listing = "\n".join(
+                    _artifact_list_dir_brief(_checked)
+                ) if _checked and os.path.isdir(_checked) else ""
                 messagebox.showwarning(
                     "提示" if zh else "Warning",
                     (f"未找到结果目录。\n\n已检查路径：\n{_checked}"
+                     + (f"\n\n目录内容：\n{_listing}" if _listing else "")
                      if zh else
-                     f"Directory not found.\n\nChecked path:\n{_checked}"),
+                     f"Directory not found.\n\nChecked path:\n{_checked}"
+                     + (f"\n\nDirectory contents:\n{_listing}" if _listing else "")),
                 )
 
         def _regen_report():
-            _arts = self._resolve_history_artifacts(ref)
-            _rdir = _arts.get("report_dir") or run_dir
+            _rdir = _resolved_arts.get("report_dir") or run_dir
+            _rjson = _resolved_arts.get("result_json") or ""
             if not _rdir:
                 messagebox.showwarning(
                     "提示" if zh else "Warning",
@@ -9335,9 +9348,25 @@ class LLMBenchmarkApp:
                      "Result directory unknown; cannot regenerate report."),
                 )
                 return
+            if not _rjson or not os.path.isfile(_rjson):
+                _listing_lines = _artifact_list_dir_brief(_rdir)
+                _listing = "\n".join(_listing_lines) if _listing_lines else "  (空目录)"
+                messagebox.showerror(
+                    "失败" if zh else "Error",
+                    (f"重新生成报告失败：未找到 result JSON。\n\n"
+                     f"已检查目录（{len(_listing_lines)} 个文件）：\n{_rdir}\n\n"
+                     f"目录内容：\n{_listing}\n\n"
+                     f"请确认目录下存在 result*.json 或 sweep_result*.json。"
+                     if zh else
+                     f"Report regeneration failed: result JSON not found.\n\n"
+                     f"Checked directory ({len(_listing_lines)} files):\n{_rdir}\n\n"
+                     f"Directory contents:\n{_listing}\n\n"
+                     f"Make sure result*.json or sweep_result*.json exists there."),
+                )
+                return
             def _gen_fn(result_dict):
                 return self._generate_report_v2(result_dict, {})
-            ok = rs_regenerate_report(_rdir, _gen_fn)
+            ok = rs_regenerate_report(_rdir, _gen_fn, result_json_path=_rjson)
             if ok:
                 _reload_report()
                 messagebox.showinfo(
@@ -9347,18 +9376,16 @@ class LLMBenchmarkApp:
             else:
                 messagebox.showerror(
                     "失败" if zh else "Error",
-                    (f"重新生成报告失败：\n未找到 result JSON。\n\n"
-                     f"已检查目录：\n{_rdir}\n\n"
-                     f"请确认目录下存在 result*.json 或 sweep_result*.json。"
+                    (f"重新生成报告失败：报告生成函数返回错误。\n\n"
+                     f"Result JSON：\n{_rjson}"
                      if zh else
-                     f"Report regeneration failed:\nresult JSON not found.\n\n"
-                     f"Checked directory:\n{_rdir}\n\n"
-                     f"Make sure result*.json or sweep_result*.json exists there."),
+                     f"Report regeneration failed: report generator returned an error.\n\n"
+                     f"Result JSON:\n{_rjson}"),
                 )
 
         def _regen_chart():
-            _arts = self._resolve_history_artifacts(ref)
-            _rdir = _arts.get("report_dir") or run_dir
+            _rdir = _resolved_arts.get("report_dir") or run_dir
+            _rjson = _resolved_arts.get("result_json") or ""
             if not _rdir:
                 messagebox.showwarning(
                     "提示" if zh else "Warning",
@@ -9367,7 +9394,21 @@ class LLMBenchmarkApp:
                      "Result directory unknown; cannot regenerate chart."),
                 )
                 return
-            p = rs_regenerate_chart(_rdir)
+            if not _rjson or not os.path.isfile(_rjson):
+                _listing_lines = _artifact_list_dir_brief(_rdir)
+                _listing = "\n".join(_listing_lines) if _listing_lines else "  (空目录)"
+                messagebox.showerror(
+                    "失败" if zh else "Error",
+                    (f"重新生成图表失败：未找到 result JSON。\n\n"
+                     f"已检查目录（{len(_listing_lines)} 个文件）：\n{_rdir}\n\n"
+                     f"目录内容：\n{_listing}"
+                     if zh else
+                     f"Chart regeneration failed: result JSON not found.\n\n"
+                     f"Checked directory ({len(_listing_lines)} files):\n{_rdir}\n\n"
+                     f"Directory contents:\n{_listing}"),
+                )
+                return
+            p = rs_regenerate_chart(_rdir, result_json_path=_rjson)
             if p:
                 _reload_hist_image()
                 messagebox.showinfo(
@@ -9377,12 +9418,16 @@ class LLMBenchmarkApp:
             else:
                 messagebox.showerror(
                     "失败" if zh else "Error",
-                    (f"重新生成图表失败：\n未找到可用于绘图的 result JSON 或历史指标数据。\n\n"
-                     f"已检查目录：\n{_rdir}"
+                    (f"重新生成图表失败：\nresult JSON 中未找到有效的 E2E 延迟数据。\n\n"
+                     f"Result JSON：\n{_rjson}\n\n"
+                     f"请确认 result JSON 中的 detail[] 列表包含 e2e_latency 或 latency 字段，"
+                     f"且 ok=true 的请求数 > 0。"
                      if zh else
                      f"Chart regeneration failed:\n"
-                     f"No result JSON or metrics data found for plotting.\n\n"
-                     f"Checked directory:\n{_rdir}"),
+                     f"No valid E2E latency data found in result JSON.\n\n"
+                     f"Result JSON:\n{_rjson}\n\n"
+                     f"Make sure detail[] entries in the result JSON contain "
+                     f"e2e_latency or latency fields with ok=true."),
                 )
 
         ttk.Button(btn_bar, text="📂 打开结果目录" if zh else "📂 Open Folder",

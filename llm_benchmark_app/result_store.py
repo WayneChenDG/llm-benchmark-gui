@@ -548,9 +548,19 @@ def rs_load_report(run_dir: str, preferred: str = "txt") -> str | None:
     return None
 
 
-def rs_load_result(run_dir: str) -> dict | None:
-    """Load result.json from run_dir. Returns dict or None."""
-    path = os.path.join(run_dir, "result.json")
+def rs_load_result(run_dir: str, result_json_path: str | None = None) -> dict | None:
+    """Load result JSON.
+
+    If *result_json_path* is provided and points to an existing file, load
+    that file directly (supports non-standard names resolved by the artifact
+    resolver).  Otherwise fall back to ``<run_dir>/result.json``.
+
+    Returns dict or None.
+    """
+    if result_json_path and os.path.isfile(result_json_path):
+        path = result_json_path
+    else:
+        path = os.path.join(run_dir, "result.json")
     if not os.path.isfile(path):
         return None
     try:
@@ -580,13 +590,25 @@ def rs_get_e2e_histogram_png(run_dir: str) -> str | None:
 
 # ── Regeneration ──────────────────────────────────────────────────────────────
 
-def rs_regenerate_report(run_dir: str, report_generator_fn) -> bool:
-    """Regenerate report.txt from result.json using a callback.
+def rs_regenerate_report(run_dir: str, report_generator_fn,
+                          result_json_path: str | None = None) -> bool:
+    """Regenerate report.txt / report.md from a result JSON using a callback.
 
-    report_generator_fn(result_dict) -> str
+    Parameters
+    ----------
+    run_dir:
+        The run directory where report files will be written.
+    report_generator_fn:
+        Callable ``(result_dict) -> str`` that produces report text.
+    result_json_path:
+        Explicit path to the result JSON file.  When supplied the file is
+        loaded directly, bypassing the default ``<run_dir>/result.json``
+        exact-name lookup.  This is required when the artifact resolver
+        returned a non-standard name (e.g. ``result_20260501.json``).
+
     Returns True on success.
     """
-    result = rs_load_result(run_dir)
+    result = rs_load_result(run_dir, result_json_path)
     if result is None:
         return False
     try:
@@ -599,10 +621,21 @@ def rs_regenerate_report(run_dir: str, report_generator_fn) -> bool:
         return False
 
 
-def rs_regenerate_chart(run_dir: str) -> str | None:
-    """Regenerate E2E histogram PNG from result.json.
-    Returns path or None if failed."""
-    result = rs_load_result(run_dir)
+def rs_regenerate_chart(run_dir: str,
+                         result_json_path: str | None = None) -> str | None:
+    """Regenerate E2E histogram PNG from a result JSON.
+
+    Parameters
+    ----------
+    run_dir:
+        The run directory where ``charts/`` will be written.
+    result_json_path:
+        Explicit path to the result JSON file (same semantics as
+        ``rs_regenerate_report``).
+
+    Returns the path to the generated PNG, or None if generation failed.
+    """
+    result = rs_load_result(run_dir, result_json_path)
     if result is None:
         return None
     latencies = []
@@ -614,6 +647,8 @@ def rs_regenerate_chart(run_dir: str) -> str | None:
             latencies.append(float(v))
     if not latencies:
         return None
+    # Ensure charts/ directory exists before attempting to write the PNG.
+    os.makedirs(os.path.join(run_dir, "charts"), exist_ok=True)
     return rs_save_e2e_histogram_png(run_dir, latencies, result)
 
 
