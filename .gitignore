@@ -30,6 +30,9 @@ results/
 *.swp
 *.swo
 
+# Local backups (created by backup-before-fix scripts)
+backups/
+
 # OS
 .DS_Store
 Thumbs.db
