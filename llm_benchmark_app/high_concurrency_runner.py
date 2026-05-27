@@ -15,90 +15,126 @@ Updated in TASK-LLM-BENCHMARK-TOKEN-CALIBRATION-HC-RUNNER-001-v1:
 Updated in TASK-LLM-BENCHMARK-HC-RUNNER-EVENT-LOOP-CLOSE-FIX-001-v1:
   - Add run_async_clean() — safe async entry point with full event-loop lifecycle
   - Cancel pending tasks, drain asyncgens, shutdown executor before loop.close()
-  - Windows: WindowsSelectorEventLoopPolicy applied inside runner (not globally forced)
   - Compatible with Python 3.10 / 3.11 / 3.12 / 3.14
 
 Updated in TASK-LLM-BENCHMARK-HC-RUNNER-WINDOWS-SELECT-FD-FIX-001-v1:
   - Remove WindowsSelectorEventLoopPolicy — select() cannot handle C512+ sockets
-  - Add _new_high_concurrency_event_loop(): Windows C512+ → ProactorEventLoop (IOCP)
-  - run_async_clean() now accepts max_concurrency kwarg, delegates to loop factory
-  - client_resource_error taxonomy extended: "too many file descriptors in select()"
+  - run_async_clean() accepts max_concurrency kwarg
+  - client_resource_error taxonomy: "too many file descriptors in select()"
+
+Updated in TASK-LLM-BENCHMARK-HC-RUNNER-WINDOWS-EVENTLOOP-REGRESSION-FIX-002-v1:
+  - Rename loop factory: old name → _new_hc_event_loop
+  - Use asyncio.new_event_loop() uniformly (respects Python default policy)
+  - Python 3.8+ default on Windows IS ProactorEventLoop — no explicit call needed
+  - Post-creation SelectorEventLoop guard on Windows C512+: detect-and-raise
+  - Never construct ProactorEventLoop directly (policy-unaware, fragile)
 """
 from __future__ import annotations
 
 
-def _new_high_concurrency_event_loop(max_concurrency: int):
-    """Create an event loop appropriate for *max_concurrency* concurrent sockets.
+def _new_hc_event_loop(max_concurrency: int):
+    """Create an event loop for *max_concurrency* concurrent sockets.
 
-    Windows C512+ rationale
-    -----------------------
-    ``SelectorEventLoop`` (and therefore ``WindowsSelectorEventLoopPolicy``) uses
-    the Win32 ``select()`` system call which is limited to FD_SETSIZE=512 file
-    descriptors.  A C512 sweep opens ≥512 simultaneous HTTP streaming sockets, so
-    ``select()`` reliably raises::
+    Design
+    ------
+    We call ``asyncio.new_event_loop()`` unconditionally and let Python's
+    current event-loop *policy* decide the concrete implementation.
 
-        OSError: [WinError ...] too many file descriptors in select()
+    **Why not instantiate ProactorEventLoop directly?**
 
-    ``ProactorEventLoop`` (IOCP) has no such ceiling and is the correct choice for
-    Windows high-concurrency HTTP workloads.
+    Calling the class directly bypasses the registered policy.  It also
+    breaks if the class requires arguments or is subclassed by a third-party
+    framework.  More importantly, it does not match the historical behaviour
+    that made Windows C512/C1024 work: Python 3.8+ registers
+    ``DefaultEventLoopPolicy`` whose ``new_event_loop()`` factory returns a
+    ``ProactorEventLoop`` on Windows.  Calling ``asyncio.new_event_loop()``
+    reproduces that factory call exactly.
 
-    Platform behaviour
-    ------------------
-    * Windows, max_concurrency >= 512 → ``ProactorEventLoop`` (IOCP).
-      Raises ``RuntimeError`` with actionable guidance if Proactor is unavailable.
-    * Windows, max_concurrency < 512  → ``asyncio.new_event_loop()`` (system default;
-      Python 3.8+ default on Windows is already Proactor unless overridden).
-    * Linux / macOS                   → ``asyncio.new_event_loop()`` (epoll / kqueue).
+    **WindowsSelectorEventLoopPolicy is explicitly forbidden here.**
+
+    ``WindowsSelectorEventLoopPolicy.new_event_loop()`` returns a
+    ``SelectorEventLoop``, which uses the Win32 ``select()`` syscall.
+    That syscall is hard-limited to FD_SETSIZE=512 file descriptors, so
+    any C512+ sweep immediately raises::
+
+        OSError: too many file descriptors in select()
+
+    We perform a *post-creation* type check: if the returned loop happens to
+    be a SelectorEventLoop on Windows when max_concurrency >= 512, we raise
+    with actionable guidance rather than crashing mid-sweep.
+
+    Platform summary
+    ----------------
+    * Windows (any concurrency) → ``asyncio.new_event_loop()``
+      Produces ``ProactorEventLoop`` (IOCP) by default in Python 3.8+.
+      Guard raises ``RuntimeError`` if a SelectorEventLoop sneaks in for
+      concurrency >= 512.
+    * Linux / macOS             → ``asyncio.new_event_loop()``
+      Produces ``SelectorEventLoop`` backed by epoll/kqueue — no FD ceiling.
     """
     import asyncio
     import sys
 
-    if sys.platform.startswith("win"):
-        if max_concurrency >= 512:
-            if hasattr(asyncio, "ProactorEventLoop"):
-                return asyncio.ProactorEventLoop()
-            raise RuntimeError(
-                "Windows C512+ high-concurrency sweep requires ProactorEventLoop (IOCP) "
-                "because select() is limited to FD_SETSIZE=512 file descriptors and "
-                "cannot handle this many simultaneous sockets "
-                "(too many file descriptors in select()). "
-                "Current Python runtime does not provide asyncio.ProactorEventLoop. "
-                "Please run C512+ sweep on Linux, or upgrade to Python 3.8+ which "
-                "ships ProactorEventLoop on Windows."
-            )
-        # For lower concurrency on Windows, use the system default loop.
-        # (Python 3.8+ default is ProactorEventLoop, which is fine for
-        # small aiohttp workloads too.)
-        return asyncio.new_event_loop()
+    loop = asyncio.new_event_loop()
 
-    # Linux / macOS: default epoll/kqueue loop — no ceiling on FD count.
-    return asyncio.new_event_loop()
+    # Post-creation guard: detect a SelectorEventLoop on Windows C512+.
+    # This happens when the process-level policy was overridden to
+    # WindowsSelectorEventLoopPolicy before run_async_clean() was called.
+    if sys.platform.startswith("win") and max_concurrency >= 512:
+        loop_name = type(loop).__name__
+        if "Selector" in loop_name:
+            loop.close()
+            raise RuntimeError(
+                f"Windows C512+ high-concurrency sweep cannot run on "
+                f"{loop_name} / select() — select() is limited to "
+                f"FD_SETSIZE=512 file descriptors and will raise "
+                f"\"too many file descriptors in select()\" immediately.\n\n"
+                f"Cause: the process event-loop policy was set to "
+                f"WindowsSelectorEventLoopPolicy (or equivalent) before the "
+                f"HC runner started.\n\n"
+                f"Fix: do not set WindowsSelectorEventLoopPolicy anywhere in "
+                f"this process, or run C512+ sweep on Linux."
+            )
+
+    return loop
 
 
 def run_async_clean(coro, *, max_concurrency: int = 1):
     """Run *coro* in a fresh event loop with full, safe cleanup on exit.
 
-    Replaces bare ``asyncio.run()`` or ``loop.run_until_complete()`` / ``loop.close()``
-    patterns that leave dangling async generators or pending tasks, causing
-    ``RuntimeError: Event loop is closed`` on Windows and Python 3.14.
+    Replaces bare ``asyncio.run()`` or ``loop.run_until_complete()`` /
+    ``loop.close()`` patterns that leave dangling async generators or pending
+    tasks, causing ``RuntimeError: Event loop is closed`` on Windows and
+    Python 3.14.
 
-    The loop is created by :func:`_new_high_concurrency_event_loop` which selects
-    ``ProactorEventLoop`` on Windows when *max_concurrency* >= 512 to avoid the
-    ``select()`` FD_SETSIZE=512 limit ("too many file descriptors in select()").
+    The loop is created by :func:`_new_hc_event_loop` which calls
+    ``asyncio.new_event_loop()`` and relies on the Python default policy.
+    On Windows Python 3.8+ the default policy returns ``ProactorEventLoop``
+    (IOCP), which handles thousands of simultaneous sockets without the
+    ``select()`` FD_SETSIZE=512 ceiling that causes
+    ``too many file descriptors in select()`` at C512+.
 
-    Shutdown sequence (mirrors what asyncio.run() does internally):
+    Shutdown sequence (mirrors ``asyncio.run()`` internals):
       1. Cancel all pending tasks in the loop
       2. Await the cancelled tasks (return_exceptions=True)
-      3. loop.shutdown_asyncgens() — closes async-generator finalizers that
-         would otherwise call loop.call_soon on a closed loop
-      4. loop.shutdown_default_executor() — drains the thread pool
-      5. asyncio.set_event_loop(None) then loop.close()
+      3. ``loop.shutdown_asyncgens()`` — closes async-generator finalizers
+         that would otherwise call ``loop.call_soon`` on a closed loop
+      4. ``loop.shutdown_default_executor()`` — drains the thread pool
+      5. ``asyncio.set_event_loop(None)`` then ``loop.close()``
+
+    Parameters
+    ----------
+    coro:
+        The top-level coroutine to run.
+    max_concurrency:
+        Maximum number of concurrent sockets/requests.  Forwarded to
+        :func:`_new_hc_event_loop` for the Windows SelectorEventLoop guard.
 
     Compatible with Python 3.10 / 3.11 / 3.12 / 3.14.
     """
     import asyncio
 
-    loop = _new_high_concurrency_event_loop(max_concurrency)
+    loop = _new_hc_event_loop(max_concurrency)
     try:
         asyncio.set_event_loop(loop)
         return loop.run_until_complete(coro)
@@ -113,7 +149,7 @@ def run_async_clean(coro, *, max_concurrency: int = 1):
                     asyncio.gather(*pending, return_exceptions=True))
             # ── Step 3: close async generators ──────────────────────────
             # Prevents "RuntimeError: Event loop is closed" from generator
-            # __del__ or __aexit__ methods that call loop.call_soon/call_soon_threadsafe
+            # __del__ or __aexit__ that call loop.call_soon/call_soon_threadsafe
             loop.run_until_complete(loop.shutdown_asyncgens())
             # ── Step 4: drain default executor (thread pool) ─────────────
             try:

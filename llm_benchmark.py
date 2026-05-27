@@ -38,8 +38,8 @@ except ImportError:
 
 # Windows asyncio: do NOT force WindowsSelectorEventLoopPolicy globally.
 # select() is limited to FD_SETSIZE=512 which causes "too many file descriptors
-# in select()" at C512+ concurrency.  The HC runner selects ProactorEventLoop
-# (IOCP) via _new_high_concurrency_event_loop() when max_concurrency >= 512.
+# in select()" at C512+ concurrency.  The HC runner uses asyncio.new_event_loop()
+# via _new_hc_event_loop() — Python 3.8+ default on Windows IS ProactorEventLoop.
 
 # Resolve paths relative to script location (fixes double-click on Windows)
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -7444,7 +7444,7 @@ class LLMBenchmarkApp:
 
         # ── Windows C512+ guard ──────────────────────────────────────────
         # This coroutine runs inside the loop created by run_async_clean() via
-        # _new_high_concurrency_event_loop().  If somehow a SelectorEventLoop
+        # _new_hc_event_loop().  If somehow a SelectorEventLoop
         # sneaked in (e.g. an outer policy set it), fail fast with a clear message
         # rather than crashing mid-sweep with "too many file descriptors in select()".
         if sys.platform.startswith("win") and max_conc >= 512:
