@@ -93,6 +93,24 @@ from llm_benchmark_app.result_store import (
     rs_compare_runs, RESULTS_ROOT as RS_RESULTS_ROOT,
 )
 # ── end module imports ────────────────────────────────────────────────────────
+
+def open_directory(path: str) -> None:
+    """Open *path* in the native file manager (cross-platform).
+
+    Windows: os.startfile  |  macOS: open  |  Linux: xdg-open
+    Raises FileNotFoundError if *path* does not exist.
+    """
+    import subprocess as _sp, sys as _sys
+    if not os.path.isdir(path):
+        raise FileNotFoundError(f"Directory not found: {path}")
+    if _sys.platform == "win32":
+        os.startfile(path)
+    elif _sys.platform == "darwin":
+        _sp.Popen(["open", path])
+    else:
+        _sp.Popen(["xdg-open", path])
+
+
 def setup_logging():
     logging.basicConfig(
         level=logging.DEBUG,
@@ -1710,54 +1728,6 @@ class LLMBenchmarkApp:
             value="fixed")
         fixed_radio.pack(side=tk.LEFT, padx=(C_STYLE["pad_lg"], 0))
         self._register_i18n_widget(fixed_radio, "label.output_mode_fixed")
-
-        # ═══ Group 1b: 测试目标与模式（客户验收） ═══
-        obj_frame = ttk.LabelFrame(parent, text="测试目标与模式", padding=C_STYLE["pad_md"])
-        obj_frame.pack(fill=tk.X, pady=(0, C_STYLE["gap_md"]))
-        obj_frame.columnconfigure(1, weight=1)
-
-        # Benchmark Objective
-        tk.Label(obj_frame, text="测试目标", font=C_STYLE["font_body"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
-            row=0, column=0, sticky="w", padx=(0, C_STYLE["pad_sm"]),
-            pady=(C_STYLE["gap_sm"], 0))
-        from llm_benchmark_app.customer_metrics import (
-            OBJECTIVE_SINGLE_SESSION, OBJECTIVE_PEAK_THROUGHPUT,
-            MODE_REAL_API, MODE_ENGINE_CORE,
-        )
-        self._benchmark_objective_var = tk.StringVar(value=OBJECTIVE_SINGLE_SESSION)
-        obj_combo = ttk.Combobox(
-            obj_frame, textvariable=self._benchmark_objective_var,
-            values=[
-                OBJECTIVE_SINGLE_SESSION,
-                OBJECTIVE_PEAK_THROUGHPUT,
-            ],
-            width=34, state="readonly")
-        obj_combo.grid(row=0, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
-        tk.Label(obj_frame,
-                 text="单会话最大生成速度 / 峰值吞吐扫描",
-                 font=C_STYLE["font_small"], bg=C_STYLE["bg_card"],
-                 fg=C_STYLE["text_muted"]).grid(
-            row=0, column=2, sticky="w", padx=(C_STYLE["pad_sm"], 0),
-            pady=(C_STYLE["gap_sm"], 0))
-
-        # Benchmark Mode
-        tk.Label(obj_frame, text="测试模式", font=C_STYLE["font_body"],
-                 bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"]).grid(
-            row=1, column=0, sticky="w", padx=(0, C_STYLE["pad_sm"]),
-            pady=(C_STYLE["gap_sm"], 0))
-        self._benchmark_mode_var = tk.StringVar(value=MODE_REAL_API)
-        mode_combo = ttk.Combobox(
-            obj_frame, textvariable=self._benchmark_mode_var,
-            values=[MODE_REAL_API, MODE_ENGINE_CORE],
-            width=34, state="readonly")
-        mode_combo.grid(row=1, column=1, sticky="w", pady=(C_STYLE["gap_sm"], 0))
-        tk.Label(obj_frame,
-                 text="真实 API 体验 / 引擎核心性能",
-                 font=C_STYLE["font_small"], bg=C_STYLE["bg_card"],
-                 fg=C_STYLE["text_muted"]).grid(
-            row=1, column=2, sticky="w", padx=(C_STYLE["pad_sm"], 0),
-            pady=(C_STYLE["gap_sm"], 0))
 
         # ═══ Group 2: 负载参数 ═══
         load = ttk.LabelFrame(parent, text="负载参数", padding=C_STYLE["pad_md"])
@@ -3470,10 +3440,9 @@ class LLMBenchmarkApp:
             text="正在执行压力测试...", fg=C_STYLE["accent"]))
         self.root.after(0, lambda: self.progress.configure(maximum=total))
 
-        _bench_objective = getattr(self, "_benchmark_objective_var",
-                                    None) and self._benchmark_objective_var.get()
-        _bench_mode      = getattr(self, "_benchmark_mode_var",
-                                    None) and self._benchmark_mode_var.get()
+        # Objective and mode are fixed for single-run benchmarks
+        _bench_objective = "single_session_decode_speed"
+        _bench_mode      = "real_api_experience"
 
         def _done_with_warmup(s):
             s["warmup_requests"] = warmup
@@ -7352,10 +7321,9 @@ class LLMBenchmarkApp:
         }
 
         # ── Customer-facing peak throughput summary ──
-        _sweep_obj  = getattr(self, "_benchmark_objective_var", None)
-        _sweep_mode = getattr(self, "_benchmark_mode_var", None)
-        _bench_objective = _sweep_obj.get() if _sweep_obj else "peak_throughput_sweep"
-        _bench_mode      = _sweep_mode.get() if _sweep_mode else "real_api_experience"
+        # Objective and mode are fixed for sweep benchmarks
+        _bench_objective = "peak_throughput_sweep"
+        _bench_mode      = "real_api_experience"
         try:
             from llm_benchmark_app.customer_metrics import compute_peak_throughput_summary
             _peak_summary = compute_peak_throughput_summary(cases)
@@ -7600,10 +7568,9 @@ class LLMBenchmarkApp:
         hc_peak_metrics = self._compute_hc_peak_metrics(cases, concurrency_levels)
 
         # ── Customer-facing peak throughput summary (HC path) ──
-        _hc_obj  = getattr(self, "_benchmark_objective_var", None)
-        _hc_mode = getattr(self, "_benchmark_mode_var", None)
-        _hc_bench_objective = _hc_obj.get() if _hc_obj else "peak_throughput_sweep"
-        _hc_bench_mode      = _hc_mode.get() if _hc_mode else "real_api_experience"
+        # Objective and mode are fixed for HC sweep benchmarks
+        _hc_bench_objective = "peak_throughput_sweep"
+        _hc_bench_mode      = "real_api_experience"
         try:
             from llm_benchmark_app.customer_metrics import compute_peak_throughput_summary
             _hc_peak_summary = compute_peak_throughput_summary(cases)
@@ -9301,42 +9268,82 @@ class LLMBenchmarkApp:
         btn_bar.pack(fill=tk.X, pady=(0, C_STYLE["pad_sm"]))
 
         def _open_folder():
-            if run_dir and os.path.isdir(run_dir):
-                import subprocess, sys
-                if sys.platform == "win32":
-                    os.startfile(run_dir)
-                elif sys.platform == "darwin":
-                    subprocess.Popen(["open", run_dir])
-                else:
-                    subprocess.Popen(["xdg-open", run_dir])
+            _arts = self._resolve_history_artifacts(ref)
+            _rdir = _arts.get("report_dir") or run_dir
+            if _rdir and os.path.isdir(_rdir):
+                try:
+                    open_directory(_rdir)
+                except Exception as _e:
+                    messagebox.showerror("错误" if zh else "Error", str(_e))
+            else:
+                _checked = _rdir or run_dir or ("未知" if zh else "unknown")
+                messagebox.showwarning(
+                    "提示" if zh else "Warning",
+                    (f"未找到结果目录。\n\n已检查路径：\n{_checked}"
+                     if zh else
+                     f"Directory not found.\n\nChecked path:\n{_checked}"),
+                )
 
         def _regen_report():
-            if not run_dir:
-                messagebox.showwarning("提示" if zh else "Warning",
-                                       "result.json 路径未知，无法重新生成。")
+            _arts = self._resolve_history_artifacts(ref)
+            _rdir = _arts.get("report_dir") or run_dir
+            if not _rdir:
+                messagebox.showwarning(
+                    "提示" if zh else "Warning",
+                    ("结果目录未知，无法重新生成报告。"
+                     if zh else
+                     "Result directory unknown; cannot regenerate report."),
+                )
                 return
             def _gen_fn(result_dict):
                 return self._generate_report_v2(result_dict, {})
-            ok = rs_regenerate_report(run_dir, _gen_fn)
+            ok = rs_regenerate_report(_rdir, _gen_fn)
             if ok:
                 _reload_report()
-                messagebox.showinfo("完成" if zh else "Done",
-                                    "报告已重新生成。" if zh else "Report regenerated.")
+                messagebox.showinfo(
+                    "完成" if zh else "Done",
+                    "报告已重新生成。" if zh else "Report regenerated.",
+                )
             else:
-                messagebox.showerror("失败" if zh else "Error",
-                                     "重新生成失败，result.json 可能缺失。")
+                messagebox.showerror(
+                    "失败" if zh else "Error",
+                    (f"重新生成报告失败：\n未找到 result JSON。\n\n"
+                     f"已检查目录：\n{_rdir}\n\n"
+                     f"请确认目录下存在 result*.json 或 sweep_result*.json。"
+                     if zh else
+                     f"Report regeneration failed:\nresult JSON not found.\n\n"
+                     f"Checked directory:\n{_rdir}\n\n"
+                     f"Make sure result*.json or sweep_result*.json exists there."),
+                )
 
         def _regen_chart():
-            if not run_dir:
+            _arts = self._resolve_history_artifacts(ref)
+            _rdir = _arts.get("report_dir") or run_dir
+            if not _rdir:
+                messagebox.showwarning(
+                    "提示" if zh else "Warning",
+                    ("结果目录未知，无法重新生成图表。"
+                     if zh else
+                     "Result directory unknown; cannot regenerate chart."),
+                )
                 return
-            p = rs_regenerate_chart(run_dir)
+            p = rs_regenerate_chart(_rdir)
             if p:
                 _reload_hist_image()
-                messagebox.showinfo("完成" if zh else "Done",
-                                    f"图表已重新生成:\n{p}" if zh else f"Chart regenerated:\n{p}")
+                messagebox.showinfo(
+                    "完成" if zh else "Done",
+                    f"图表已重新生成:\n{p}" if zh else f"Chart regenerated:\n{p}",
+                )
             else:
-                messagebox.showerror("失败" if zh else "Error",
-                                     "重新生成失败，可能缺少 matplotlib 或无成功请求数据。")
+                messagebox.showerror(
+                    "失败" if zh else "Error",
+                    (f"重新生成图表失败：\n未找到可用于绘图的 result JSON 或历史指标数据。\n\n"
+                     f"已检查目录：\n{_rdir}"
+                     if zh else
+                     f"Chart regeneration failed:\n"
+                     f"No result JSON or metrics data found for plotting.\n\n"
+                     f"Checked directory:\n{_rdir}"),
+                )
 
         ttk.Button(btn_bar, text="📂 打开结果目录" if zh else "📂 Open Folder",
                    style="Secondary.TButton", command=_open_folder).pack(
@@ -10136,14 +10143,22 @@ class LLMBenchmarkApp:
         """
         from pathlib import Path as _Path
         result = {
-            "result_json": "", "report_md": "", "chart_png": "",
-            "customer_pdf": "", "customer_docx": "",
+            "result_json": "", "report_txt": "", "report_md": "",
+            "chart_png": "", "customer_pdf": "", "customer_docx": "",
         }
         if not report_dir:
             return result
         p = _Path(report_dir)
         if not p.is_dir():
             return result
+
+        # ── report.txt ────────────────────────────────────────────────────
+        txt_cands = sorted(
+            p.glob("report*.txt"),
+            key=lambda f: f.stat().st_mtime, reverse=True,
+        )
+        if txt_cands:
+            result["report_txt"] = str(txt_cands[0])
 
         # ── result JSON ───────────────────────────────────────────────────
         # Prefer files whose stem starts with "result" or "sweep"; exclude
@@ -10177,10 +10192,17 @@ class LLMBenchmarkApp:
         if md_cands:
             result["report_md"] = str(md_cands[0])
 
-        # ── PNG chart ─────────────────────────────────────────────────────
-        chart_kws = ("chart", "analysis", "sweep", "benchmark")
+        # ── PNG chart — scan root dir and charts/ subdir ──────────────────
+        chart_kws = ("chart", "analysis", "sweep", "benchmark", "histogram", "e2e")
+        png_search_dirs = [p]
+        _charts_sub = p / "charts"
+        if _charts_sub.is_dir():
+            png_search_dirs.append(_charts_sub)
+        _all_pngs: list = []
+        for _sd in png_search_dirs:
+            _all_pngs.extend(_sd.glob("*.png"))
         png_cands = sorted(
-            p.glob("*.png"),
+            _all_pngs,
             key=lambda f: (
                 not any(kw in f.stem.lower() for kw in chart_kws),
                 -f.stat().st_mtime,
@@ -10231,6 +10253,7 @@ class LLMBenchmarkApp:
         arts = {
             "report_dir":   "",
             "result_json":  "",
+            "report_txt":   "",
             "report_md":    "",
             "chart_png":    "",
             "customer_pdf": "",
@@ -10238,12 +10261,51 @@ class LLMBenchmarkApp:
             "pdf_log":      "",
         }
 
-        # Seed report_dir from row / sweep_result
+        # Seed report_dir from row / sweep_result / ref.run_dir
         arts["report_dir"] = (
-            (row.get("report_dir") if isinstance(row, dict) else "")
+            ref.get("run_dir", "")
+            or (row.get("report_dir") if isinstance(row, dict) else "")
             or sweep_result.get("report_dir", "")
             or ""
         )
+
+        # ── Tier 0.5: ResultStore source — direct path resolution ─────────
+        if ref.get("source") == "result_store":
+            _rs_dir = ref.get("run_dir", "") or arts["report_dir"]
+            if _rs_dir and os.path.isdir(_rs_dir):
+                # report.txt candidates
+                for _rname in ("report.txt", "report_v2.txt"):
+                    _rp = os.path.join(_rs_dir, _rname)
+                    if os.path.isfile(_rp):
+                        arts["report_txt"] = _rp
+                        break
+                if not arts["report_txt"]:
+                    _txts = sorted(
+                        (p for p in __import__("pathlib").Path(_rs_dir).glob("report*.txt")
+                         if p.is_file()),
+                        key=lambda f: f.stat().st_mtime, reverse=True,
+                    )
+                    if _txts:
+                        arts["report_txt"] = str(_txts[0])
+                # result.json candidates
+                for _jname in ("result.json",):
+                    _jp = os.path.join(_rs_dir, _jname)
+                    if os.path.isfile(_jp):
+                        arts["result_json"] = _jp
+                        break
+                # chart PNG — check root dir and charts/ subdir
+                _charts_dirs = [_rs_dir, os.path.join(_rs_dir, "charts")]
+                for _cdir in _charts_dirs:
+                    if not os.path.isdir(_cdir):
+                        continue
+                    _pngs = sorted(
+                        (p for p in __import__("pathlib").Path(_cdir).glob("*.png")
+                         if p.is_file()),
+                        key=lambda f: f.stat().st_mtime, reverse=True,
+                    )
+                    if _pngs:
+                        arts["chart_png"] = str(_pngs[0])
+                        break
 
         # ── Tier 1: benchmark_artifacts table (result_db only) ────────────
         if ref.get("source") == "result_db":
@@ -10309,7 +10371,7 @@ class LLMBenchmarkApp:
         # ── Tier 5: scan report_dir ────────────────────────────────────────
         if arts["report_dir"] and os.path.isdir(arts["report_dir"]):
             scanned = self._scan_report_dir_for_artifacts(arts["report_dir"])
-            for k in ("result_json", "report_md", "chart_png",
+            for k in ("result_json", "report_txt", "report_md", "chart_png",
                       "customer_pdf", "customer_docx"):
                 if not arts[k] and scanned.get(k):
                     arts[k] = scanned[k]
