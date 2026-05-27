@@ -175,7 +175,6 @@ if ($verifyExit -eq 0) {
         Write-Host ""
         Write-Host "  To run the benchmark GUI:" -ForegroundColor Cyan
         Write-Host "    python llm_benchmark.py"
-        Write-Host "    # or double-click llm_benchmark.pyw"
     }
     Write-Host "=====================================================================" -ForegroundColor Green
 } else {

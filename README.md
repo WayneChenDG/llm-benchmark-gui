@@ -39,8 +39,6 @@ python3 llm_benchmark.py
 # 调试模式
 python3 llm_benchmark.py -debug
 
-# Windows 可双击
-# llm_benchmark.pyw
 ```
 
 Ubuntu 桌面快捷方式：
@@ -244,9 +242,7 @@ language = zh_CN
 ```text
 llm-benchmark/
 ├── llm_benchmark.py              # 主程序（GUI + 控制层）
-├── llm_benchmark.pyw             # Windows 无控制台启动
 ├── llm_benchmark.desktop         # Ubuntu 桌面启动
-├── llm_benchmark.svg             # 应用图标
 ├── logo.png                      # JISUMAN header logo（可选）
 ├── llm_benchmark.ini             # 配置文件（自动生成）
 ├── llm_benchmark_history.db      # 旧版历史数据库（自动生成）
