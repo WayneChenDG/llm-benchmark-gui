@@ -41,12 +41,6 @@ python3 llm_benchmark.py -debug
 
 ```
 
-Ubuntu 桌面快捷方式：
-
-```bash
-cp llm_benchmark.desktop ~/Desktop/
-```
-
 ### 安装依赖
 
 ```bash
@@ -242,7 +236,6 @@ language = zh_CN
 ```text
 llm-benchmark/
 ├── llm_benchmark.py              # 主程序（GUI + 控制层）
-├── llm_benchmark.desktop         # Ubuntu 桌面启动
 ├── logo.png                      # JISUMAN header logo（可选）
 ├── llm_benchmark.ini             # 配置文件（自动生成）
 ├── llm_benchmark_history.db      # 旧版历史数据库（自动生成）
