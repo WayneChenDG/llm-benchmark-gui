@@ -1,29 +1,90 @@
 """high_concurrency_runner.py — HC async runner helpers.
 
-Module-level helper functions for the high-concurrency (asyncio + aiohttp) sweep runner.
+TASK-BENCHMARK-RESULTS-HISTORY-REPORT-V2-001
 Extracted from llm_benchmark.py (TASK-LLM-BENCHMARK-MODULE-SPLIT-TOKEN-HC-001-v1).
+
 Updated in TASK-LLM-BENCHMARK-TOKEN-CALIBRATION-HIGH-CONCURRENCY-001-v1:
   - Added connection_reset to failure taxonomy
   - Windows WinError 10054 → connection_reset (connection reset by peer)
   - Windows WinError 10060 → connect_timeout (WSAETIMEDOUT, connection attempt timed out)
+
 Updated in TASK-LLM-BENCHMARK-TOKEN-CALIBRATION-HC-RUNNER-001-v1:
   - Taxonomy extended: connect_timeout as separate category from timeout
   - WinError 10060 corrected to connect_timeout (was connect_error)
+
 Updated in TASK-LLM-BENCHMARK-HC-RUNNER-EVENT-LOOP-CLOSE-FIX-001-v1:
   - Add run_async_clean() — safe async entry point with full event-loop lifecycle
   - Cancel pending tasks, drain asyncgens, shutdown executor before loop.close()
   - Windows: WindowsSelectorEventLoopPolicy applied inside runner (not globally forced)
   - Compatible with Python 3.10 / 3.11 / 3.12 / 3.14
+
+Updated in TASK-LLM-BENCHMARK-HC-RUNNER-WINDOWS-SELECT-FD-FIX-001-v1:
+  - Remove WindowsSelectorEventLoopPolicy — select() cannot handle C512+ sockets
+  - Add _new_high_concurrency_event_loop(): Windows C512+ → ProactorEventLoop (IOCP)
+  - run_async_clean() now accepts max_concurrency kwarg, delegates to loop factory
+  - client_resource_error taxonomy extended: "too many file descriptors in select()"
 """
 from __future__ import annotations
 
 
-def run_async_clean(coro):
+def _new_high_concurrency_event_loop(max_concurrency: int):
+    """Create an event loop appropriate for *max_concurrency* concurrent sockets.
+
+    Windows C512+ rationale
+    -----------------------
+    ``SelectorEventLoop`` (and therefore ``WindowsSelectorEventLoopPolicy``) uses
+    the Win32 ``select()`` system call which is limited to FD_SETSIZE=512 file
+    descriptors.  A C512 sweep opens ≥512 simultaneous HTTP streaming sockets, so
+    ``select()`` reliably raises::
+
+        OSError: [WinError ...] too many file descriptors in select()
+
+    ``ProactorEventLoop`` (IOCP) has no such ceiling and is the correct choice for
+    Windows high-concurrency HTTP workloads.
+
+    Platform behaviour
+    ------------------
+    * Windows, max_concurrency >= 512 → ``ProactorEventLoop`` (IOCP).
+      Raises ``RuntimeError`` with actionable guidance if Proactor is unavailable.
+    * Windows, max_concurrency < 512  → ``asyncio.new_event_loop()`` (system default;
+      Python 3.8+ default on Windows is already Proactor unless overridden).
+    * Linux / macOS                   → ``asyncio.new_event_loop()`` (epoll / kqueue).
+    """
+    import asyncio
+    import sys
+
+    if sys.platform.startswith("win"):
+        if max_concurrency >= 512:
+            if hasattr(asyncio, "ProactorEventLoop"):
+                return asyncio.ProactorEventLoop()
+            raise RuntimeError(
+                "Windows C512+ high-concurrency sweep requires ProactorEventLoop (IOCP) "
+                "because select() is limited to FD_SETSIZE=512 file descriptors and "
+                "cannot handle this many simultaneous sockets "
+                "(too many file descriptors in select()). "
+                "Current Python runtime does not provide asyncio.ProactorEventLoop. "
+                "Please run C512+ sweep on Linux, or upgrade to Python 3.8+ which "
+                "ships ProactorEventLoop on Windows."
+            )
+        # For lower concurrency on Windows, use the system default loop.
+        # (Python 3.8+ default is ProactorEventLoop, which is fine for
+        # small aiohttp workloads too.)
+        return asyncio.new_event_loop()
+
+    # Linux / macOS: default epoll/kqueue loop — no ceiling on FD count.
+    return asyncio.new_event_loop()
+
+
+def run_async_clean(coro, *, max_concurrency: int = 1):
     """Run *coro* in a fresh event loop with full, safe cleanup on exit.
 
     Replaces bare ``asyncio.run()`` or ``loop.run_until_complete()`` / ``loop.close()``
     patterns that leave dangling async generators or pending tasks, causing
     ``RuntimeError: Event loop is closed`` on Windows and Python 3.14.
+
+    The loop is created by :func:`_new_high_concurrency_event_loop` which selects
+    ``ProactorEventLoop`` on Windows when *max_concurrency* >= 512 to avoid the
+    ``select()`` FD_SETSIZE=512 limit ("too many file descriptors in select()").
 
     Shutdown sequence (mirrors what asyncio.run() does internally):
       1. Cancel all pending tasks in the loop
@@ -33,21 +94,11 @@ def run_async_clean(coro):
       4. loop.shutdown_default_executor() — drains the thread pool
       5. asyncio.set_event_loop(None) then loop.close()
 
-    Windows: sets WindowsSelectorEventLoopPolicy so that aiohttp's SSL/selector
-    requirements are satisfied without global side-effects.
-
     Compatible with Python 3.10 / 3.11 / 3.12 / 3.14.
     """
     import asyncio
-    import sys
 
-    if sys.platform.startswith("win"):
-        try:
-            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-        except Exception:
-            pass
-
-    loop = asyncio.new_event_loop()
+    loop = _new_high_concurrency_event_loop(max_concurrency)
     try:
         asyncio.set_event_loop(loop)
         return loop.run_until_complete(coro)
@@ -88,7 +139,8 @@ def _hc_classify_error(exc: Exception) -> str:
       server_4xx         — server returned 4xx status
       json_parse_error   — response JSON could not be parsed
       stream_parse_error — SSE/stream parsing error
-      client_resource_error — OS resource exhaustion (too many files, etc.)
+      client_resource_error — OS resource exhaustion (too many files / too many file
+                              descriptors in select(), EMFILE, etc.)
       cancelled          — asyncio task cancelled
       unknown            — unclassified
 
@@ -104,6 +156,10 @@ def _hc_classify_error(exc: Exception) -> str:
         return "connection_reset"
     if "WinError 10060" in exc_str or "winerror 10060" in exc_str:
         return "connect_timeout"
+    # OS resource exhaustion — too many open files / too many file descriptors in select()
+    if ("too many file descriptors" in msg or "too many open files" in msg
+            or "emfile" in msg or "[errno 24]" in msg):
+        return "client_resource_error"
     # Generic patterns (order matters: more specific checks first)
     if "connecttimeout" in name or "connect_timeout" in msg or "wsaetimedout" in msg:
         return "connect_timeout"

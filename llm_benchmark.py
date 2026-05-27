@@ -36,12 +36,10 @@ except ImportError:
     _aiohttp_mod = None
     _AIOHTTP_AVAILABLE = False
 
-# Windows asyncio: use Selector policy to avoid proactor/SSL issues with aiohttp
-if sys.platform.startswith("win"):
-    try:
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    except AttributeError:
-        pass
+# Windows asyncio: do NOT force WindowsSelectorEventLoopPolicy globally.
+# select() is limited to FD_SETSIZE=512 which causes "too many file descriptors
+# in select()" at C512+ concurrency.  The HC runner selects ProactorEventLoop
+# (IOCP) via _new_high_concurrency_event_loop() when max_concurrency >= 512.
 
 # Resolve paths relative to script location (fixes double-click on Windows)
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -421,6 +419,9 @@ I18N = {
             "当前扫测包含 C512 或更高并发，可能同时建立大量 HTTP streaming 连接。\n"
             "这会显著增加客户端、网络和服务端压力，并可能持续较长时间。\n"
             "建议先确认服务端已稳定运行，并优先使用 concurrency × 1 或 × 2 进行试跑。\n\n"
+            "⚠ Windows 客户端提示：C512/C768/C1024 需要 ProactorEventLoop (IOCP)。\n"
+            "  本工具将自动使用 Proactor；如出现 select/file descriptor 错误，\n"
+            "  请改用 Linux 客户端或将并发降至 C384 以下。\n\n"
             "是否继续？"
         ),
         "sweep.aiohttp_required": (
@@ -699,6 +700,10 @@ I18N = {
             "This sweep includes C512 or higher concurrency and may open many HTTP streaming connections.\n"
             "It can heavily load the client, network, and server, and may run for a long time.\n"
             "Start with concurrency × 1 or × 2 before formal validation.\n\n"
+            "⚠ Windows clients: C512/C768/C1024 requires ProactorEventLoop (IOCP).\n"
+            "  This tool selects Proactor automatically. If you see select() or\n"
+            "  file descriptor errors, switch to a Linux client or reduce concurrency\n"
+            "  to C384 or below.\n\n"
             "Continue?"
         ),
         "sweep.aiohttp_required": (
@@ -7415,7 +7420,8 @@ class LLMBenchmarkApp:
             self._run_sweep_hc_async(
                 api_url, api_key, model, messages, max_tokens, temperature,
                 concurrency_levels, request_rule, fixed_total,
-                stream, warmup, output_length_mode))
+                stream, warmup, output_length_mode),
+            max_concurrency=max(concurrency_levels) if concurrency_levels else 1)
 
     async def _run_sweep_hc_async(self, api_url, api_key, model, messages,
                                    max_tokens, temperature,
@@ -7435,9 +7441,27 @@ class LLMBenchmarkApp:
         self._append_sweep_status(f"高并发模式: asyncio + aiohttp\n\n")
 
         max_conc = max(concurrency_levels)
+
+        # ── Windows C512+ guard ──────────────────────────────────────────
+        # This coroutine runs inside the loop created by run_async_clean() via
+        # _new_high_concurrency_event_loop().  If somehow a SelectorEventLoop
+        # sneaked in (e.g. an outer policy set it), fail fast with a clear message
+        # rather than crashing mid-sweep with "too many file descriptors in select()".
+        if sys.platform.startswith("win") and max_conc >= 512:
+            _running_loop = asyncio.get_running_loop()
+            if "Selector" in type(_running_loop).__name__:
+                raise RuntimeError(
+                    "Windows C512+ 高并发扫测不能在 SelectorEventLoop / select() 下运行。\n"
+                    "select() 最多只能管理 512 个 socket（FD_SETSIZE 限制），"
+                    "超出后会抛出 \"too many file descriptors in select()\"。\n"
+                    "请使用 ProactorEventLoop，或在 Linux 客户端运行高并发扫测。\n\n"
+                    "Windows C512+ sweep cannot run on SelectorEventLoop/select(). "
+                    "Use ProactorEventLoop or run high-concurrency sweep on Linux."
+                )
+
         connector = aiohttp.TCPConnector(
-            limit=max_conc + 128,
-            limit_per_host=max_conc + 128,
+            limit=max_conc,
+            limit_per_host=max_conc,
             ttl_dns_cache=300,
             enable_cleanup_closed=True,
         )
