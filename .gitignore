@@ -11,8 +11,17 @@ llm_benchmark_report_*.txt
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 
-# Config (contains API keys)
+# Test cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Benchmark run results (filesystem store)
+results/
+
+# Config (contains API keys / local paths)
 *.ini
 
 # IDE
@@ -20,3 +29,7 @@ __pycache__/
 .vscode/
 *.swp
 *.swo
+
+# OS
+.DS_Store
+Thumbs.db
