@@ -50,4 +50,37 @@
 - 文件服务器：`\\192.168.1.254\data\software\installers\jisumen-llm-benchmark\2.1.1\`
 - 构建机：`/opt/llm-benchmark/dist/`
 
-哈希、包内 VERSION 与真机验收结论见下（构建后实测填入）。
+哈希、包内 VERSION 与真机验收结论：
+
+```
+完整版  jisumen-llm-benchmark-2.1.1-linux-x86_64.tar.gz       130,431,764 B (124.4 MiB)
+        sha256 87be63ceff4d907caa0b3f6fbfe253dae959fd16f34348a60a891bbfbdd1ad04
+精简版  jisumen-llm-benchmark-2.1.1-linux-x86_64-slim.tar.gz      939,128 B (0.90 MiB)
+        sha256 648f5360b386543ad91dd00d7f4877f1a1e5e4dce6e99cc87eaeea7d9513cad0
+
+包内 VERSION：version=2.1.1 / arch=x86_64 / python=3.10 / git_rev=ca54f10
+             built_at=2026-09-22T16:05:55+08:00
+```
+
+## 真机验收（隔离目录安装，不触碰在跑服务）
+
+```
+bash packaging/accept-release.sh dist/jisumen-llm-benchmark-2.1.1-linux-x86_64.tar.gz \
+     http://127.0.0.1:8123/v1
+==> 验收结果: PASS=11 FAIL=0
+```
+
+- 包体：sha256 校验通过；不含 ini / results / backups / `__pycache__` / `.db`；含 VERSION + 离线 wheels
+- 隔离安装：`install.sh` 成功；`verify-install.sh` **PASS=16 FAIL=0**（含 GUI 冒烟 12s 存活）
+- 真实负载：安装副本 C1/N2 → `success=2 fail=0 success_rate=100.0 ttft_avg=0.124s`
+
+## 安装（目标机 Linux 桌面 x86_64）
+
+```
+tar -xzf jisumen-llm-benchmark-2.1.1-linux-x86_64.tar.gz
+cd jisumen-llm-benchmark-2.1.1-linux-x86_64 && bash install.sh
+~/jisumen-llm-benchmark/bin/jisumen-benchmark
+```
+
+从 2.1.0 升级：直接装 2.1.1 覆盖即可；配置（`llm_benchmark.ini` 的 url/模型/主题/语言）
+与历史记录（`llm_benchmark_history.db`）在用户目录，不受影响。
