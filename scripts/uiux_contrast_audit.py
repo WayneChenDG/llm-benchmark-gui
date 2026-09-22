@@ -50,6 +50,8 @@ THRESH_LARGE_NONTEXT = 3.0   # large text (>=18pt/14pt bold) and non-text UI (SC
 HEX_RE = re.compile(r"#[0-9A-Fa-f]{6}(?![0-9A-Fa-f])")
 TOKEN_RE = re.compile(r'"([A-Za-z_][A-Za-z0-9_]*)"\s*:\s*"(#[0-9A-Fa-f]{6})"')
 C_STYLE_START_RE = re.compile(r"^TOKENS(?::[^=]*)?\s*=\s*\{", re.MULTILINE)
+# 主题调色板：ui_theme.py 的 _LIGHT / _NAVY 两个 dict 字面量（两套主题都要门禁）
+PALETTE_START_RE = re.compile(r"^_(LIGHT|NAVY)\s*:\s*dict\[str, str\]\s*=\s*\{", re.MULTILINE)
 
 
 # ───────────────────────────── parsing ─────────────────────────────
@@ -66,12 +68,24 @@ def read_source(path: str) -> str:
         raise ParseError("cannot read source file %r: %s" % (path, exc)) from exc
 
 
-def find_c_style_span(text: str) -> tuple[int, int]:
-    """Return (start_offset, end_offset_exclusive) of the C_STYLE dict literal."""
-    m = C_STYLE_START_RE.search(text)
+def find_palette_spans(text: str) -> list:
+    """返回 [(主题名, (start, end))]：_LIGHT 与 _NAVY 两个调色板块各一份。"""
+    spans = [(m.group(1).lower(), find_c_style_span(text, m.start()))
+             for m in PALETTE_START_RE.finditer(text)]
+    if not spans:
+        raise ParseError(
+            "could not locate the '_LIGHT / _NAVY: dict[str, str] = {' palette "
+            "literals in the token source (palette moved or renamed?)."
+        )
+    return spans
+
+
+def find_c_style_span(text: str, search_from: int = 0) -> tuple[int, int]:
+    """Return (start_offset, end_offset_exclusive) of a palette dict literal."""
+    m = PALETTE_START_RE.search(text, search_from)
     if not m:
         raise ParseError(
-            "could not locate a top-level 'C_STYLE = {' assignment in the source "
+            "could not locate a palette '= {' assignment in the source "
             "(the token palette has been moved or renamed)."
         )
     open_idx = text.index("{", m.start())
@@ -224,6 +238,13 @@ def build_pairs() -> list[Pair]:
     add("强调文字 accent / accent_soft", "accent", "accent_soft", THRESH_TEXT,
         gate=False, note="accent_soft 浅底上应使用 accent_text（已达标），不用 accent")
 
+    # ── nav 条带（顶栏 / 页签 / 表头 / 状态栏）：两套主题都必须达标 ──
+    add("顶栏标题 / 表头 / 状态栏文字 on 导航底色", "nav_fg", "nav_bg", THRESH_TEXT)
+    add("顶栏与未选中页签次要文字 on 导航底色", "nav_fg_muted", "nav_bg", THRESH_TEXT)
+    add("页签悬停/选中文字 on 导航高亮底色", "nav_fg", "nav_bg_active", THRESH_TEXT)
+    add("导航条上活动指示点（图形，非文字）", "nav_accent", "nav_bg",
+        THRESH_LARGE_NONTEXT, gate=False)
+
     # ── non-text: focus ring is the gated one (SC 1.4.11) ──
     add("焦点环 border_focus / bg_card", "border_focus", "bg_card", THRESH_LARGE_NONTEXT)
     add("焦点环 border_focus / bg_main", "border_focus", "bg_main", THRESH_LARGE_NONTEXT)
@@ -328,14 +349,17 @@ def fmt(ratio: float) -> str:
     return "%.2f" % ratio
 
 
-def render_markdown(pairs, stats, source, block_span, hardcoded) -> str:
+def render_markdown(pairs, stats, source, block_span, hardcoded, theme_name="") -> str:
     start_line = source_text.count("\n", 0, block_span[0]) + 1
     end_line = source_text.count("\n", 0, block_span[1]) + 1
     out = []
-    out.append("# JISUMAN LLM Benchmark — WCAG 2.1 Contrast & Token-Discipline Audit")
+    out.append("# JISUMAN LLM Benchmark — WCAG 2.1 Contrast & Token-Discipline Audit"
+               + ("（主题 `%s`）" % theme_name if theme_name else ""))
     out.append("")
     out.append("- source: `%s`" % source_path)
-    out.append("- C_STYLE block: lines %d–%d" % (start_line, end_line))
+    out.append("- 调色板块: lines %d–%d%s"
+               % (start_line, end_line,
+                  "（主题 `%s`）" % theme_name if theme_name else ""))
     out.append("- thresholds: normal text %.1f (SC 1.4.3), large text / non-text %.1f "
                "(SC 1.4.11)" % (THRESH_TEXT, THRESH_LARGE_NONTEXT))
     out.append("")
@@ -503,41 +527,65 @@ def main(argv=None) -> int:
 
     try:
         source_text = read_source(source_path)
-        block_span = find_c_style_span(source_text)
-        tokens = parse_tokens(source_text[block_span[0]:block_span[1]])
-        pairs = build_pairs()
-        evaluate(pairs, tokens)
+        palette_spans = find_palette_spans(source_text)
+        themes = []
+        for name, span in palette_spans:
+            tokens = parse_tokens(source_text[span[0]:span[1]])
+            pairs = build_pairs()
+            evaluate(pairs, tokens)
+            gated = [p for p in pairs if p.gate]
+            info = [p for p in pairs if not p.gate]
+            failed = [p for p in gated if not p.passed]
+            themes.append({
+                "name": name,
+                "span": span,
+                "pairs": pairs,
+                "failed": failed,
+                "stats": {
+                    "total": len(gated),
+                    "passed": len(gated) - len(failed),
+                    "failed": len(failed),
+                    "info_total": len(info),
+                    "info_failed": sum(1 for p in info if not p.passed),
+                    "worst": sorted(gated, key=lambda p: p.ratio)[:3],
+                    "failed_details": sorted(failed, key=lambda p: p.ratio),
+                },
+            })
     except (ParseError, ValueError) as exc:
         sys.stderr.write("PARSE ERROR: %s\n" % exc)
         sys.stderr.write("Aborting — refusing to report contrast numbers that were not "
-                         "derived from a successfully parsed C_STYLE palette.\n")
+                         "derived from a successfully parsed palette.\n")
         return EXIT_PARSE_ERROR
 
-    gated = [p for p in pairs if p.gate]
-    info = [p for p in pairs if not p.gate]
-    failed = [p for p in gated if not p.passed]
     forbidden_hits = scan_forbidden_usage([
         scan_path,
         os.path.join(os.path.dirname(scan_path), "llm_benchmark_app", "ui_theme.py"),
         os.path.join(os.path.dirname(scan_path), "llm_benchmark_app", "ui_pages.py"),
     ])
-    stats = {
-        "total": len(gated),
-        "passed": len(gated) - len(failed),
-        "failed": len(failed),
-        "info_total": len(info),
-        "info_failed": sum(1 for p in info if not p.passed),
-        "worst": sorted(gated, key=lambda p: p.ratio)[:3],
-        "failed_details": sorted(failed, key=lambda p: p.ratio),
-        "forbidden_hits": forbidden_hits,
-        "all_pairs": pairs,
-    }
+    for th in themes:
+        th["stats"]["forbidden_hits"] = forbidden_hits
+        th["stats"]["all_pairs"] = th["pairs"]
     hardcoded = scan_hardcoded(_scan_text(scan_path, source_path, source_text), (0, 0))
 
-    exit_code = EXIT_CONTRAST_FAIL if (failed or forbidden_hits) else EXIT_OK
-    report = (render_json(pairs, stats, source_path, block_span, hardcoded, exit_code)
-              if args.json else
-              render_markdown(pairs, stats, source_path, block_span, hardcoded))
+    failed_themes = [th["name"] for th in themes if th["failed"]]
+    exit_code = EXIT_CONTRAST_FAIL if (failed_themes or forbidden_hits) else EXIT_OK
+
+    if args.json:
+        report = json.dumps({
+            "themes": [
+                dict(json.loads(render_json(th["pairs"], th["stats"], source_path,
+                                            th["span"], hardcoded, exit_code)),
+                     theme=th["name"])
+                for th in themes
+            ],
+            "failed_themes": failed_themes,
+            "exit_code": exit_code,
+        }, indent=2, ensure_ascii=False)
+    else:
+        report = "\n\n---\n\n".join(
+            render_markdown(th["pairs"], th["stats"], source_path, th["span"], hardcoded,
+                            theme_name=th["name"])
+            for th in themes)
 
     print(report)
     if args.out:

@@ -9,7 +9,7 @@ Metrics aligned with:
   • NIM Benchmark:      output_token_throughput, request_throughput
 """
 # ── 发行版本（单一来源：packaging/make-release.sh 读取此行）──────────────────
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 
 import json
 import logging
@@ -337,6 +337,9 @@ I18N = {
     "zh_CN": {
         "app.title": f"JISUMEN LLM Benchmark GUI v{APP_VERSION}",
         "app.subtitle": "OpenAI 兼容接口并发性能测试",
+        "theme.label": "主题",
+        "theme.navy": "深海军蓝",
+        "theme.light": "浅色",
         "language.label": "语言",
         "language.zh": "简体中文",
         "language.en": "English",
@@ -680,6 +683,9 @@ I18N = {
     "en_US": {
         "app.title": f"JISUMEN LLM Benchmark GUI v{APP_VERSION}",
         "app.subtitle": "OpenAI-compatible API concurrency benchmark",
+        "theme.label": "Theme",
+        "theme.navy": "Navy Blue",
+        "theme.light": "Light",
         "language.label": "Language",
         "language.zh": "简体中文",
         "language.en": "English",
@@ -1054,6 +1060,13 @@ C_STYLE = {
     "bg_inset": _TOK["bg_inset"],
     "bg_hover": _TOK["bg_hover"],
     "bg_stripe": _TOK["bg_stripe"],
+    # ── nav（导航条 / 表头 / 状态栏；深海军蓝主题下为深底白字）──
+    "nav_bg": _TOK["nav_bg"],
+    "nav_bg_active": _TOK["nav_bg_active"],
+    "nav_fg": _TOK["nav_fg"],
+    "nav_fg_muted": _TOK["nav_fg_muted"],
+    "nav_border": _TOK["nav_border"],
+    "nav_accent": _TOK["nav_accent"],
     # ── text ──
     "text_primary": _TOK["text_primary"],
     "text_secondary": _TOK["text_secondary"],
@@ -1120,6 +1133,20 @@ C_STYLE = {
     # ── accent bars ──
     "bar_width": 3,
 }
+
+
+def _refresh_c_style() -> None:
+    """主题切换后按同名（含别名）从 ui_theme.TOKENS 重新取色，C_STYLE 原地更新。
+
+    颜色键与 TOKENS 键同名；字体/间距等非颜色值不在 TOKENS 中，跳过。
+    """
+    aliases = {"text_accent": "accent_text"}
+    for key, value in list(C_STYLE.items()):
+        tok = aliases.get(key, key)
+        if isinstance(value, str) and value.startswith("#") and tok in _TOK:
+            C_STYLE[key] = _TOK[tok]
+
+
 class ScrollableFrame(tk.Frame):
     """A scrollable container that can hold any content.
     Mousewheel scrolling auto-binds on enter/leave."""
@@ -1401,6 +1428,26 @@ class NoticeBanner(tk.Frame):
         else:
             self.grid_remove()
 
+
+def _rebuild_color_maps() -> None:
+    """主题切换后重建类级颜色映射（这些映射在类定义时已固化 C_STYLE 取值）。"""
+    MetricItem.COLORS = {
+        "ttft": C_STYLE["accent"], "visible_ttft": C_STYLE["accent"],
+        "tpot": C_STYLE["accent"], "itl": C_STYLE["accent"],
+        "e2e_p95": C_STYLE["accent"],
+        "system_output_tps": C_STYLE["accent"], "tps": C_STYLE["accent"],
+        "agg_tps": C_STYLE["accent"], "rps": C_STYLE["accent"],
+        "total_tokens": C_STYLE["accent"], "output_tokens": C_STYLE["accent"],
+        "success_rate": C_STYLE["success"],
+    }
+    StatusCard.BAR_COLORS = {"idle": C_STYLE["border_strong"],
+                             "checking": C_STYLE["warning"],
+                             "pass": C_STYLE["success"], "fail": C_STYLE["error"]}
+    NoticeBanner.COLORS = {"info": C_STYLE["info"], "warn": C_STYLE["warning"],
+                           "error": C_STYLE["error"], "success": C_STYLE["success"]}
+    NoticeBanner.BG = {"info": C_STYLE["info_bg"], "warn": C_STYLE["warning_bg"],
+                       "error": C_STYLE["error_bg"], "success": C_STYLE["success_bg"]}
+
 # ============================================================
 # GUI
 # ============================================================
@@ -1494,6 +1541,8 @@ class LLMBenchmarkApp:
             _init_result_db(RESULT_DB_PATH)
         except Exception:
             pass
+        # 主题必须先定（令牌 + 派生色），再建 ttk 样式与界面，否则 ttk 样式会用默认主题
+        self._load_theme()
         self._setup_styles()
         self._build_header()
         self._build_body()
@@ -1578,6 +1627,79 @@ class LLMBenchmarkApp:
         lang_code = "en_US" if display == I18N["en_US"]["language.en"] else "zh_CN"
         self._set_language(lang_code)
 
+    # ---------- 主题（深海军蓝 / 浅色）----------
+    def _theme_label(self, name: str) -> str:
+        return self.tr(f"theme.{name}")
+
+    def _theme_key_from_label(self, label: str):
+        for key in _ui_theme.theme_keys():
+            if self._theme_label(key) == label:
+                return key
+        return None
+
+    def _load_theme(self):
+        """读 INI 里的主题并生效（须在构建界面前调用，颜色在构建时写入控件）。"""
+        name = _ui_theme.DEFAULT_THEME
+        cfg = ConfigParser()
+        try:
+            cfg.read(INI_PATH, encoding="utf-8")
+            name = cfg.get("ui", "theme", fallback=name)
+        except Exception:
+            pass
+        if name not in _ui_theme.THEMES:
+            name = _ui_theme.DEFAULT_THEME
+        _ui_theme.set_theme(name)
+        _refresh_c_style()
+
+    def _save_theme_config(self, name: str):
+        cfg = ConfigParser()
+        try:
+            cfg.read(INI_PATH, encoding="utf-8")
+        except Exception:
+            pass
+        if not cfg.has_section("ui"):
+            cfg.add_section("ui")
+        cfg.set("ui", "theme", name)
+        with open(INI_PATH, "w", encoding="utf-8") as f:
+            cfg.write(f)
+
+    def _on_theme_selected(self, event=None):
+        name = self._theme_key_from_label(self.theme_var.get())
+        if not name or name == _ui_theme.ACTIVE_THEME:
+            return
+        if self._benchmark_running or getattr(self, "_sweep_running", False):
+            messagebox.showinfo(self.tr("app.title"),
+                                "测试运行期间不能切换主题，请等本次测试结束后再切换。")
+            self.theme_var.set(self._theme_label(_ui_theme.ACTIVE_THEME))
+            return
+        self._save_theme_config(name)
+        self._apply_theme(name)
+
+    def _apply_theme(self, name: str):
+        """切换主题并重建界面（Tkinter 颜色在构建时写入控件，需重建才能全量生效）。"""
+        try:
+            tab_index = self.nb.index(self.nb.select())
+        except Exception:
+            tab_index = 0
+        _ui_theme.set_theme(name)
+        _refresh_c_style()
+        _rebuild_color_maps()
+        for child in list(self.root.winfo_children()):
+            child.destroy()
+        self._i18n_widgets = []
+        self._i18n_callbacks = []
+        self._setup_styles()      # ttk 样式同样固化了旧配色，必须重建
+        self._build_header()
+        self._build_body()
+        self._build_statusbar()
+        self._load_config()
+        self._refresh_ui_language()
+        try:
+            self.nb.select(tab_index)
+        except Exception:
+            pass
+        self._refresh_side_pages()
+
     def _refresh_ui_language(self):
         self.root.title(self.tr("app.title"))
         self._bind_existing_i18n_widgets()
@@ -1656,78 +1778,80 @@ class LLMBenchmarkApp:
         st.configure("App.Treeview", rowheight=28, font=C_STYLE["font_body"],
                      background=C_STYLE["bg_card"], fieldbackground=C_STYLE["bg_card"],
                      foreground=C_STYLE["text_primary"])
-        st.configure("App.Treeview.Heading", font=C_STYLE["font_label"],
-                     background=C_STYLE["bg_inset"], foreground=C_STYLE["text_secondary"],
-                     relief="flat", padding=(C_STYLE["pad_sm"], C_STYLE["pad_sm"]))
         st.map("App.Treeview",
                background=[("selected", C_STYLE["accent_light"])],
                foreground=[("selected", C_STYLE["text_primary"])])
     def _build_header(self):
-        h = tk.Frame(self.root, bg=C_STYLE["bg_header"], height=56,
-                     highlightbackground=C_STYLE["border"],
+        h = tk.Frame(self.root, bg=C_STYLE["nav_bg"], height=48,
+                     highlightbackground=C_STYLE["nav_border"],
                      highlightthickness=1, bd=0)
         h.pack(fill=tk.X, side=tk.TOP)
         h.pack_propagate(False)
-        inner = tk.Frame(h, bg=C_STYLE["bg_header"])
+        inner = tk.Frame(h, bg=C_STYLE["nav_bg"])
         inner.pack(fill=tk.BOTH, expand=True,
                    padx=(C_STYLE["pad_lg"], 0), pady=C_STYLE["pad_sm"])
-        left = tk.Frame(inner, bg=C_STYLE["bg_header"])
-        left.pack(side=tk.LEFT)
-        # icon + title in one line
-        title_row = tk.Frame(left, bg=C_STYLE["bg_header"])
-        title_row.pack(anchor="w")
-        self.logo_image = self._load_header_logo(max_height=22, max_width=170)
-        if self.logo_image is not None:
-            icon_lbl = tk.Label(title_row, image=self.logo_image,
-                                bg=C_STYLE["bg_header"])
-            icon_lbl.pack(side=tk.LEFT, padx=(0, 10))
-            self._icon_lbl = None
-        else:
-            # 极算门字标（文本降级，不使用 emoji 图标 —— 规范 §3）
-            icon_lbl = tk.Label(title_row, text="JISUMEN", font=(FONT_FAMILY, 15, "bold"),
-                                bg=C_STYLE["bg_header"], fg=C_STYLE["accent"])
-            icon_lbl.pack(side=tk.LEFT, padx=(0, 8))
-            self._icon_lbl = icon_lbl
-        title_lbl = ttk.Label(title_row, text=self.tr("app.title"), style="Title.TLabel")
+        # 左上角只显示标题文字：原先的 24px 字标 + 副标题两行在 56px 顶栏里被裁切
+        # （副标题实际不可见），按用户要求移除，只保留 "JISUMEN LLM Benchmark GUI v2.0.0"。
+        # 需要恢复字标时：把 _load_header_logo(max_height=22, max_width=170) 的返回值
+        # 作为 Label(image=...) pack 到标题左侧即可（assets/brand/jisumen-mark.png）。
+        title_lbl = ttk.Label(inner, text=self.tr("app.title"), style="Title.TLabel")
         title_lbl.pack(side=tk.LEFT)
         self._register_i18n_widget(title_lbl, "app.title")
-        subtitle_lbl = ttk.Label(left, text=self.tr("app.subtitle"), style="Subtitle.TLabel")
-        subtitle_lbl.pack(anchor="w")
-        self._register_i18n_widget(subtitle_lbl, "app.subtitle")
-        right = tk.Frame(inner, bg=C_STYLE["bg_header"])
-        right.pack(side=tk.RIGHT)
-        lang_frame = tk.Frame(right, bg=C_STYLE["bg_header"])
+        right = tk.Frame(inner, bg=C_STYLE["nav_bg"])
+        right.pack(side=tk.RIGHT, padx=(0, C_STYLE["pad_lg"]))
+        # 下拉弹层配色（导航条是深色，弹层仍用内容面的浅色，保证选项可读）
+        for opt, val in (("*TCombobox*Listbox.background", C_STYLE["bg_card"]),
+                         ("*TCombobox*Listbox.foreground", C_STYLE["text_primary"]),
+                         ("*TCombobox*Listbox.selectBackground", C_STYLE["accent_light"]),
+                         ("*TCombobox*Listbox.selectForeground", C_STYLE["text_primary"])):
+            self.root.option_add(opt, val)
+        lang_frame = tk.Frame(right, bg=C_STYLE["nav_bg"])
         lang_frame.pack(side=tk.RIGHT, padx=(C_STYLE["pad_sm"], 0))
-        lang_lbl = tk.Label(lang_frame, text=self.tr("language.label"),
-                            font=C_STYLE["font_small"],
-                            bg=C_STYLE["bg_header"], fg=C_STYLE["text_secondary"])
+        lang_lbl = ttk.Label(lang_frame, text=self.tr("language.label"),
+                             style="NavLabel.TLabel")
         lang_lbl.pack(side=tk.LEFT, padx=(0, 6))
         self._register_i18n_widget(lang_lbl, "language.label")
         self.language_combo = ttk.Combobox(
             lang_frame, textvariable=self.language_var,
             values=[I18N["zh_CN"]["language.zh"], I18N["en_US"]["language.en"]],
-            width=10, state="readonly")
+            width=10, state="readonly", style="Nav.TCombobox")
         self.language_combo.pack(side=tk.LEFT)
         self.language_combo.bind("<<ComboboxSelected>>", self._on_language_selected)
-        # status pill (fixed min-width to prevent overflow)
-        pill = tk.Frame(right, bg=C_STYLE["bg_stripe"], highlightbackground=C_STYLE["border"],
-                        highlightthickness=1, bd=0, width=360)
+        # 主题切换（界面内切换：重建界面，使所有控件取到新配色）
+        theme_frame = tk.Frame(right, bg=C_STYLE["nav_bg"])
+        theme_frame.pack(side=tk.RIGHT, padx=(C_STYLE["pad_sm"], 0))
+        theme_lbl = ttk.Label(theme_frame, text=self.tr("theme.label"),
+                              style="NavLabel.TLabel")
+        theme_lbl.pack(side=tk.LEFT, padx=(0, 6))
+        self._register_i18n_widget(theme_lbl, "theme.label")
+        self.theme_var = tk.StringVar(value=self._theme_label(_ui_theme.ACTIVE_THEME))
+        self.theme_combo = ttk.Combobox(
+            theme_frame, textvariable=self.theme_var,
+            values=[self._theme_label(k) for k in _ui_theme.theme_keys()],
+            width=10, state="readonly", style="Nav.TCombobox")
+        self.theme_combo.pack(side=tk.LEFT)
+        self.theme_combo.bind("<<ComboboxSelected>>", self._on_theme_selected)
+        # 状态 pill：改为内容自适应 + 导航条配色。原先 pack_propagate(False) 只锁宽度
+        # 未给高度，高度塌成 1px（内容实际不可见；浅色主题白底白字一直没被发现）。
+        pill = tk.Frame(right, bg=C_STYLE["nav_bg_active"],
+                        highlightbackground=C_STYLE["nav_border"],
+                        highlightthickness=1, bd=0)
         pill.pack(side=tk.RIGHT, padx=(C_STYLE["pad_sm"], 0))
-        pill.pack_propagate(False)  # lock width
-        pill_inner = tk.Frame(pill, bg=C_STYLE["bg_stripe"])
+        pill_inner = tk.Frame(pill, bg=C_STYLE["nav_bg_active"])
         pill_inner.pack(padx=C_STYLE["pad_sm"], pady=3, fill=tk.X)
         self._status_dot = tk.Label(pill_inner, text=" ●", font=(FONT_FAMILY, 9),
-                                    bg=C_STYLE["bg_stripe"], fg=C_STYLE["text_muted"])
+                                    bg=C_STYLE["nav_bg_active"], fg=C_STYLE["nav_fg_muted"])
         self._status_dot.pack(side=tk.LEFT)
-        self._status_badge_lbl = tk.Label(pill_inner, text="空闲",
+        self._status_badge_lbl = tk.Label(pill_inner, text=self.tr("status.idle"),
                                          font=C_STYLE["font_small"],
-                                         bg=C_STYLE["bg_stripe"],
-                                         fg=C_STYLE["text_secondary"])
+                                         bg=C_STYLE["nav_bg_active"],
+                                         fg=C_STYLE["nav_fg"])
         self._status_badge_lbl.pack(side=tk.LEFT)
     def _build_body(self):
         body = tk.Frame(self.root, bg=C_STYLE["bg_main"])
         body.pack(fill=tk.BOTH, expand=True, side=tk.TOP,
                   padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["pad_lg"]))
+        self._body_frame = body
         body.grid_rowconfigure(0, weight=1)
         body.grid_columnconfigure(0, weight=1)
         self.nb = ttk.Notebook(body, style="App.TNotebook")
@@ -2803,10 +2927,10 @@ class LLMBenchmarkApp:
         parts.append(f"fail={self._run_fail}")
         parts.append(self._format_elapsed())
         try:
-            self._status_dot.config(text="", fg=C_STYLE["accent"])
+            self._status_dot.config(text="", fg=C_STYLE["nav_accent"])
             self._status_badge_lbl.config(
                 text=" · ".join(parts),
-                fg=C_STYLE["text_primary"])
+                fg=C_STYLE["nav_fg"])
         except Exception:
             pass
 
@@ -2834,9 +2958,9 @@ class LLMBenchmarkApp:
         else:
             text = f"{prefix} {label} · fail={self._run_fail} · {self._format_elapsed()}"
         try:
-            self._status_dot.config(text="", fg=C_STYLE["text_muted"])
+            self._status_dot.config(text="", fg=C_STYLE["nav_fg_muted"])
             self._status_badge_lbl.config(
-                text=text, fg=C_STYLE["success_text"] if success else C_STYLE["error_text"])
+                text=text, fg=C_STYLE["nav_fg"])
         except Exception:
             pass
 
@@ -3154,16 +3278,20 @@ class LLMBenchmarkApp:
             except Exception:
                 pass  # never disrupt user for auto-save failures
     def _build_statusbar(self):
-        sb = tk.Frame(self.root, bg=C_STYLE["bg_header"], height=32)
-        sb.pack(fill=tk.X, side=tk.BOTTOM)
+        sb = tk.Frame(self.root, bg=C_STYLE["nav_bg"], height=32)
+        if getattr(self, "_body_frame", None) is not None:
+            # 先于 body 排布：body 请求高度大于窗口时，后 pack 的状态栏会被挤成 1px
+            sb.pack(fill=tk.X, side=tk.BOTTOM, before=self._body_frame)
+        else:
+            sb.pack(fill=tk.X, side=tk.BOTTOM)
         sb.pack_propagate(False)
-        inner = tk.Frame(sb, bg=C_STYLE["bg_header"])
+        inner = tk.Frame(sb, bg=C_STYLE["nav_bg"])
         inner.pack(fill=tk.BOTH, expand=True,
                    padx=C_STYLE["pad_lg"], pady=2)
         self.status_label = tk.Label(inner, text=self.tr("status.ready"),
                                      font=C_STYLE["font_small"],
-                                     bg=C_STYLE["bg_header"],
-                                     fg=C_STYLE["text_secondary"])
+                                     bg=C_STYLE["nav_bg"],
+                                     fg=C_STYLE["nav_fg_muted"])
         self.status_label.pack(side=tk.LEFT)
     def _toggle_key_visibility(self):
         self.key_entry.config(show="" if self.show_key.get() else "*")

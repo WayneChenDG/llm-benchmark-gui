@@ -69,7 +69,8 @@ FONT_MONO = detect_mono(_FAMS)
 # 令牌
 # ─────────────────────────────────────────────────────────────────────────────
 
-TOKENS: dict[str, str] = {
+# ── 浅色主题（内容区白底 + 浅灰蓝背景；保留品牌蓝）──
+_LIGHT: dict[str, str] = {
     # surface
     "bg_main": "#F4F6FA",
     "bg_card": "#FFFFFF",
@@ -119,7 +120,95 @@ TOKENS: dict[str, str] = {
     "series_3": "#D97706",
     "series_4": "#7C3AED",
     "series_baseline": "#64748B",
+    # nav（导航条 / 表头 / 状态栏条带；浅色主题＝白底深字）
+    "nav_bg": "#FFFFFF",
+    "nav_bg_active": "#F1F4F9",
+    "nav_fg": "#0F172A",
+    "nav_fg_muted": "#475569",
+    "nav_border": "#DCE3EC",
+    "nav_accent": "#0060F0",
 }
+
+# ── 商务深海军蓝（默认）：导航/表头/状态栏深底 + 白色内容区 ──
+_NAVY: dict[str, str] = {
+    # surface（内容区保持白/浅灰，保证数据可读性）
+    "bg_main": "#EFF3F9",
+    "bg_card": "#FFFFFF",
+    "bg_header": "#FFFFFF",
+    "bg_input": "#FFFFFF",
+    "bg_inset": "#EDF1F8",
+    "bg_hover": "#E9EFF7",
+    "bg_stripe": "#F7F9FC",
+    # text
+    "text_primary": "#0F172A",
+    "text_secondary": "#475569",
+    "text_muted": "#5F6C80",
+    "text_inverse": "#FFFFFF",
+    "text_disabled": "#94A3B8",
+    # border
+    "border": "#D9E1EC",
+    "border_light": "#E9EEF5",
+    "border_strong": "#BFCADA",
+    "border_focus": "#0060F0",
+    # brand / accent
+    "accent": "#0060F0",
+    "accent_hover": "#0052CF",
+    "accent_pressed": "#003FA8",
+    "accent_disabled": "#9DBEF5",
+    "accent_light": "#E8F0FE",
+    "accent_soft": "#D3E4FD",
+    "accent_text": "#0B4FB0",
+    # semantic
+    "success": "#2FAF63",
+    "success_bg": "#E9F7EF",
+    "success_text": "#146C3B",
+    "warning": "#D29922",
+    "warning_bg": "#FDF6E7",
+    "warning_text": "#8A5A00",
+    "error": "#E5534B",
+    "error_bg": "#FDECEB",
+    "error_text": "#B3261E",
+    "info": "#4A9EDA",
+    "info_bg": "#EAF4FB",
+    "info_text": "#0B5FA5",
+    "neutral": "#8A92A1",
+    "neutral_bg": "#F1F3F6",
+    "neutral_text": "#5B6472",
+    # data-viz series (仅图表系列 identity)
+    "series_1": "#0060F0",
+    "series_2": "#14B8A6",
+    "series_3": "#D97706",
+    "series_4": "#7C3AED",
+    "series_baseline": "#64748B",
+    # nav（深海军蓝条带）
+    "nav_bg": "#14263D",
+    "nav_bg_active": "#1D3454",
+    "nav_fg": "#F4F7FC",
+    "nav_fg_muted": "#A6B8D3",
+    "nav_border": "#0D1B2D",
+    "nav_accent": "#6BA6FF",
+}
+
+THEMES: dict[str, dict[str, str]] = {"navy": _NAVY, "light": _LIGHT}
+DEFAULT_THEME = "navy"
+ACTIVE_THEME = DEFAULT_THEME
+# 兼容既有调用点：TOKENS 恒为"当前主题"的字典（切换时原地更新，引用不失效）
+TOKENS: dict[str, str] = dict(THEMES[ACTIVE_THEME])
+
+
+def theme_keys() -> tuple[str, ...]:
+    return tuple(THEMES.keys())
+
+
+def set_theme(name: str) -> dict[str, str]:
+    """切换主题（原地更新 TOKENS，使 TOKENS[...] 的所有读取点立即生效）。"""
+    global ACTIVE_THEME
+    if name not in THEMES:
+        raise KeyError(f"未知主题: {name}（可选: {', '.join(THEMES)}）")
+    TOKENS.clear()
+    TOKENS.update(THEMES[name])
+    ACTIVE_THEME = name
+    return TOKENS
 
 SPACE = {"xs": 4, "sm": 8, "md": 12, "lg": 16, "xl": 24, "xxl": 32}
 
@@ -191,19 +280,22 @@ def apply_ttk_styles(root) -> ttk.Style:
 
     # ── 容器 ──
     st.configure("Card.TFrame", background=T["bg_card"])
-    st.configure("Header.TFrame", background=T["bg_header"])
-    st.configure("StatusBar.TFrame", background=T["bg_header"])
+    # 顶栏 / 状态栏走 nav 令牌：深海军蓝主题下为深底白字，浅色主题下为白底深字
+    st.configure("Header.TFrame", background=T["nav_bg"])
+    st.configure("StatusBar.TFrame", background=T["nav_bg"])
 
     # ── 标签 ──
     for name, spec, bg, fg in [
-        ("Title.TLabel",    TYPE["section"],   "bg_header", "text_primary"),
-        ("Subtitle.TLabel", TYPE["meta"],      "bg_header", "text_secondary"),
+        ("Title.TLabel",    TYPE["section"],   "nav_bg",    "nav_fg"),
+        ("Subtitle.TLabel", TYPE["meta"],      "nav_bg",    "nav_fg_muted"),
+        ("NavLabel.TLabel", TYPE["meta"],      "nav_bg",    "nav_fg_muted"),
+        ("NavStrong.TLabel", TYPE["body_bold"], "nav_bg",   "nav_fg"),
         ("Section.TLabel",  TYPE["section"],   "bg_card",   "text_primary"),
         ("Body.TLabel",     TYPE["body"],      "bg_card",   "text_primary"),
         ("Small.TLabel",    TYPE["meta"],      "bg_card",   "text_muted"),
         ("Metric.TLabel",   TYPE["metric_num"], "bg_card",  "text_primary"),
         ("MetricSmall.TLabel", TYPE["metric_md"], "bg_card", "text_primary"),
-        ("StatusBar.TLabel", TYPE["caption"],  "bg_header", "text_secondary"),
+        ("StatusBar.TLabel", TYPE["caption"],  "nav_bg",    "nav_fg_muted"),
         # 新增语义标签
         ("Muted.TLabel",    TYPE["meta"],      "bg_card",   "text_muted"),
         ("Inset.TLabel",    TYPE["meta"],      "bg_inset",  "text_secondary"),
@@ -285,12 +377,12 @@ def apply_ttk_styles(root) -> ttk.Style:
                background=[("selected", T["accent_light"])],
                foreground=[("selected", T["text_primary"])])
         st.configure(f"{style_name}.Heading", font=TYPE["label"],
-                     background=T["bg_inset"], foreground=T["text_secondary"],
+                     background=T["nav_bg"], foreground=T["nav_fg"],
                      relief="flat", padding=(SPACE["sm"], SPACE["sm"]),
                      borderwidth=0)
         st.map(f"{style_name}.Heading",
-               background=[("active", T["bg_hover"])],
-               foreground=[("active", T["text_primary"])])
+               background=[("active", T["nav_bg_active"])],
+               foreground=[("active", T["nav_fg"])])
 
     # ── 进度条 ──
     st.configure("Accent.Horizontal.TProgressbar",
@@ -302,16 +394,27 @@ def apply_ttk_styles(root) -> ttk.Style:
                  bordercolor=T["bg_inset"], lightcolor=T["success"],
                  darkcolor=T["success"], thickness=8)
 
-    # ── Notebook：页签做成企业级下划线式（不用默认灰块）──
-    st.configure("App.TNotebook", background=T["bg_main"], borderwidth=0,
+    # ── Notebook：页签条＝深色导航带（nav 令牌），选中页签回到内容面 ──
+    st.configure("App.TNotebook", background=T["nav_bg"], borderwidth=0,
                  tabmargins=(SPACE["xl"], 0, 0, 0))
     st.configure("App.TNotebook.Tab", font=TYPE["label"], padding=(SPACE["lg"], 9),
-                 background=T["bg_main"], foreground=T["text_secondary"],
-                 bordercolor=T["bg_main"], borderwidth=0, focuscolor=T["border_focus"])
+                 background=T["nav_bg"], foreground=T["nav_fg_muted"],
+                 bordercolor=T["nav_bg"], borderwidth=0, focuscolor=T["border_focus"])
     st.map("App.TNotebook.Tab",
-           background=[("selected", T["bg_card"]), ("active", T["bg_hover"])],
-           foreground=[("selected", T["accent_text"]), ("active", T["text_primary"])],
+           background=[("selected", T["bg_card"]), ("active", T["nav_bg_active"])],
+           foreground=[("selected", T["accent_text"]), ("active", T["nav_fg"])],
            expand=[("selected", (0, 0, 0, 0))])
+
+    # ── 深色导航条上的下拉框（语言 / 主题）──
+    st.configure("Nav.TCombobox", font=TYPE["label"],
+                 fieldbackground=T["nav_bg_active"], background=T["nav_bg_active"],
+                 foreground=T["nav_fg"], arrowcolor=T["nav_fg"],
+                 bordercolor=T["nav_border"], lightcolor=T["nav_bg_active"],
+                 darkcolor=T["nav_bg_active"], borderwidth=0, padding=(6, 2))
+    st.map("Nav.TCombobox",
+           fieldbackground=[("readonly", T["nav_bg_active"]),
+                            ("disabled", T["nav_bg"])],
+           foreground=[("readonly", T["nav_fg"]), ("disabled", T["nav_fg_muted"])])
 
     # ── 滚动条：细、低对比 ──
     for orient in ("Vertical", "Horizontal"):

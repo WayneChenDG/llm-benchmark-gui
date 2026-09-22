@@ -51,14 +51,16 @@ if command -v rsync >/dev/null 2>&1; then
     --exclude '.agents' --exclude 'design-system' --exclude '.pytest_cache' \
     --exclude 'llm_benchmark.ini' --exclude 'llm_benchmark_history.db' \
     --exclude 'docs/uiux-v2/BEFORE' --exclude 'docs/uiux-v2/AFTER' \
-    --exclude 'docs/uiux-v2/COMPARE' --exclude 'scripts/_probe_geometry.py' \
+    --exclude 'docs/uiux-v2/COMPARE' --exclude 'docs/uiux-v2/theme' \
+    --exclude 'scripts/_probe_*.py' \
     ./ "$STAGE"/
 else
   tar --exclude='./.git' --exclude='./dist' --exclude='./backups' --exclude='./results' \
       --exclude='./data' --exclude='*.db' --exclude='__pycache__' --exclude='*.pyc' \
       --exclude='./.agents' --exclude='./design-system' \
       --exclude='./docs/uiux-v2/BEFORE' --exclude='./docs/uiux-v2/AFTER' \
-      --exclude='./docs/uiux-v2/COMPARE' -cf - . | tar -xf - -C "$STAGE"
+      --exclude='./docs/uiux-v2/COMPARE' --exclude='./docs/uiux-v2/theme' \
+      --exclude='./scripts/_probe_*.py' -cf - . | tar -xf - -C "$STAGE"
 fi
 find "$STAGE" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 
