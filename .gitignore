@@ -21,6 +21,9 @@ htmlcov/
 # Benchmark run results (filesystem store)
 results/
 
+# Release build output (packaging/make-release.sh)
+dist/
+
 # Config (contains API keys / local paths)
 *.ini
 
