@@ -43,7 +43,44 @@
 - 文件服务器（推荐）：`\\192.168.1.254\data\software\installers\jisumen-llm-benchmark\2.1.0\`
   （Linux 侧 `/data/software/installers/jisumen-llm-benchmark/2.1.0/`）
 
-哈希与验收结论见本节下方"实测"，由构建后实测填写。
+哈希与包内 VERSION：
+
+```
+完整版  jisumen-llm-benchmark-2.1.0-linux-x86_64.tar.gz       130,430,171 B (124.4 MiB)
+        sha256 1811e2536dd0b9e6f876f1968d8183ba798ce26fc1147491bd2502305399ae5f
+精简版  jisumen-llm-benchmark-2.1.0-linux-x86_64-slim.tar.gz    936,576 B (0.89 MiB)
+        sha256 907116fc02a7951a6110eb3fe2ee09ed46c1b913139d81442777916277bba471
+
+包内 VERSION：version=2.1.0 / arch=x86_64 / python=3.10 / git_rev=9ce0659
+             built_at=2026-09-22T15:48:49+08:00
+```
+
+## 验收结论（真机实测，隔离目录，不触碰在跑服务）
+
+```
+bash packaging/accept-release.sh dist/jisumen-llm-benchmark-2.1.0-linux-x86_64.tar.gz \
+     http://127.0.0.1:8123/v1
+==> 验收结果: PASS=11 FAIL=0
+```
+
+- 包体检查：sha256 校验通过；不含 `llm_benchmark.ini` / `results/` / `backups/` /
+  `__pycache__` / `.db`；含 VERSION 与离线 wheels ✓
+- 隔离安装：`install.sh` 成功；`verify-install.sh` **PASS=16 FAIL=0**（含 GUI 冒烟
+  12s 存活、依赖齐备、`APP_VERSION=2.1.0`）
+- 真实负载：安装副本跑 C1/N2 走本地 mock OpenAI 兼容端点 →
+  `success=2 fail=0 success_rate=100.0 ttft_avg=0.119s`
+- 本地门禁：`pytest` **163 passed**；`scripts/uiux_contrast_audit.py` 两套主题各 34 对
+  门禁项全 PASS（exit=0）
+- 界面内主题切换：探针实测 navy → light → navy 往返切换不崩，7 个页签与配置项保持
+  （见 `scripts/_probe_theme.py`、截图 `docs/uiux-v2/theme/`）
+
+### 验收过程中发现并修正的一处脚本错误（非产品缺陷）
+
+第一次验收 FAIL=1：安装副本跑基准 0 成功、报 HTTP 404。定位为
+**验收脚本用法错误**——`run_benchmark()` 直接使用传入 URL，URL 归一化（补
+`/chat/completions`）由 GUI 在调用前完成；脚本传入裸 `/v1` 因此 404。
+改为调用 `normalize_api_url()` 后 PASS=11 FAIL=0。产品代码未因此改动。
+（该 404 是被上一版新增的"必须判成功数 ≥1"门禁抓住的，而非误判为通过。）
 
 ## 安装（目标机 Linux 桌面 x86_64）
 
