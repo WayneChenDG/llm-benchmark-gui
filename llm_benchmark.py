@@ -337,10 +337,72 @@ I18N = {
         "language.label": "语言",
         "language.zh": "简体中文",
         "language.en": "English",
-        "tab.settings": "参数设置",
-        "tab.benchmark": "基准测试",
+        "tab.overview": "总览",
+        "tab.settings": "新建测试",
+        "tab.benchmark": "测试与结果",
         "tab.sweep": "并发扫测",
-        "tab.history": "历史记录",
+        "tab.history": "历史对比",
+        "tab.export": "报告与证据",
+        # ── 总览页（UI/UX v2）──
+        "ov.subtitle": "最近一轮关键指标、当前配置与环境、待处理事项",
+        "ov.demo": "演示数据（本地 mock 端点，非真实硬件/模型性能）",
+        "ov.kpi_title": "最近一轮关键指标",
+        "ov.kpi_empty_title": "还没有任何测试记录",
+        "ov.kpi_empty_body": "完成一次测试后，这里会显示 TTFT、吞吐、成功率与失败原因。",
+        "ov.act_new": "新建测试",
+        "ov.act_import_demo": "载入演示配置",
+        "ov.act_last_report": "查看最近报告",
+        "ov.cfg_title": "当前配置与环境",
+        "ov.pending_title": "待处理事项",
+        "ov.no_pending": "无待处理事项",
+        "ov.pending_fail": "最近一轮存在失败请求：{n} 条（可在结果详情按错误分类查看）",
+        "ov.pending_demo": "当前数据含演示数据，不可用于对外性能结论",
+        "ov.pending_no_env": "尚未绑定环境档案，结果缺少硬件/软件栈快照",
+        "ov.recent_title": "最近运行",
+        "ov.col_time": "时间",
+        "ov.col_model": "模型",
+        "ov.col_workload": "负载",
+        "ov.col_source": "数据来源",
+        "ov.source_demo": "演示数据",
+        "ov.source_real": "真实跑测",
+        "ov.recent_empty": "暂无运行记录",
+        # ── 历史对比页 ──
+        "cmp.subtitle": "选择两次运行比较；配置或口径不同时会显式标注，避免误读为同条件对比",
+        "cmp.pick_a": "运行 A（基准）",
+        "cmp.pick_b": "运行 B（对照）",
+        "cmp.btn_compare": "开始对比",
+        "cmp.btn_clear": "清除选择",
+        "cmp.same_note": "两次运行的配置与口径一致，可直接比较。",
+        "cmp.diff_warn": "不可直接比较：存在 {n} 项配置/口径差异（见下表）",
+        "cmp.diff_col": "差异项",
+        "cmp.metric": "指标",
+        "cmp.unit": "单位",
+        "cmp.delta": "差值",
+        "cmp.delta_pct": "变化",
+        "cmp.need_two": "请在上方选择两条记录（A 为基准，B 为对照）后开始对比。",
+        "cmp.guide_title": "还没有可对比的运行",
+        "cmp.guide_body": "先完成两次测试（或不同配置各一次），再回来对比；差异会自动列出。",
+        # ── 报告与证据页 ──
+        "exp.subtitle": "选择一次运行，查看并导出交付件（报告、图表、原始数据、清单）",
+        "exp.pick_run": "选择运行",
+        "exp.artifacts_title": "交付件清单",
+        "exp.col_artifact": "交付件",
+        "exp.col_kind": "类型",
+        "exp.col_size": "大小",
+        "exp.provenance_title": "运行证据（Run Provenance）",
+        "exp.btn_open": "打开所在目录",
+        "exp.btn_bundle": "打包证据（ZIP）",
+        "exp.btn_refresh": "刷新",
+        "exp.bundle_done": "证据包已生成：{path}",
+        "exp.empty_title": "还没有可交付的运行记录",
+        "exp.empty_body": "完成一次测试后，报告 TXT/Markdown、图表、原始 JSON 与交付清单会汇总在这里，可直接打包给客户。",
+        "exp.no_artifacts": "该运行没有可用交付件",
+        "exp.need_run": "请先在下拉框选择一次运行",
+        "exp.missing": "未记录",
+        "exp.demo_warn": "该运行含演示数据，导出件已标注，不可作为真实性能结论交付",
+        # ── 通用 ──
+        "common.refresh": "刷新",
+        "common.demo_badge": "演示数据",
         "status.idle": "空闲",
         "status.ready": "就绪",
         "status.benchmarking": "测试中",
@@ -427,9 +489,9 @@ I18N = {
         "history.status": "状态",
         "history.single": "单次测试",
         "history.sweep": "并发扫测",
-        "history.type_all": "All",
-        "history.type_single": "Single",
-        "history.type_sweep": "Sweep",
+        "history.type_all": "全部",
+        "history.type_single": "单次测试",
+        "history.type_sweep": "并发扫测",
         "chart.sweep_title": "推理性能并发扫测分析报告",
         "chart.latency_vs_concurrency": "延迟随并发变化趋势",
         "chart.throughput_vs_concurrency": "Token 吞吐随并发变化",
@@ -618,10 +680,72 @@ I18N = {
         "language.label": "Language",
         "language.zh": "简体中文",
         "language.en": "English",
-        "tab.settings": "Settings",
-        "tab.benchmark": "Benchmark",
+        "tab.overview": "Overview",
+        "tab.settings": "New Test",
+        "tab.benchmark": "Test & Results",
         "tab.sweep": "Concurrency Sweep",
-        "tab.history": "History",
+        "tab.history": "History & Compare",
+        "tab.export": "Reports & Evidence",
+        # ── Overview page (UI/UX v2) ──
+        "ov.subtitle": "Latest key metrics, current configuration and environment, open items",
+        "ov.demo": "DEMO DATA (local mock endpoint — not real hardware/model performance)",
+        "ov.kpi_title": "Latest key metrics",
+        "ov.kpi_empty_title": "No test runs yet",
+        "ov.kpi_empty_body": "After one run, TTFT, throughput, success rate and failure reasons appear here.",
+        "ov.act_new": "New test",
+        "ov.act_import_demo": "Load demo config",
+        "ov.act_last_report": "Open latest report",
+        "ov.cfg_title": "Current configuration & environment",
+        "ov.pending_title": "Open items",
+        "ov.no_pending": "Nothing pending",
+        "ov.pending_fail": "Last run had {n} failed requests (inspect by error class in run detail)",
+        "ov.pending_demo": "Current data includes demo data — not usable for external performance claims",
+        "ov.pending_no_env": "No environment profile bound — hardware/software stack snapshot missing",
+        "ov.recent_title": "Recent runs",
+        "ov.col_time": "Time",
+        "ov.col_model": "Model",
+        "ov.col_workload": "Workload",
+        "ov.col_source": "Source",
+        "ov.source_demo": "Demo",
+        "ov.source_real": "Measured",
+        "ov.recent_empty": "No runs yet",
+        # ── Compare page ──
+        "cmp.subtitle": "Compare two runs; configuration or metric-scope differences are flagged explicitly",
+        "cmp.pick_a": "Run A (baseline)",
+        "cmp.pick_b": "Run B (candidate)",
+        "cmp.btn_compare": "Compare",
+        "cmp.btn_clear": "Clear selection",
+        "cmp.same_note": "Both runs share the same configuration and metric scope — directly comparable.",
+        "cmp.diff_warn": "NOT directly comparable: {n} configuration/scope difference(s) below",
+        "cmp.diff_col": "Difference",
+        "cmp.metric": "Metric",
+        "cmp.unit": "Unit",
+        "cmp.delta": "Delta",
+        "cmp.delta_pct": "Change",
+        "cmp.need_two": "Select two runs above (A = baseline, B = candidate) and compare.",
+        "cmp.guide_title": "No comparable runs yet",
+        "cmp.guide_body": "Run two tests (ideally with different settings) and come back; differences are listed automatically.",
+        # ── Reports & evidence page ──
+        "exp.subtitle": "Pick a run and export its deliverables (reports, charts, raw data, manifest)",
+        "exp.pick_run": "Select run",
+        "exp.artifacts_title": "Deliverables",
+        "exp.col_artifact": "Artifact",
+        "exp.col_kind": "Type",
+        "exp.col_size": "Size",
+        "exp.provenance_title": "Run provenance",
+        "exp.btn_open": "Open folder",
+        "exp.btn_bundle": "Bundle evidence (ZIP)",
+        "exp.btn_refresh": "Refresh",
+        "exp.bundle_done": "Evidence bundle created: {path}",
+        "exp.empty_title": "No exportable runs yet",
+        "exp.empty_body": "After a run, report TXT/Markdown, charts, raw JSON and the artifact manifest are collected here for delivery.",
+        "exp.no_artifacts": "No artifacts for this run",
+        "exp.need_run": "Select a run first",
+        "exp.missing": "not recorded",
+        "exp.demo_warn": "This run contains demo data and is labelled as such — not valid as a real performance claim",
+        # ── Common ──
+        "common.refresh": "Refresh",
+        "common.demo_badge": "DEMO",
         "status.idle": "Idle",
         "status.ready": "Ready",
         "status.benchmarking": "Benchmarking",
@@ -909,67 +1033,89 @@ I18N_TEXT_KEYS.update({
 })
 
 # ---------- UI 样式常量 ----------
-# Design: Modern SaaS dashboard — warm gray bg, white cards, left-accent metrics,
-#         Stripe purple accent, Datadog/Linear-inspired clean hierarchy.
+# Design: 企业级中性观感 —— 见 docs/uiux-v2/DESIGN_SPEC.md。
+#         令牌权威实现在 llm_benchmark_app/ui_theme.py（TOKENS/TYPE/SPACE）；
+#         此处保留同名键以兼容既有调用点，全部由 ui_theme 派生，勿再写死十六进制。
+from llm_benchmark_app import ui_theme as _ui_theme
+
+_TOK = _ui_theme.TOKENS
+_SPC = _ui_theme.SPACE
+_FONT_MONO = _ui_theme.FONT_MONO
+
 C_STYLE = {
     # ── surfaces ──
-    "bg_main": "#F5F6FA",        # warm dashboard background
-    "bg_card": "#FFFFFF",        # elevated cards
-    "bg_header": "#FFFFFF",      # top bar
-    "bg_input": "#FFFFFF",
-    "bg_hover": "#EEF0F6",
-    "bg_stripe": "#F8F7FF",      # subtle purple-tinted surface
+    "bg_main": _TOK["bg_main"],
+    "bg_card": _TOK["bg_card"],
+    "bg_header": _TOK["bg_header"],
+    "bg_input": _TOK["bg_input"],
+    "bg_inset": _TOK["bg_inset"],
+    "bg_hover": _TOK["bg_hover"],
+    "bg_stripe": _TOK["bg_stripe"],
     # ── text ──
-    "text_primary": "#1E293B",   # slate-800 — sharp but not black
-    "text_secondary": "#64748B", # slate-500 — body / labels
-    "text_muted": "#94A3B8",     # slate-400 — hints
-    "text_inverse": "#FFFFFF",
+    "text_primary": _TOK["text_primary"],
+    "text_secondary": _TOK["text_secondary"],
+    "text_muted": _TOK["text_muted"],
+    "text_inverse": _TOK["text_inverse"],
+    "text_disabled": _TOK["text_disabled"],
     # ── borders ──
-    "border": "#E2E8F0",         # slate-200 — card edges
-    "border_light": "#F1F5F9",   # subtle separators
-    "border_focus": "#533AFD",
-    # ── accent (Stripe purple) ──
-    "accent": "#533AFD",
-    "accent_hover": "#4434D4",
-    "accent_light": "#F0EEFF",   # tinted bg for accent areas
-    "accent_soft": "#E8E4FF",    # slightly stronger tint
+    "border": _TOK["border"],
+    "border_light": _TOK["border_light"],
+    "border_strong": _TOK["border_strong"],
+    "border_focus": _TOK["border_focus"],
+    # ── accent（极算门品牌蓝）──
+    "accent": _TOK["accent"],
+    "accent_hover": _TOK["accent_hover"],
+    "accent_pressed": _TOK["accent_pressed"],
+    "accent_light": _TOK["accent_light"],
+    "accent_soft": _TOK["accent_soft"],
     # ── semantic ──
-    "success": "#10B981",        # emerald green
-    "success_bg": "#ECFDF5",
-    "success_text": "#065F46",
-    "warning": "#F59E0B",        # amber
-    "warning_bg": "#FFFBEB",
-    "warning_text": "#92400E",
-    "error": "#EF4444",          # red
-    "error_bg": "#FEF2F2",
-    "error_text": "#991B1B",
-    "info": "#3B82F6",           # blue
-    "info_bg": "#EFF6FF",
-    "info_text": "#1E40AF",
+    "success": _TOK["success"],
+    "success_bg": _TOK["success_bg"],
+    "success_text": _TOK["success_text"],
+    "warning": _TOK["warning"],
+    "warning_bg": _TOK["warning_bg"],
+    "warning_text": _TOK["warning_text"],
+    "error": _TOK["error"],
+    "error_bg": _TOK["error_bg"],
+    "error_text": _TOK["error_text"],
+    "info": _TOK["info"],
+    "info_bg": _TOK["info_bg"],
+    "info_text": _TOK["info_text"],
+    "neutral": _TOK["neutral"],
+    "neutral_bg": _TOK["neutral_bg"],
+    "neutral_text": _TOK["neutral_text"],
+    # ── 图表系列色（仅图表 identity，不做装饰）──
+    "series_1": _TOK["series_1"],
+    "series_2": _TOK["series_2"],
+    "series_3": _TOK["series_3"],
+    "series_4": _TOK["series_4"],
+    "series_baseline": _TOK["series_baseline"],
     # ── semantic aliases (backward-compat) ──
-    "text_accent": "#533AFD",   # alias for accent — used in sweep preset status label
-    # ── fonts: 10→12→13→15→18→26 (Segoe UI, proportional scale) ──
-    "font_title": (FONT_FAMILY, 18, "bold"),
-    "font_subtitle": (FONT_FAMILY, 12),
-    "font_section": (FONT_FAMILY, 13, "bold"),
-    "font_label": (FONT_FAMILY, 12),
-    "font_body": (FONT_FAMILY, 12),
-    "font_status": (FONT_FAMILY, 15, "bold"),
-    "font_metric": (FONT_FAMILY, 26, "bold"),
-    "font_small": (FONT_FAMILY, 10),
-    "font_code": ("Consolas", 10),
-    # ── spacing ──
-    "radius_card": 8,
-    "radius_btn": 6,
-    "radius_input": 6,
-    "pad_lg": 24,
-    "pad_md": 16,
-    "pad_sm": 10,
-    "gap_lg": 20,
-    "gap_md": 14,
-    "gap_sm": 10,
+    "text_accent": _TOK["accent_text"],
+    # ── fonts ──
+    "font_title": _ui_theme.TYPE["metric_lg"],
+    "font_subtitle": _ui_theme.TYPE["meta"],
+    "font_section": _ui_theme.TYPE["section"],
+    "font_label": _ui_theme.TYPE["label"],
+    "font_body": _ui_theme.TYPE["body"],
+    "font_status": _ui_theme.TYPE["metric_md"],
+    "font_metric": _ui_theme.TYPE["metric_num"],
+    "font_small": _ui_theme.TYPE["caption"],
+    "font_meta": _ui_theme.TYPE["meta"],
+    "font_num": _ui_theme.TYPE["num"],
+    "font_code": (_FONT_MONO, 10),
+    # ── spacing（4/8 节奏）──
+    "radius_card": _ui_theme.RADIUS["card"],
+    "radius_btn": _ui_theme.RADIUS["btn"],
+    "radius_input": _ui_theme.RADIUS["input"],
+    "pad_lg": _SPC["xl"],
+    "pad_md": _SPC["lg"],
+    "pad_sm": _SPC["sm"],
+    "gap_lg": _SPC["xl"],
+    "gap_md": _SPC["md"],
+    "gap_sm": _SPC["sm"],
     # ── accent bars ──
-    "bar_width": 4,              # left accent strip width
+    "bar_width": 3,
 }
 class ScrollableFrame(tk.Frame):
     """A scrollable container that can hold any content.
@@ -1091,14 +1237,15 @@ class SectionCard(tk.Frame):
         self._apply_state()
 class MetricItem(tk.Frame):
     """指标卡片：彩色左边条 + 大数值优先 + 小标签在下（Datadog风格）+ hover tooltip"""
+    # 语义色只用于表达「健康 / 异常」；性能类指标统一品牌色调（规范 §2.3：禁彩虹色、禁语义误用）
     COLORS = {
-        "ttft": C_STYLE["info"], "tps": C_STYLE["accent"],
-        "total_tokens": C_STYLE["warning"], "agg_tps": C_STYLE["success"],
-        "e2e_p95": C_STYLE["error"], "rps": C_STYLE["info"],
-        "system_output_tps": C_STYLE["success"], "output_tokens": C_STYLE["warning"],
+        "ttft": C_STYLE["accent"], "visible_ttft": C_STYLE["accent"],
         "tpot": C_STYLE["accent"], "itl": C_STYLE["accent"],
+        "e2e_p95": C_STYLE["accent"],
+        "system_output_tps": C_STYLE["accent"], "tps": C_STYLE["accent"],
+        "agg_tps": C_STYLE["accent"], "rps": C_STYLE["accent"],
+        "total_tokens": C_STYLE["accent"], "output_tokens": C_STYLE["accent"],
         "success_rate": C_STYLE["success"],
-        "visible_ttft": C_STYLE["warning"],
     }
     # ── tooltip definitions ──
     TOOLTIPS = {
@@ -1121,6 +1268,7 @@ class MetricItem(tk.Frame):
         self._bar_color = self.COLORS.get(metric_key, C_STYLE["accent"])
         self._tooltip_text = self.TOOLTIPS.get(metric_key, "")
         self._tooltip_win = None
+        self._tooltip_after = None
         self._build()
     def _build(self):
         # left accent bar
@@ -1161,12 +1309,22 @@ class MetricItem(tk.Frame):
                        justify=tk.LEFT, anchor="w",
                        padx=C_STYLE["pad_sm"], pady=C_STYLE["pad_sm"])
         lbl.pack()
-        # position below the widget
+        # position below the widget（留 18px 间隙：提示窗压在指针下会导致 <Leave> 永不触发，提示常驻）
         tw.update_idletasks()
         x = self.winfo_rootx() + 4
-        y = self.winfo_rooty() + self.winfo_height() + 2
+        y = self.winfo_rooty() + self.winfo_height() + 18
         tw.geometry(f"+{x}+{y}")
+        # 兜底：6s 后自动隐藏 + 点击即隐藏
+        self._tooltip_after = self.after(6000, self._hide_tooltip)
+        tw.bind("<Button-1>", self._hide_tooltip)
     def _hide_tooltip(self, event=None):
+        after_id = getattr(self, "_tooltip_after", None)
+        if after_id:
+            try:
+                self.after_cancel(after_id)
+            except Exception:
+                pass
+            self._tooltip_after = None
         if self._tooltip_win:
             self._tooltip_win.destroy()
             self._tooltip_win = None
@@ -1230,6 +1388,9 @@ class NoticeBanner(tk.Frame):
                                  anchor="w")
         self.text_lbl.grid(row=0, column=1, sticky="w",
                           padx=(0, C_STYLE["pad_lg"]), pady=C_STYLE["pad_sm"])
+        # 折行宽度跟随横幅实际宽度（原先固定 420px，在 1300px 卡片里被折成 3 行且标点孤立）
+        self.bind("<Configure>",
+                  lambda e: self.text_lbl.config(wraplength=max(e.width - 72, 280)))
     def set_text(self, text: str):
         self.text_lbl.config(text=text)
         if text:
@@ -1246,11 +1407,13 @@ class LLMBenchmarkApp:
         self.root.title("JISUMAN LLM Benchmark GUI")
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        w = int(sw * 1099 / 1920)
-        h = int(sh * 1018 / 1080)
+        # 规范 §5：窗口可缩放、布局自适应；默认尺寸按屏幕取合理区间，
+        # 不再随屏幕等比缩小（旧实现 1099/1920 比例在 1366×768 上会挤成一团）。
+        w = max(1180, min(1440, int(sw * 0.78)))
+        h = max(760, min(960, int(sh * 0.88)))
         self.root.geometry(f"{w}x{h}")
-        self.root.resizable(False, False)
-        self.root.minsize(1024, 680)
+        self.root.resizable(True, True)
+        self.root.minsize(1100, 700)
         self.root.configure(bg=C_STYLE["bg_main"])
         self._benchmark_running = False
         self._sweep_running = False
@@ -1334,6 +1497,11 @@ class LLMBenchmarkApp:
         self._build_statusbar()
         self._load_config()
         self._refresh_ui_language()
+        # 配置载入后再刷新新页面（总览/对比/报告），确保显示的是已保存配置而非默认值
+        try:
+            self._refresh_side_pages()
+        except Exception:
+            pass
 
     def tr(self, key, default=None):
         return I18N.get(self.lang_code, I18N["zh_CN"]).get(
@@ -1421,10 +1589,21 @@ class LLMBenchmarkApp:
             except Exception:
                 pass
         if hasattr(self, "nb"):
-            self.nb.tab(self.settings_frame, text=f"  {self.tr('tab.settings')}  ")
-            self.nb.tab(self.bench_frame, text=f"  {self.tr('tab.benchmark')}  ")
-            self.nb.tab(self.sweep_frame, text=f"  {self.tr('tab.sweep')}  ")
-            self.nb.tab(self.history_frame, text=f"  {self.tr('tab.history')}  ")
+            for frame, key in (
+                (getattr(self, "overview_frame", None), "tab.overview"),
+                (getattr(self, "settings_frame", None), "tab.settings"),
+                (getattr(self, "bench_frame", None), "tab.benchmark"),
+                (getattr(self, "sweep_frame", None), "tab.sweep"),
+                (getattr(self, "history_frame", None), "tab.history"),
+                (getattr(self, "export_frame", None), "tab.export"),
+                (getattr(self, "env_profiles_frame", None), "tab.env_profiles"),
+            ):
+                if frame is None:
+                    continue
+                try:
+                    self.nb.tab(frame, text=f"  {self.tr(key)}  ")
+                except Exception:
+                    pass
         self._refresh_history_headers()
         if hasattr(self, "hist_tree"):
             self._refresh_history()
@@ -1436,10 +1615,12 @@ class LLMBenchmarkApp:
         if hasattr(self, "hist_canvas"):
             self.root.after_idle(self._redraw_e2e_histogram)
 
-    def _load_header_logo(self, path="/home/jisuman/logo.png", max_height=28, max_width=160):
+    def _load_header_logo(self, path=None, max_height=28, max_width=160):
         paths = [
             path,
-            "/opt/llm-benchmark/logo.png",
+            os.path.join(_SCRIPT_DIR, "assets", "brand", "jisumen-mark.png"),
+            os.path.join(_SCRIPT_DIR, "logo.png"),
+            "/home/jisuman/logo.png",
         ]
         logo_path = next((p for p in paths if p and os.path.exists(p)), None)
         if not logo_path:
@@ -1466,59 +1647,18 @@ class LLMBenchmarkApp:
                 return None
     # ---------- style ----------
     def _setup_styles(self):
-        st = ttk.Style()
-        st.theme_use("clam")
-        st.configure(".", font=C_STYLE["font_body"],
-                     background=C_STYLE["bg_main"], foreground=C_STYLE["text_primary"])
-        st.configure("Card.TFrame", background=C_STYLE["bg_card"])
-        st.configure("Header.TFrame", background=C_STYLE["bg_header"])
-        st.configure("StatusBar.TFrame", background=C_STYLE["bg_header"])
-        st.configure("Title.TLabel", font=C_STYLE["font_title"],
-                     background=C_STYLE["bg_header"], foreground=C_STYLE["text_primary"])
-        st.configure("Subtitle.TLabel", font=C_STYLE["font_subtitle"],
-                     background=C_STYLE["bg_header"], foreground=C_STYLE["text_secondary"])
-        st.configure("Section.TLabel", font=C_STYLE["font_section"],
-                     background=C_STYLE["bg_card"], foreground=C_STYLE["text_primary"])
-        st.configure("Body.TLabel", font=C_STYLE["font_body"],
-                     background=C_STYLE["bg_card"], foreground=C_STYLE["text_primary"])
-        st.configure("Small.TLabel", font=C_STYLE["font_small"],
-                     background=C_STYLE["bg_card"], foreground=C_STYLE["text_secondary"])
-        st.configure("Metric.TLabel", font=C_STYLE["font_metric"],
-                     background=C_STYLE["bg_card"], foreground=C_STYLE["text_primary"])
-        st.configure("MetricSmall.TLabel", font=C_STYLE["font_status"],
-                     background=C_STYLE["bg_card"], foreground=C_STYLE["text_primary"])
-        st.configure("StatusBar.TLabel", font=C_STYLE["font_small"],
-                     background=C_STYLE["bg_header"], foreground=C_STYLE["text_secondary"])
-        st.configure("Primary.TButton", font=C_STYLE["font_label"],
-                     background=C_STYLE["accent"], foreground="white",
-                     borderwidth=0, padding=(20, C_STYLE["pad_sm"]))
-        st.map("Primary.TButton",
-               background=[("disabled", "#B8B0F9"), ("active", C_STYLE["accent_hover"])])
-        st.configure("Secondary.TButton", font=C_STYLE["font_label"],
-                     background=C_STYLE["bg_card"], foreground=C_STYLE["text_primary"],
-                     borderwidth=1, padding=(16, C_STYLE["pad_sm"]))
-        st.map("Secondary.TButton",
-               background=[("disabled", "#F1F5F9")])
-        st.configure("App.TEntry", fieldbackground=C_STYLE["bg_input"],
-                     borderwidth=1, padding=10, font=C_STYLE["font_body"])
-        st.map("App.TEntry",
-               fieldbackground=[("disabled", "#F1F5F9"), ("focus", C_STYLE["accent_light"])])
-        st.configure("App.Treeview", rowheight=40, font=C_STYLE["font_body"],
+        # 企业级中性观感由 ui_theme 统一实现（规范 §2），此处只做应用级补充，
+        # 保证既有风格名（Primary/Secondary/App.* 等）继续可用。
+        st = _ui_theme.apply_ttk_styles(self.root)
+        st.configure("App.Treeview", rowheight=28, font=C_STYLE["font_body"],
                      background=C_STYLE["bg_card"], fieldbackground=C_STYLE["bg_card"],
                      foreground=C_STYLE["text_primary"])
         st.configure("App.Treeview.Heading", font=C_STYLE["font_label"],
-                     background=C_STYLE["bg_main"], foreground=C_STYLE["text_primary"],
-                     padding=(C_STYLE["pad_sm"], C_STYLE["pad_sm"]))
+                     background=C_STYLE["bg_inset"], foreground=C_STYLE["text_secondary"],
+                     relief="flat", padding=(C_STYLE["pad_sm"], C_STYLE["pad_sm"]))
         st.map("App.Treeview",
-               background=[("selected", C_STYLE["accent"])],
-               foreground=[("selected", "white")])
-        # vibrant progress bar
-        st.configure("Accent.Horizontal.TProgressbar",
-                     troughcolor=C_STYLE["border_light"],
-                     background=C_STYLE["accent"],
-                     bordercolor=C_STYLE["border"],
-                     lightcolor=C_STYLE["accent"],
-                     darkcolor=C_STYLE["accent_hover"])
+               background=[("selected", C_STYLE["accent_light"])],
+               foreground=[("selected", C_STYLE["text_primary"])])
     def _build_header(self):
         h = tk.Frame(self.root, bg=C_STYLE["bg_header"], height=56,
                      highlightbackground=C_STYLE["border"],
@@ -1533,15 +1673,15 @@ class LLMBenchmarkApp:
         # icon + title in one line
         title_row = tk.Frame(left, bg=C_STYLE["bg_header"])
         title_row.pack(anchor="w")
-        self.logo_image = self._load_header_logo("/home/jisuman/logo.png",
-                                                 max_height=28, max_width=160)
+        self.logo_image = self._load_header_logo(max_height=22, max_width=170)
         if self.logo_image is not None:
             icon_lbl = tk.Label(title_row, image=self.logo_image,
                                 bg=C_STYLE["bg_header"])
             icon_lbl.pack(side=tk.LEFT, padx=(0, 10))
             self._icon_lbl = None
         else:
-            icon_lbl = tk.Label(title_row, text="⚡", font=(FONT_FAMILY, 16),
+            # 极算门字标（文本降级，不使用 emoji 图标 —— 规范 §3）
+            icon_lbl = tk.Label(title_row, text="JISUMEN", font=(FONT_FAMILY, 15, "bold"),
                                 bg=C_STYLE["bg_header"], fg=C_STYLE["accent"])
             icon_lbl.pack(side=tk.LEFT, padx=(0, 8))
             self._icon_lbl = icon_lbl
@@ -1587,23 +1727,80 @@ class LLMBenchmarkApp:
                   padx=C_STYLE["pad_lg"], pady=(0, C_STYLE["pad_lg"]))
         body.grid_rowconfigure(0, weight=1)
         body.grid_columnconfigure(0, weight=1)
-        self.nb = ttk.Notebook(body)
+        self.nb = ttk.Notebook(body, style="App.TNotebook")
         self.nb.grid(row=0, column=0, sticky="nsew")
+        # 页面顺序即用户动线：总览 → 新建测试 → 测试与结果 → 并发扫测 → 历史对比 → 报告与证据 → 环境档案
+        self.overview_frame = tk.Frame(self.nb, bg=C_STYLE["bg_main"])
         self.settings_frame = tk.Frame(self.nb, bg=C_STYLE["bg_main"])
         self.bench_frame = tk.Frame(self.nb, bg=C_STYLE["bg_main"])
         self.sweep_frame = tk.Frame(self.nb, bg=C_STYLE["bg_main"])
         self.history_frame = tk.Frame(self.nb, bg=C_STYLE["bg_main"])
-        self.nb.add(self.settings_frame, text="  参数设置  ")
-        self.nb.add(self.bench_frame, text="  基准测试  ")
-        self.nb.add(self.sweep_frame, text="  并发扫测  ")
+        self.export_frame = tk.Frame(self.nb, bg=C_STYLE["bg_main"])
         self.env_profiles_frame = tk.Frame(self.nb, bg=C_STYLE["bg_main"])
+        self.nb.add(self.overview_frame, text="  总览  ")
+        self.nb.add(self.settings_frame, text="  新建测试  ")
+        self.nb.add(self.bench_frame, text="  测试与结果  ")
+        self.nb.add(self.sweep_frame, text="  并发扫测  ")
+        self.nb.add(self.history_frame, text="  历史对比  ")
+        self.nb.add(self.export_frame, text="  报告与证据  ")
         self.nb.add(self.env_profiles_frame, text="  环境档案  ")
-        self.nb.add(self.history_frame, text="  历史记录  ")
+        self._build_overview_tab()
         self._build_settings_tab()
         self._build_results_tab()
         self._build_sweep_tab()
         self._build_history_tab()
+        self._build_export_tab()
         self._build_env_profiles_tab()
+        self._bind_shortcuts()
+
+    def _bind_shortcuts(self):
+        """键盘可达性（规范 §5）：Ctrl+1..7 切页、F5 刷新当前数据、Esc 关闭浮层。"""
+        for i in range(1, self.nb.index("end") + 1):
+            self.root.bind_all(f"<Control-Key-{i}>",
+                               lambda e, idx=i - 1: self._select_tab(idx))
+        self.root.bind_all("<F5>", lambda e: self._shortcut_refresh())
+        self.root.bind_all("<Escape>", lambda e: self._shortcut_escape())
+
+    def _select_tab(self, idx: int):
+        try:
+            if idx < self.nb.index("end"):
+                self.nb.select(idx)
+                self.nb.focus_set()
+                for cb in getattr(self, "_tab_change_callbacks", []):
+                    cb(idx)
+        except Exception:
+            pass
+        return "break"
+
+    def _shortcut_refresh(self):
+        """F5：刷新当前页可见数据（历史/总览/报告）。"""
+        for name in ("_refresh_history", "_refresh_overview", "_refresh_export"):
+            fn = getattr(self, name, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:
+                    pass
+        return "break"
+
+    def _shortcut_escape(self):
+        """Esc：关闭最上层浮层（详情窗/对话框），不关闭主窗口。"""
+        try:
+            for w in reversed(self.root.winfo_children()):
+                if isinstance(w, tk.Toplevel) and w.winfo_exists():
+                    w.destroy()
+                    return "break"
+        except Exception:
+            pass
+        return "break"
+
+    def _build_overview_tab(self):
+        from llm_benchmark_app import ui_pages
+        ui_pages.build_overview_tab(self, self.overview_frame)
+
+    def _build_export_tab(self):
+        from llm_benchmark_app import ui_pages
+        ui_pages.build_export_tab(self, self.export_frame)
     def _build_settings_tab(self):
         sf = self.settings_frame
         sf.grid_columnconfigure(0, weight=1)
@@ -2425,28 +2622,31 @@ class LLMBenchmarkApp:
         self.metrics: dict[str, MetricItem] = {}
         metric_grid = tk.Frame(metrics_card.content, bg=C_STYLE["bg_card"])
         metric_grid.pack(fill=tk.X)
-        # Row 0: 4 cards
-        row0 = tk.Frame(metric_grid, bg=C_STYLE["bg_card"])
-        row0.pack(fill=tk.X, pady=(0, C_STYLE["gap_md"]))
-        for i, (key, label) in enumerate([
-            ("ttft", "首包延迟 TTFT"), ("visible_ttft", "首字延迟 FVT"),
-            ("e2e_p95", "E2E P95"), ("system_output_tps", "输出吞吐 TPS"),
-        ]):
-            mi = MetricItem(row0, label, metric_key=key)
-            mi.pack(side=tk.LEFT, fill=tk.BOTH, expand=True,
-                    padx=(0 if i == 0 else C_STYLE["gap_md"], 0))
-            self.metrics[key] = mi
-        # Row 1: 4 cards
-        row1 = tk.Frame(metric_grid, bg=C_STYLE["bg_card"])
-        row1.pack(fill=tk.X)
-        for i, (key, label) in enumerate([
-            ("rps", "请求吞吐 RPS"), ("tpot", "单 Token 耗时 TPOT"),
-            ("itl", "Token 间隔 ITL"), ("success_rate", "成功率"),
-        ]):
-            mi = MetricItem(row1, label, metric_key=key)
-            mi.pack(side=tk.LEFT, fill=tk.BOTH, expand=True,
-                    padx=(0 if i == 0 else C_STYLE["gap_md"], 0))
-            self.metrics[key] = mi
+        # 指标按口径分组：延迟（单请求）/ 吞吐（系统级）/ 可靠性（规范 §2.3、§3.4）
+        metric_groups = (
+            ("延迟（单请求）", (
+                ("ttft", "首包延迟 TTFT"), ("visible_ttft", "首字延迟 FVT"),
+                ("tpot", "单 Token 耗时 TPOT"), ("itl", "Token 间隔 ITL"),
+                ("e2e_p95", "E2E P95"),
+            )),
+            ("吞吐（系统级）", (
+                ("system_output_tps", "输出吞吐 TPS"), ("rps", "请求吞吐 RPS"),
+            )),
+            ("可靠性（单请求）", (
+                ("success_rate", "成功率"),
+            )),
+        )
+        for gi, (group_title, items) in enumerate(metric_groups):
+            grow = tk.Frame(metric_grid, bg=C_STYLE["bg_card"])
+            grow.pack(fill=tk.X, pady=(0 if gi == 0 else C_STYLE["gap_md"], 0))
+            tk.Label(grow, text=group_title, font=C_STYLE["font_small"],
+                     bg=C_STYLE["bg_card"], fg=C_STYLE["text_muted"],
+                     width=12, anchor="w", justify=tk.LEFT).pack(side=tk.LEFT, fill=tk.Y)
+            for i, (key, label) in enumerate(items):
+                mi = MetricItem(grow, label, metric_key=key)
+                mi.pack(side=tk.LEFT, fill=tk.BOTH, expand=True,
+                        padx=(0 if i == 0 else C_STYLE["gap_md"], 0))
+                self.metrics[key] = mi
         self.notice_banner = NoticeBanner(bf, "info")
         self.notice_banner.grid(row=2, column=0, sticky="ew",
                                 pady=(0, C_STYLE["gap_lg"]))
@@ -3704,6 +3904,31 @@ class LLMBenchmarkApp:
             self._report_collapsed = False
         self._draw_histogram(summary)
         self._refresh_history()
+        self._refresh_side_pages()
+        self._notice_demo_data()
+
+    def _refresh_side_pages(self):
+        """跑测/清空后同步刷新总览、历史对比、报告与证据（UI/UX v2 新页面）。"""
+        for name in ("_refresh_overview", "_refresh_compare_options", "_refresh_export"):
+            fn = getattr(self, name, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:
+                    pass
+
+    def _notice_demo_data(self):
+        """演示数据可见标注（规范 §6）：当前端点为本地 mock 时在结果页提示。"""
+        try:
+            from llm_benchmark_app.ui_pages import detect_data_source
+            if detect_data_source({"api_url": self.url_var.get(),
+                                   "model": self.model_var.get()}) == "demo":
+                self.notice_banner.set_text(
+                    "演示数据：本次结果来自本地 mock 端点（非真实硬件/模型性能），"
+                    "不可用于对外性能结论。")
+        except Exception:
+            pass
+
     def _diagnose(self, summary: dict) -> list[str]:
         tips = []
         total = max(summary["total"], 1)
@@ -4567,14 +4792,15 @@ class LLMBenchmarkApp:
         self.history_type_filter_var = tk.StringVar(value="All")
         type_filter = ttk.Combobox(toolbar_inner,
                                    textvariable=self.history_type_filter_var,
-                                   values=["All", "Single", "Sweep"],
-                                   width=10, state="readonly")
+                                   values=[self.tr("history.type_all"), self.tr("history.type_single"),
+                                           self.tr("history.type_sweep")],
+                                   width=12, state="readonly", style="App.TCombobox")
         self.history_type_filter = type_filter
         type_filter.pack(side=tk.LEFT)
         type_filter.bind("<<ComboboxSelected>>", lambda e: self._refresh_history())
         ttk.Button(toolbar_inner, text="⇆ 对比选中", style="Secondary.TButton",
                    command=self._compare_selected_runs).pack(side=tk.LEFT, padx=C_STYLE["pad_sm"])
-        ttk.Button(toolbar_inner, text="✕ 清空记录", style="Secondary.TButton",
+        ttk.Button(toolbar_inner, text="✕ 清空记录", style="Danger.TButton",
                    command=self._clear_history).pack(side=tk.LEFT, padx=C_STYLE["pad_sm"])
         self.history_status_var = tk.StringVar(value="")
         lbl = tk.Label(toolbar_inner, textvariable=self.history_status_var,
@@ -4594,23 +4820,40 @@ class LLMBenchmarkApp:
         self.hist_tree = ttk.Treeview(table_card, columns=cols,
                                       show="headings", selectmode="extended",
                                       style="App.Treeview")
+        # 13 列在 1248px 最小窗宽下必然超宽：固定列宽 + 横向滚动，不压缩表头（规范 §3.4）
         col_widths = {
-            "id": 35, "Time": 130, "Type": 65, "Model": 120,
-            "Environment": 160, "GPU": 100, "Backend": 75, "Quant": 55,
-            "Config": 120, "Output TPS": 90, "TTFT P95": 80, "E2E P95": 80, "Status": 80,
+            "id": 44, "Time": 132, "Type": 76, "Model": 150, "Environment": 104,
+            "GPU": 96, "Backend": 84, "Quant": 66, "Config": 118,
+            "Output TPS": 176, "TTFT P95": 140, "E2E P95": 132, "Status": 88,
+        }
+        # 表头带单位；未在 _refresh_history_headers 映射的列直接给出中文+单位（规范 §3.4）
+        col_heads = {
+            "Environment": "环境", "GPU": "GPU", "Backend": "框架", "Quant": "量化",
+            "Output TPS": "Output TPS (tok/s)", "TTFT P95": "TTFT P95 (ms)",
+            "E2E P95": "E2E P95 (ms)",
         }
         for c in cols:
-            self.hist_tree.heading(c, text=c)
-            self.hist_tree.column(c, width=col_widths.get(c, 80), anchor="center")
+            self.hist_tree.heading(c, text=col_heads.get(c, c))
+            self.hist_tree.column(
+                c, width=col_widths.get(c, 80),
+                minwidth=min(col_widths.get(c, 80), 90),
+                stretch=(c == "Model"),
+                anchor="e" if c in ("Output TPS", "TTFT P95", "E2E P95") else "center")
         scrollbar = ttk.Scrollbar(table_card, orient=tk.VERTICAL,
                                   command=self.hist_tree.yview)
-        self.hist_tree.configure(yscrollcommand=scrollbar.set)
+        hscrollbar = ttk.Scrollbar(table_card, orient=tk.HORIZONTAL,
+                                   command=self.hist_tree.xview)
+        self.hist_tree.configure(yscrollcommand=scrollbar.set,
+                                 xscrollcommand=hscrollbar.set)
         self.hist_tree.grid(row=0, column=0, sticky="nsew",
                             padx=(C_STYLE["pad_lg"], 0),
                             pady=C_STYLE["pad_lg"])
         scrollbar.grid(row=0, column=1, sticky="ns",
                        padx=(0, C_STYLE["pad_lg"]),
                        pady=C_STYLE["pad_lg"])
+        hscrollbar.grid(row=1, column=0, sticky="ew",
+                        padx=(C_STYLE["pad_lg"], 0),
+                        pady=(0, C_STYLE["pad_sm"]))
         self.hist_tree.bind("<<TreeviewSelect>>", self._on_history_select)
         self.hist_tree.bind("<Double-1>", self._on_history_double_click)
 
@@ -4632,6 +4875,10 @@ class LLMBenchmarkApp:
         self.history_detail_text.grid(row=1, column=0, sticky="ew",
                                       padx=C_STYLE["pad_lg"],
                                       pady=(0, C_STYLE["pad_md"]))
+        # 历史对比面板（UI/UX v2，规范 §4）：子选择 A/B + 差异标注 + 指标并排
+        self.hist_tree.configure(height=6)
+        from llm_benchmark_app import ui_pages
+        ui_pages.build_compare_panel(self, hf)
         self._refresh_history()
 
     def _refresh_history_headers(self):
@@ -9022,12 +9269,8 @@ class LLMBenchmarkApp:
                 fill=C_STYLE["text_secondary"])
             return
 
-        title = self.tr("section.e2e_distribution")
-        canvas.create_text(w / 2, 16, text=title,
-                           font=C_STYLE["font_section"],
-                           fill=C_STYLE["text_primary"])
-
-        margin_l, margin_r, margin_t, margin_b = 58, 26, 48, 48
+        # 卡片标题已显示图表名，画布内不再重复标题（规范 §3.5）
+        margin_l, margin_r, margin_t, margin_b = 58, 26, 26, 48
         plot_w = w - margin_l - margin_r
         plot_h = h - margin_t - margin_b
         if plot_w < 20 or plot_h < 20:
@@ -9056,15 +9299,15 @@ class LLMBenchmarkApp:
             y0 = margin_t + plot_h - bar_h
             y1 = margin_t + plot_h
             ratio = i / max(bin_count - 1, 1)
+            # 品牌色调渐变（accent_light→accent），不使用紫色/彩虹色（规范 §2.3）
             if ratio < 0.25:
-                r_, g_, b_ = 200, 195, 253
+                color = C_STYLE["accent_soft"]
             elif ratio < 0.5:
-                r_, g_, b_ = 160, 148, 252
+                color = C_STYLE["accent_light"]
             elif ratio < 0.75:
-                r_, g_, b_ = 120, 100, 250
+                color = C_STYLE["accent"]
             else:
-                r_, g_, b_ = 83, 58, 253
-            color = f"#{r_:02x}{g_:02x}{b_:02x}"
+                color = C_STYLE["accent_pressed"]
             canvas.create_rectangle(x0, y0, x1, y1, fill=color,
                                     outline="", width=0)
             if count > 0:
@@ -9107,7 +9350,7 @@ class LLMBenchmarkApp:
         stat_text = (
             f"n={len(latencies)}  min={min(latencies):.3f}s  "
             f"avg={avg:.3f}s  p95={p95:.3f}s  p99={p99:.3f}s")
-        canvas.create_text(margin_l, 32, text=stat_text, anchor="w",
+        canvas.create_text(margin_l, 14, text=stat_text, anchor="w",
                            font=C_STYLE["font_small"],
                            fill=C_STYLE["text_secondary"])
 
