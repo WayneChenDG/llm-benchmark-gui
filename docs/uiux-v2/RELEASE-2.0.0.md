@@ -1,16 +1,19 @@
 # RELEASE 2.0.0 — JISUMEN LLM Benchmark GUI（首个发行版，UI/UX v2）
 
 - 版本：`2.0.0`（`llm_benchmark.py: APP_VERSION`，包内 `VERSION` 含版本/架构/Python/git_rev/构建时间）
-- 构建时间：2026-09-22（构建机：jisuman-ai-srv-001，Debian 系 Linux x86_64，Python 3.10.12）
-- git：提交 `1a850a0`，tag `v2.0.0`（Gitea `jisuman/llm-benchmark-gui` 与 GitHub `WayneChenDG/llm-benchmark-gui` 均已同步）
+- 构建时间：2026-09-22 15:16（构建机：jisuman-ai-srv-001，Debian 系 Linux x86_64，Python 3.10.12）
+- 包内 `VERSION.git_rev = 25f1f58`（该提交已包含打包器 `packaging/`，可据以重新构建）
+- git：提交 `25f1f58`（master），tag `v2.0.0`（Gitea `jisuman/llm-benchmark-gui` 与 GitHub `WayneChenDG/llm-benchmark-gui` 均已同步）
 - 回滚点（改版前）：tag `uiux-before-v1-20260922_142619`
 
 ## 一、发行包
 
 | 包 | 大小 | sha256 |
 |---|---|---|
-| `jisumen-llm-benchmark-2.0.0-linux-x86_64.tar.gz`（**完整版，含离线 wheels**） | 124.4 MiB | `bce4c2aeeec5df8c74f0317d12c15768561379385440d6bf15229df67bf7592e` |
-| `jisumen-llm-benchmark-2.0.0-linux-x86_64-slim.tar.gz`（**精简版，联网安装依赖**） | 0.88 MiB | `a9e0d7b4dd21bd597f6f93fd6c95c6d9d3221f12ab8cc894606cd105a3af0b6c` |
+| `jisumen-llm-benchmark-2.0.0-linux-x86_64.tar.gz`（**完整版，含离线 wheels**） | 124.4 MiB | `6ccb35987b3db5788dcd4722571c7d4db2cb029b3436f1c97df58737b589a491` |
+| `jisumen-llm-benchmark-2.0.0-linux-x86_64-slim.tar.gz`（**精简版，联网安装依赖**） | 0.88 MiB | `76143471e2062a665913a2f5509e2884ad931263c592224880a21343b216a5cb` |
+
+> 说明：同版本号先前曾产出过一版（哈希 `bce4c2ae…`/`a9e0d7b4…`），其 `VERSION.git_rev` 指向尚未包含打包器的提交，已在交付前整批重建覆盖，未被任何人取用；上表为最终交付哈希。
 
 取包位置：
 - 本地（构建机）：`/opt/llm-benchmark/dist/`
@@ -49,8 +52,8 @@ bash verify-install.sh --install-dir ~/jisumen-llm-benchmark --smoke
 | tarball 与包内 `SHA256SUMS` 校验 | 通过 |
 | `install.sh`（完整版，**离线** wheels 安装） | 成功 |
 | `verify-install.sh --smoke` | **PASS=16 FAIL=0**，含 GUI 启动后 12s 存活 |
-| 用**安装副本**跑真实基准（本地 mock OpenAI 兼容端点，C1/N2） | `success=2 fail=0 success_rate=100.0% TTFT avg=0.115s` |
-| 验收 harness | `packaging/accept-release.sh` → **PASS=11 FAIL=0** |
+| 用**安装副本**跑真实基准（本地 mock OpenAI 兼容端点，C1/N2） | 两次验收：`success=2 fail=0`（100%）与 `success=1 fail=1`（50%，来自 mock 端点 15% 故意失败注入）；TTFT avg 0.115s / 0.154s |
+| 验收 harness | `packaging/accept-release.sh` → **PASS=11 FAIL=0**（两次独立运行均全绿） |
 
 ## 四、已知边界（未覆盖，如实标注）
 
