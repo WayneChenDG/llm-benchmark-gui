@@ -9,7 +9,7 @@ Metrics aligned with:
   • NIM Benchmark:      output_token_throughput, request_throughput
 """
 # ── 发行版本（单一来源：packaging/make-release.sh 读取此行）──────────────────
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.1.1"
 
 import json
 import logging
@@ -340,6 +340,7 @@ I18N = {
         "theme.label": "主题",
         "theme.navy": "深海军蓝",
         "theme.light": "浅色",
+        "theme.busy": "测试运行期间不能切换主题，请等本次测试结束后再切换。",
         "language.label": "语言",
         "language.zh": "简体中文",
         "language.en": "English",
@@ -686,6 +687,8 @@ I18N = {
         "theme.label": "Theme",
         "theme.navy": "Navy Blue",
         "theme.light": "Light",
+        "theme.busy": "Theme cannot be switched while a test is running. "
+                      "Please wait until the test finishes.",
         "language.label": "Language",
         "language.zh": "简体中文",
         "language.en": "English",
@@ -1663,14 +1666,41 @@ class LLMBenchmarkApp:
         with open(INI_PATH, "w", encoding="utf-8") as f:
             cfg.write(f)
 
+    def _refresh_theme_combo(self):
+        """按当前语言刷新主题下拉显示名（否则英文界面里仍是旧语言标签，
+        且选中值无法映射回主题键 → 看起来"切换没反应"）。"""
+        if not hasattr(self, "theme_combo"):
+            return
+        try:
+            keys = list(_ui_theme.theme_keys())
+            labels = [self._theme_label(k) for k in keys]
+            self.theme_combo.configure(values=labels)
+            idx = keys.index(_ui_theme.ACTIVE_THEME)
+            self.theme_combo.current(idx)
+            self.theme_var.set(labels[idx])
+        except Exception:
+            pass
+
     def _on_theme_selected(self, event=None):
+        keys = list(_ui_theme.theme_keys())
         name = self._theme_key_from_label(self.theme_var.get())
+        if name is None:
+            # 语言刚切换时下拉里可能残留旧语言标签；退回按选项下标解析
+            # （下拉 values 顺序 == theme_keys 顺序）
+            try:
+                idx = self.theme_combo.current()
+            except Exception:
+                idx = -1
+            if 0 <= idx < len(keys):
+                name = keys[idx]
         if not name or name == _ui_theme.ACTIVE_THEME:
+            self._refresh_theme_combo()
             return
         if self._benchmark_running or getattr(self, "_sweep_running", False):
             messagebox.showinfo(self.tr("app.title"),
-                                "测试运行期间不能切换主题，请等本次测试结束后再切换。")
-            self.theme_var.set(self._theme_label(_ui_theme.ACTIVE_THEME))
+                                self.tr("theme.busy",
+                                        "测试运行期间不能切换主题，请等本次测试结束后再切换。"))
+            self._refresh_theme_combo()
             return
         self._save_theme_config(name)
         self._apply_theme(name)
@@ -1703,6 +1733,7 @@ class LLMBenchmarkApp:
     def _refresh_ui_language(self):
         self.root.title(self.tr("app.title"))
         self._bind_existing_i18n_widgets()
+        self._refresh_theme_combo()
         for widget, key, attr in getattr(self, "_i18n_widgets", []):
             try:
                 widget.configure(**{attr: self.tr(key)})
