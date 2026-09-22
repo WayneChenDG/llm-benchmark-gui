@@ -8,6 +8,9 @@ Metrics aligned with:
   • NVIDIA GenAI-Perf: output_token_throughput, request_throughput, ttft, itl
   • NIM Benchmark:      output_token_throughput, request_throughput
 """
+# ── 发行版本（单一来源：packaging/make-release.sh 读取此行）──────────────────
+APP_VERSION = "2.0.0"
+
 import json
 import logging
 import os
@@ -332,7 +335,7 @@ FONT_FAMILY = _detect_font_family()
 
 I18N = {
     "zh_CN": {
-        "app.title": "JISUMAN LLM Benchmark GUI",
+        "app.title": f"JISUMEN LLM Benchmark GUI v{APP_VERSION}",
         "app.subtitle": "OpenAI 兼容接口并发性能测试",
         "language.label": "语言",
         "language.zh": "简体中文",
@@ -675,7 +678,7 @@ I18N = {
         "sweep.custom_rule.fixed": "固定总请求数",
     },
     "en_US": {
-        "app.title": "JISUMAN LLM Benchmark GUI",
+        "app.title": f"JISUMEN LLM Benchmark GUI v{APP_VERSION}",
         "app.subtitle": "OpenAI-compatible API concurrency benchmark",
         "language.label": "Language",
         "language.zh": "简体中文",
@@ -1404,7 +1407,7 @@ class NoticeBanner(tk.Frame):
 class LLMBenchmarkApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("JISUMAN LLM Benchmark GUI")
+        self.root.title(f"JISUMEN LLM Benchmark GUI v{APP_VERSION}")
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
         # 规范 §5：窗口可缩放、布局自适应；默认尺寸按屏幕取合理区间，
@@ -2868,7 +2871,7 @@ class LLMBenchmarkApp:
             title_text = self.tr("progress.sweeping")
 
         ov = tk.Toplevel(self.root)
-        ov.title("JISUMAN LLM Benchmark")
+        ov.title(f"JISUMEN LLM Benchmark v{APP_VERSION}")
         ov.transient(self.root)          # child of main window — non-modal
         ov.resizable(False, False)
         ov.configure(bg=C_STYLE["bg_card"],
