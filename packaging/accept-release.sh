@@ -69,8 +69,10 @@ echo "==> 真实负载测试（$URL）" | tee -a "$LOG"
 ( cd "$INST" && "$INST/.venv/bin/python" - "$URL" <<'PY' >>"$LOG" 2>&1
 import json, sys
 sys.path.insert(0, ".")
-from llm_benchmark_app.runner import run_benchmark
-url = sys.argv[1]
+from llm_benchmark_app.runner import run_benchmark, normalize_api_url
+# 与 GUI 一致：GUI 在调用 run_benchmark 前会归一化 URL（补 /chat/completions），
+# 直接传裸 /v1 会 404（曾把脚本用法问题误判为产品缺陷）
+url = normalize_api_url(sys.argv[1])
 out = {}
 msgs = [{"role": "system", "content": "你是助手。"},
         {"role": "user", "content": "用一句话介绍基准测试。"}]
