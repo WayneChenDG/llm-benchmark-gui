@@ -17,7 +17,11 @@
 
 取包位置：
 - 本地（构建机）：`/opt/llm-benchmark/dist/`
-- 文件服务器（已在远端复核 sha256 = OK）：`\\192.168.1.254\data\jisumen\releases\2.0.0\`（Linux 侧 `/data/jisumen/releases/2.0.0/`）
+- **文件服务器（推荐取包处，已用真实 SMB 客户端以 `jisuman` 身份复核可见）**：
+  `\\192.168.1.254\data\software\installers\jisumen-llm-benchmark\2.0.0\`
+  Linux 侧：`/data/software/installers/jisumen-llm-benchmark/2.0.0/`（远端 `sha256sum -c` = OK）
+
+> 取包说明：该 share（`[data]` → `/data`，valid users = jisuman/root）里包是可见的；若 Explorer 里看不到，按 F5 刷新目录（Windows 会缓存 SMB 目录视图）。曾短暂放在 `/data/jisumen/releases/2.0.0/`，为符合服务器既有惯例（`software/installers/`）已整批移动，旧路径不再保留，避免两处副本。
 
 包内：应用源码（`llm_benchmark.py` + `llm_benchmark_app/`）、`VERSION`、`SHA256SUMS`、`install.sh`、`verify-install.sh`、`scripts/`、`tests/`、`docs/uiux-v2/*.md`、`requirements*.txt`、`LICENSE`、`logo.png`；完整版另含 `wheels/py3.10-x86_64/`（离线安装用）。
 
