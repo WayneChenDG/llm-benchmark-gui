@@ -167,7 +167,7 @@ def build_overview_tab(app, frame):
     acts = tk.Frame(cfg_body, bg=T["bg_card"])
     acts.pack(fill=tk.X, pady=(SP["md"], 0))
     ttk.Button(acts, text=_tr(frame, "ov.act_new", "新建测试"), style="Primary.TButton",
-               command=lambda: app._select_tab(1)).pack(side=tk.LEFT)
+               command=lambda: getattr(app, "_guided_open_new_test", lambda: app._select_tab(1))()).pack(side=tk.LEFT)
     ttk.Button(acts, text=_tr(frame, "ov.act_import_demo", "载入演示配置"),
                style="Secondary.TButton",
                command=lambda: _load_demo_config(app)).pack(side=tk.LEFT, padx=SP["sm"])
@@ -317,13 +317,21 @@ def refresh_overview(app):
 
 def _load_demo_config(app):
     """载入演示端点配置（本地 mock）。明确提示这是演示数据。"""
+    # Loading a demo must never silently overwrite a user's saved endpoint,
+    # even when 自动保存 is enabled.  Subsequent edits still use the user's
+    # normal auto-save preference.
+    previous_suspend = getattr(app, "_suspend_auto_save", False)
+    app._suspend_auto_save = True
     try:
         app.url_var.set("http://127.0.0.1:8123/v1")
         app.model_var.set("demo-qwen3-32b-fp8")
         app.key_var.set("demo-key")
     except Exception:
         pass
-    app._select_tab(1)
+    finally:
+        app._suspend_auto_save = previous_suspend
+    app._demo_config_loaded = True
+    getattr(app, "_guided_open_new_test", lambda: app._select_tab(1))()
     messagebox.showinfo(
         "演示配置",
         "已填入本地演示端点（scripts/demo_mock_openai_server.py 启动）：\n"
@@ -641,7 +649,7 @@ def refresh_export(app, keep: bool = False):
                       _tr(app.exp_art_slot, "exp.empty_body",
                           "完成一次测试后，报告、图表、原始 JSON 与交付清单会汇总在这里。"),
                       action_text=_tr(app.exp_art_slot, "ov.act_new", "新建测试"),
-                      command=lambda: app._select_tab(1)).pack(fill=tk.X)
+                      command=lambda: getattr(app, "_guided_open_new_test", lambda: app._select_tab(1))()).pack(fill=tk.X)
         return
 
     try:

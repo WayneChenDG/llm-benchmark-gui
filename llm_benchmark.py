@@ -1962,31 +1962,77 @@ class LLMBenchmarkApp:
     def _build_settings_tab(self):
         sf = self.settings_frame
         sf.grid_columnconfigure(0, weight=1)
-        sf.grid_rowconfigure(0, weight=1)
+        sf.grid_rowconfigure(1, weight=1)
 
-        canvas = tk.Canvas(sf, bg=C_STYLE["bg_main"], highlightthickness=0)
-        scroll = ttk.Scrollbar(sf, orient=tk.VERTICAL, command=canvas.yview)
+        # Guided flow chrome: keep the seven original top-level tabs, while
+        # making "新建测试" a three-step, bounded journey.  The existing
+        # widgets and runner are deliberately reused below; only their
+        # presentation and navigation are changed.
+        self._guided_step = 0
+        self._guided_step_frames = []
+        self._guided_step_badges = []
+        wizard_head = tk.Frame(sf, bg=C_STYLE["bg_main"])
+        wizard_head.grid(row=0, column=0, sticky="ew", padx=C_STYLE["pad_lg"],
+                         pady=(C_STYLE["pad_md"], C_STYLE["gap_sm"]))
+        wizard_head.grid_columnconfigure(0, weight=1)
+        head_left = tk.Frame(wizard_head, bg=C_STYLE["bg_main"])
+        head_left.grid(row=0, column=0, sticky="w")
+        self._guided_title = tk.Label(
+            head_left, text="新建测试 · 引导式流程",
+            font=C_STYLE["font_section"], bg=C_STYLE["bg_main"],
+            fg=C_STYLE["text_primary"])
+        self._guided_title.pack(anchor="w")
+        self._guided_subtitle = tk.Label(
+            head_left, text="按三步完成配置；开始后仍使用原有预检与测试执行逻辑。",
+            font=C_STYLE["font_small"], bg=C_STYLE["bg_main"],
+            fg=C_STYLE["text_secondary"])
+        self._guided_subtitle.pack(anchor="w", pady=(2, 0))
+        steps_row = tk.Frame(wizard_head, bg=C_STYLE["bg_main"])
+        steps_row.grid(row=0, column=1, sticky="e")
+        for idx, title in enumerate(("1 连接与模型", "2 测试参数", "3 确认并开始")):
+            badge = tk.Label(steps_row, text=title, font=C_STYLE["font_small"],
+                             padx=10, pady=5, bg=C_STYLE["bg_card"],
+                             fg=C_STYLE["text_secondary"],
+                             highlightbackground=C_STYLE["border"],
+                             highlightthickness=1)
+            badge.pack(side=tk.LEFT, padx=(0 if idx == 0 else 6, 0))
+            self._guided_step_badges.append(badge)
+
+        content = tk.Frame(sf, bg=C_STYLE["bg_main"])
+        content.grid(row=1, column=0, sticky="nsew", padx=C_STYLE["pad_lg"])
+        content.grid_columnconfigure(0, weight=1)
+        content.grid_rowconfigure(0, weight=1)
+        canvas = tk.Canvas(content, bg=C_STYLE["bg_main"], highlightthickness=0)
+        scroll = ttk.Scrollbar(content, orient=tk.VERTICAL, command=canvas.yview)
         inner = tk.Frame(canvas, bg=C_STYLE["bg_main"])
         inner.bind("<Configure>",
                    lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0, 0), window=inner, anchor="nw", tags="inner")
         canvas.configure(yscrollcommand=scroll.set)
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scroll.grid(row=0, column=1, sticky="ns")
+        content.grid_rowconfigure(0, weight=1)
 
-        # Bind canvas resize to update inner window width
         def _on_canvas_resize(event):
             canvas.itemconfig("inner", width=event.width)
         canvas.bind("<Configure>", _on_canvas_resize, add="+")
 
-        # Enable mousewheel scrolling
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
         canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
         canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        self._guided_canvas = canvas
+        self._guided_inner = inner
 
-        col = tk.Frame(inner, bg=C_STYLE["bg_main"])
-        col.pack(fill=tk.X, padx=C_STYLE["pad_lg"], pady=C_STYLE["pad_lg"])
+        step1 = tk.Frame(inner, bg=C_STYLE["bg_main"])
+        step2 = tk.Frame(inner, bg=C_STYLE["bg_main"])
+        step3 = tk.Frame(inner, bg=C_STYLE["bg_main"])
+        self._guided_step_frames = [step1, step2, step3]
+        for step in self._guided_step_frames:
+            step.pack(fill=tk.X, padx=C_STYLE["pad_lg"], pady=C_STYLE["pad_lg"])
+
+        col = tk.Frame(step1, bg=C_STYLE["bg_main"])
+        col.pack(fill=tk.X)
 
         # ── Environment selector (top of settings) ──
         env_card = tk.Frame(col, bg=C_STYLE["bg_card"],
@@ -2047,39 +2093,203 @@ class LLMBenchmarkApp:
         self._labeled_text(card_a.content, "用户提示词", self.prompt_var, 4, height=2)
         # Store stable reference so Apply can update the widget directly
         self._api_user_prompt_widget = self._text_widgets.get("用户提示词")
-        card_b = SectionCard(col, "测试参数", collapsible=True, expanded=True)
+        card_b = SectionCard(step2, "测试参数", collapsible=True, expanded=True)
         card_b.pack(fill=tk.X, pady=(0, C_STYLE["gap_lg"]))
         self._build_test_params(card_b.content)
 
         # ── 输入 Token 校准 (Input Token Calibration) ────────────────────────────
-        card_token_calib = SectionCard(col, self.tr("section.token_calibration"),
+        card_token_calib = SectionCard(step2, self.tr("section.token_calibration"),
                                        collapsible=True, expanded=False)
         card_token_calib.pack(fill=tk.X, pady=(0, C_STYLE["gap_lg"]))
         self._build_token_calib_section(card_token_calib.content)
 
-        card_c = SectionCard(col, "操作", collapsible=True, expanded=True)
-        card_c.pack(fill=tk.X)
-        btn_row = tk.Frame(card_c.content, bg=C_STYLE["bg_card"])
-        btn_row.pack(fill=tk.X, pady=(0, C_STYLE["gap_sm"]))
-        self.start_btn = ttk.Button(btn_row, text="开始基准测试",
+        # Step 3 deliberately contains no second copy of the form.  It is a
+        # live review, so every value shown here is the value that the runner
+        # will receive after text widgets are synchronised.
+        review_card = SectionCard(step3, "确认并开始", collapsible=False, expanded=True)
+        review_card.pack(fill=tk.X, pady=(0, C_STYLE["gap_lg"]))
+        self._build_guided_review(review_card.content)
+
+        # Persistent action footer: it remains visible while step 1/2 scrolls,
+        # eliminating the old "start button is below the fold" regression.
+        footer = tk.Frame(sf, bg=C_STYLE["bg_card"],
+                          highlightbackground=C_STYLE["border"],
+                          highlightthickness=1, bd=0)
+        footer.grid(row=2, column=0, sticky="ew", padx=C_STYLE["pad_lg"],
+                    pady=(C_STYLE["gap_sm"], C_STYLE["pad_md"]))
+        footer_top = tk.Frame(footer, bg=C_STYLE["bg_card"])
+        footer_top.pack(fill=tk.X, padx=C_STYLE["pad_md"], pady=(C_STYLE["pad_sm"], 0))
+        self.guided_prev_btn = ttk.Button(footer_top, text="上一步",
+                                          style="Secondary.TButton",
+                                          command=self._guided_previous)
+        self.guided_prev_btn.pack(side=tk.LEFT)
+        self.guided_next_btn = ttk.Button(footer_top, text="下一步",
+                                          style="Secondary.TButton",
+                                          command=self._guided_next)
+        self.guided_next_btn.pack(side=tk.LEFT, padx=(C_STYLE["pad_sm"], 0))
+        ttk.Button(footer_top, text="保存配置", style="Ghost.TButton",
+                   command=self._save_config).pack(side=tk.LEFT,
+                   padx=(C_STYLE["pad_lg"], 0))
+        ttk.Button(footer_top, text="重置配置", style="Ghost.TButton",
+                   command=self._guided_reset_config).pack(side=tk.LEFT,
+                   padx=(C_STYLE["pad_sm"], 0))
+        self.start_btn = ttk.Button(footer_top, text="确认并开始测试",
                                     style="Primary.TButton",
-                                    command=self._start_benchmark)
-        self.start_btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(btn_row, text="保存配置", style="Secondary.TButton",
-                   command=self._save_config).pack(side=tk.LEFT, fill=tk.X,
-                   expand=True, padx=(C_STYLE["pad_sm"], 0))
-        ttk.Button(btn_row, text="重置配置", style="Secondary.TButton",
-                   command=self._reset_config).pack(side=tk.LEFT, fill=tk.X,
-                   expand=True, padx=(C_STYLE["pad_sm"], 0))
-        self._action_status = tk.Label(card_c.content,
-                                       text="就绪 — 请配置参数后开始测试",
+                                    command=self._guided_start_benchmark)
+        self.start_btn.pack(side=tk.RIGHT)
+        self._guided_step_hint = tk.Label(footer_top, text="步骤 1 / 3",
+                                          font=C_STYLE["font_small"],
+                                          bg=C_STYLE["bg_card"],
+                                          fg=C_STYLE["text_secondary"])
+        self._guided_step_hint.pack(side=tk.RIGHT, padx=(0, C_STYLE["pad_lg"]))
+        self._action_status = tk.Label(footer, text="就绪 — 请配置参数后开始测试",
                                        font=C_STYLE["font_small"],
                                        bg=C_STYLE["bg_card"],
                                        fg=C_STYLE["text_secondary"])
-        self._action_status.pack(anchor="w", pady=(C_STYLE["pad_sm"], 0))
-        self.progress = ttk.Progressbar(card_c.content, mode="determinate",
+        self._action_status.pack(anchor="w", padx=C_STYLE["pad_md"],
+                                 pady=(C_STYLE["gap_sm"], 0))
+        self.progress = ttk.Progressbar(footer, mode="determinate",
                                         style="Accent.Horizontal.TProgressbar")
-        self.progress.pack(fill=tk.X, pady=(C_STYLE["pad_sm"], 0))
+        self.progress.pack(fill=tk.X, padx=C_STYLE["pad_md"],
+                           pady=(C_STYLE["gap_sm"], C_STYLE["pad_sm"]))
+        self._show_guided_step(0)
+
+    def _build_guided_review(self, parent):
+        """Build a live, read-only summary for the final guided step."""
+        self._guided_review_vars = {}
+        rows = (
+            ("端点地址", "url"), ("模型", "model"),
+            ("提示词", "prompt"), ("并发预设", "concurrency"),
+            ("请求总数", "total"), ("最大 Token 数", "max_tokens"),
+            ("温度 / 流式", "generation"), ("预热请求数", "warmup"),
+        )
+        grid = tk.Frame(parent, bg=C_STYLE["bg_card"])
+        grid.pack(fill=tk.X, pady=(0, C_STYLE["pad_md"]))
+        grid.grid_columnconfigure(1, weight=1)
+        for row, (label, key) in enumerate(rows):
+            tk.Label(grid, text=label, font=C_STYLE["font_body"],
+                     bg=C_STYLE["bg_card"], fg=C_STYLE["text_secondary"],
+                     anchor="w").grid(row=row, column=0, sticky="nw",
+                                      padx=(0, C_STYLE["pad_lg"]),
+                                      pady=(0, C_STYLE["gap_sm"]))
+            var = tk.StringVar(value="—")
+            self._guided_review_vars[key] = var
+            tk.Label(grid, textvariable=var, font=C_STYLE["font_body"],
+                     bg=C_STYLE["bg_card"], fg=C_STYLE["text_primary"],
+                     anchor="w", justify="left", wraplength=720).grid(
+                         row=row, column=1, sticky="ew",
+                         pady=(0, C_STYLE["gap_sm"]))
+        self._guided_review_check = tk.Label(
+            parent, text="开始后将依次执行：连通性 → 模型确认 → 预热/基线 → 压力测试。",
+            font=C_STYLE["font_small"], bg=C_STYLE["bg_card"],
+            fg=C_STYLE["text_secondary"], anchor="w", justify="left")
+        self._guided_review_check.pack(fill=tk.X, pady=(C_STYLE["pad_sm"], 0))
+
+    def _guided_sync_text_widgets(self):
+        """Commit Text fields before navigation, review, save, or start."""
+        widgets = getattr(self, "_text_widgets", {})
+        for label, var in (("系统提示词", getattr(self, "system_var", None)),
+                           ("用户提示词", getattr(self, "prompt_var", None))):
+            widget = widgets.get(label)
+            if widget is not None and var is not None:
+                try:
+                    var.set(widget.get("1.0", "end-1c"))
+                except Exception:
+                    pass
+
+    def _guided_review_values(self):
+        self._guided_sync_text_widgets()
+        concurrency_label = self.concurrency_var.get()
+        if concurrency_label == "自定义":
+            concurrency = self.custom_conc_var.get()
+        else:
+            concurrency = BENCHMARK_PRESETS.get(concurrency_label, {}).get("concurrency", "—")
+        return {
+            "url": self.url_var.get().strip() or "未填写",
+            "model": self.model_var.get().strip() or "启动时选择",
+            "prompt": self.prompt_var.get().strip() or "未填写",
+            "concurrency": f"{concurrency_label}（并发 {concurrency}）",
+            "total": str(self.total_var.get()),
+            "max_tokens": str(self.max_tokens_var.get()),
+            "generation": f"{self.temp_var.get()} / {self.stream_var.get()}",
+            "warmup": str(self.warmup_var.get()),
+        }
+
+    def _update_guided_review(self):
+        values = self._guided_review_values()
+        for key, var in getattr(self, "_guided_review_vars", {}).items():
+            var.set(values.get(key, "—"))
+
+    def _show_guided_step(self, step):
+        step = max(0, min(2, int(step)))
+        self._guided_step = step
+        for idx, frame in enumerate(getattr(self, "_guided_step_frames", [])):
+            if idx == step:
+                frame.pack(fill=tk.X, padx=C_STYLE["pad_lg"], pady=C_STYLE["pad_lg"])
+            else:
+                frame.pack_forget()
+        if step == 2:
+            self._update_guided_review()
+        self._guided_canvas.yview_moveto(0)
+        for idx, badge in enumerate(getattr(self, "_guided_step_badges", [])):
+            active = idx == step
+            badge.configure(bg=C_STYLE["accent_light"] if active else C_STYLE["bg_card"],
+                            fg=C_STYLE["accent"] if active else C_STYLE["text_secondary"],
+                            highlightbackground=C_STYLE["accent"] if active else C_STYLE["border"])
+        if hasattr(self, "_guided_step_hint"):
+            self._guided_step_hint.configure(text=f"步骤 {step + 1} / 3")
+        if hasattr(self, "guided_prev_btn"):
+            self.guided_prev_btn.configure(state="normal" if step > 0 else "disabled")
+        if hasattr(self, "guided_next_btn"):
+            self.guided_next_btn.configure(state="normal" if step < 2 else "disabled")
+        self._guided_canvas.update_idletasks()
+
+    def _guided_validate_step(self, step):
+        self._guided_sync_text_widgets()
+        if step == 0:
+            if not self.url_var.get().strip():
+                messagebox.showerror(self.tr("msg.error"), self.tr("msg.api_required"))
+                return False
+            if not self.prompt_var.get().strip():
+                messagebox.showerror(self.tr("msg.error"), self.tr("msg.prompt_required"))
+                return False
+        elif step == 1:
+            try:
+                if int(float(str(self.max_tokens_var.get()).strip())) <= 0:
+                    raise ValueError
+                if int(float(str(self.total_var.get()).strip())) <= 0:
+                    raise ValueError
+                if self.concurrency_var.get() == "自定义" and int(float(str(self.custom_conc_var.get()).strip())) <= 0:
+                    raise ValueError
+                if int(float(str(self.warmup_var.get()).strip())) < 0:
+                    raise ValueError
+            except Exception:
+                messagebox.showerror("参数不完整", "请检查最大 Token、请求总数、并发数和预热请求数。")
+                return False
+        return True
+
+    def _guided_next(self):
+        if self._guided_step < 2 and self._guided_validate_step(self._guided_step):
+            self._show_guided_step(self._guided_step + 1)
+
+    def _guided_previous(self):
+        if self._guided_step > 0 and not getattr(self, "_active_run_type", None):
+            self._show_guided_step(self._guided_step - 1)
+
+    def _guided_reset_config(self):
+        self._reset_config()
+        self._show_guided_step(0)
+
+    def _guided_open_new_test(self):
+        """Open a fresh guided entry point without changing saved settings."""
+        self._select_tab(1)
+        self._show_guided_step(0)
+
+    def _guided_start_benchmark(self):
+        if not self._guided_validate_step(0) or not self._guided_validate_step(1):
+            return
+        self._show_guided_step(2)
+        self._start_benchmark()
     def _build_test_params(self, parent):
         """Build test parameters area with 3 logical groups: 生成参数, 负载参数, 保存选项."""
         LABEL_W = 14  # uniform label width
@@ -3178,18 +3388,20 @@ class LLMBenchmarkApp:
 
     def _refresh_run_buttons(self):
         active = getattr(self, "_active_run_type", None)
+        guided_start = "确认并开始测试" if getattr(self, "lang_code", "zh_CN") == "zh_CN" else "Review & start test"
+        guided_running = "测试进行中..." if getattr(self, "lang_code", "zh_CN") == "zh_CN" else "Test running..."
         if hasattr(self, "start_btn"):
             if active == "benchmark":
                 self.start_btn.configure(
-                    text=self.tr("button.benchmarking", "基准测试中..."),
+                    text=guided_running,
                     state="disabled")
             elif active == "sweep":
                 self.start_btn.configure(
-                    text=self.tr("button.start_benchmark", "开始基准测试"),
+                    text=guided_start,
                     state="disabled")
             else:
                 self.start_btn.configure(
-                    text=self.tr("button.start_benchmark", "开始基准测试"),
+                    text=guided_start,
                     state="normal")
         if hasattr(self, "sweep_start_btn"):
             if active == "benchmark":
@@ -3275,6 +3487,11 @@ class LLMBenchmarkApp:
                 t.delete("1.0", tk.END); t.insert("1.0", self.prompt_var.get())
     def _save_config(self, silent: bool = False):
         """Write current settings to INI file."""
+        # Tk Text widgets are not backed by StringVar; commit them before a
+        # guided-flow save so the persisted prompt is exactly what the user
+        # reviewed on step 3.
+        if hasattr(self, "_guided_sync_text_widgets"):
+            self._guided_sync_text_widgets()
         cfg = ConfigParser()
         cfg["api"] = {
             "url": self.url_var.get(),
@@ -3303,6 +3520,8 @@ class LLMBenchmarkApp:
             self._action_status.config(text=self.tr("status.saved_config"))
     def _auto_save_check(self):
         """Auto-save if enabled. Silently skip if disabled."""
+        if getattr(self, "_suspend_auto_save", False):
+            return
         if self.auto_save_var.get() == "是":
             try:
                 self._save_config(silent=True)
@@ -3662,6 +3881,10 @@ class LLMBenchmarkApp:
             self.root.after(50, lambda: self._show_error_popup("基线测试失败", summary, popup_advice))
         self.result_text.config(state=tk.DISABLED)
     def _start_benchmark(self):
+        # The old entry point remains the single source of truth for execution.
+        # Guided navigation only validates and presents the same values.
+        if hasattr(self, "_guided_sync_text_widgets"):
+            self._guided_sync_text_widgets()
         active = getattr(self, "_active_run_type", None)
         if active == "benchmark":
             return
